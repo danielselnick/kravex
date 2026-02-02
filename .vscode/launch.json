@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug kvx-cli",
+      "cargo": {
+        "args": ["build", "-p", "kvx-cli"],
+        "filter": { "name": "kvx-cli", "kind": "bin" }
+      },
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "cargo build -p kvx-cli"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Run kvx-cli (no debug)",
+      "noDebug": true,
+      "cargo": {
+        "args": ["build", "-p", "kvx-cli"],
+        "filter": { "name": "kvx-cli", "kind": "bin" }
+      },
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "cargo build -p kvx-cli"
+    }
+  ]
+}
