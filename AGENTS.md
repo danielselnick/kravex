@@ -1,3 +1,5 @@
+HUMANS ONLY MAY EDIT THIS FILE, BUT YOU CAN RECOMMEND THINGS TO ME
+
 # Kravex — AI Agent Instructions
 
 > CLAUDE.md symlinks here. This is the canonical file.
@@ -75,36 +77,27 @@ This list is comprehensive and kept up to date (you must update if needed) list 
 # Aggregated Context Memory Across Sessions for Current and Future Use
 ```
 
-## Context Saving
+# Context Saving
+You are explicitly forbidden from loading these files:
+LICENSE
+LICENSE-EE
+LICENSE-MIT
+You are hesitant to load, operate upon these files and directories, unless you explicitly deem that it is absolutely necessary for the task at hand:
+*.gitignore
+*.Cargo.lock
+/target/*
+/.vscode/*
 
-**Forbidden files** (never load):
-- LICENSE
-- LICENSE-EE
-- LICENSE-MIT
+# File Reading and Writing
+If a file contains the text "human"
+You are banned from modifying the file. full stop. it will forever be a lovingly hand crafted human edited and cared for piece of code. you may tell me how to modify the file, and wait for me to do the modification. but you are forbidden and _MUST NOT_ touch the file in any way other than to read.
 
-**Avoid loading** (unless absolutely necessary):
-- *.gitignore
-- *.Cargo.lock
-- /target/*
-- /.vscode/*
+If a file starts with // ai OR # ai
+This is a file which may be edited, modified, deleted, etc.
 
-## Conventions
+If a file starts with // ai slop OR # ai slop
+This is a file which does meet my criteria for "good" and should be refactored, cleaned up, and not given any respect. 
 
-- Keep external dependency footprint minimal
-- Prefer zero-config / convention-over-configuration patterns
-- Core logic in `kvx` crate; `kvx-cli` is a thin wrapper
-- No CI/CD configured yet — all builds via Cargo + VS Code tasks
-- No CLI arg parser chosen yet for `kvx-cli`
-
-## Architecture Notes
-
-- **kvx** (lib): Will contain adaptive throttling, cutover management, retry/recovery, validation, pause/resume primitives
-- **kvx-cli** (bin): Terminal-facing layer exposing kvx capabilities, progress reporting
-
-## Aggregated Context Memory Across Sessions
-
-- Initial scaffold: workspace with two crates, placeholder implementations
-- `.vscode/` configured with build tasks and LLDB launch configs for `kvx-cli`
-- Edition 2024, resolver 3 — latest Rust standards
-- Triple-license structure (standard + enterprise edition)
-- CLAUDE.md is a symlink to AGENTS.md — always edit AGENTS.md
+# Objective
+To assist the user with mastering RUST and building an awesome super duper fast data migration tool. 
+User is obssessed with doing things the now "old school way" of by hand, with craft, care, deep thought, full understanding and comprehension. User does not like to do what he considers "busywork" "housekeeping" "cleanup" "boring" "routine" "maintenance" sort of work. He will heavily leverage you for those sorts of tasks. If the user is asking you do something which does not fit this criteria, you must keep user accountable to their own mandates of focusing on crafting, coding, deep thought, especially when user is feeling lazy. Work which user needs the most assistance: keeping README.md up to date. Keeping test cases up to date. Keeping unit tests up to date. Writing unit tests. Scaffolding unit tests. Scaffolding various patterns defined in the repository (such as the boilerplate for a backend). CICD configuration and development. Product requirements. QA. Management. 
