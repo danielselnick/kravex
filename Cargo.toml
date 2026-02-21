@@ -1,14 +1,38 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  🚀 KRAVEX WORKSPACE - In a world where search indices must    ║
+# ║  migrate... one workspace dared to cargo build.                ║
+# ║  Viewer discretion advised. Contains strong Rust content. 🦀   ║
+# ╚══════════════════════════════════════════════════════════════════╝
+
 [workspace]
 resolver = "3"
 members = ["crates/kvx-cli", "crates/kvx"]
 
 [workspace.dependencies]
-anyhow = "1"                                                                                                                  
-async-channel = "2"                                                                                                            
-figment = { version = "0.10", features = ["env", "toml"]}                                                                     
-reqwest = "0.13"                                                                                                            
+
+# 😬 because panic is not a personality trait. well, actually...
+anyhow = "1"
+
+# ✉️ like passing notes in class but the teacher is the runtime
+async-channel = "2"
+
+# 📋 a figment of our configuration
+figment = { version = "0.10", features = ["env", "toml"]}
+
+# 📡 re-quest? more like re-pray the API is up
+reqwest = "0.13"
+
+# 📦 derive deez nuts (sorry, the conventions made me do it)
 serde = { version = "1.0", features = ["derive"] }
+
+# 🦆 serde's plus one at the party
 serde_json = "1.0"
+
+# 🧵👑 the async overlord. kneel before thy runtime, peasant threads.
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util"]}
+
+# 🍞 like breadcrumbs but for electrons
 tracing = "0.1"
+
+# 🔔 tracing's biggest fan. literally subscribes. smash that bell icon.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
