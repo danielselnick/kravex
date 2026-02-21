@@ -1,3 +1,14 @@
 [workspace]
 resolver = "3"
 members = ["crates/kvx-cli", "crates/kvx"]
+
+[workspace.dependencies]
+anyhow = "1"                                                                                                                  
+async-channel = "2"                                                                                                            
+figment = { version = "0.10", features = ["env", "toml"]}                                                                     
+reqwest = "0.13"                                                                                                            
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util"]}
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
