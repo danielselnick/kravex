@@ -50,6 +50,7 @@ impl Supervisor {
         // 🚀 Start workers — currently a no-op, which honestly
         // is the most reliable code in the entire crate
         // "It works on my machine" — because it does nothing 🎯
+        let (tx, rx) = async_channel::bounded(self.app_config.supervisor_config.channel_size);
         Ok(())
     }
 }

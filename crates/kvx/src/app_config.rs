@@ -11,7 +11,7 @@ use serde::Deserialize;
 // 🔧 To load the configuration, so I don't have to manually parse
 // environment variables or files. Bleh. Like doing taxes but for bytes.
 use figment::{Figment, providers::{Env, Format, Toml}};
-use crate::supervisors::config::{SourceWorkerConfig, SinkWorkerConfig};
+use crate::supervisors::config::{SupervisorConfig, SourceWorkerConfig, SinkWorkerConfig};
 use std::path::Path;
 
 /// 📦 The AppConfig: one struct to rule them all, one struct to find them,
@@ -26,7 +26,7 @@ pub struct AppConfig {
     /// 🚰 Sink worker settings — because even plumbers need instructions
     pub sink_worker_config: SinkWorkerConfig,
     /// 🧵 Supervisor config — currently just a usize, living its best minimalist life
-    pub supervisor_config: usize,
+    pub supervisor_config: SupervisorConfig,
 }
 
 /// 🚀 Load the config from a file, or from the default path if you're feeling lucky.

@@ -30,3 +30,8 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     // today we rest. today we return Ok(()). today is a good day.
     Ok(())
 }
+
+pub async fn stop() -> Result<()> {
+    // Send a control channel message to the supervisor
+    Ok(())
+}

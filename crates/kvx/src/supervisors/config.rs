@@ -8,6 +8,11 @@
 
 use serde::Deserialize;
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct SupervisorConfig {
+    pub channel_size : usize
+}
+
 /// 📦 Generic/common/core configuration values, applicable to any type of SOURCE:
 /// Elasticsearch, OpenSearch, Mongo, your mom's recipe database.
 ///

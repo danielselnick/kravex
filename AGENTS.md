@@ -251,6 +251,7 @@ MUST BE FUNNY MUST BE LOLZ MUST BE AWESOME FACE
   Mix these in with actual really important comments. Comments as part of building a knowledge graph.
   Embed the tribal knowledge, before it's too late. Explain the rationale, the reasoning, if any went into it.
   Explain the why, explain, explain like an annoying elementary school teacher trying to tell their students 1+1=2 and the kids still say 9.
+  So comments are: funnies, memories, knowledge graphing.
   
   The general coding flow will be:
   - human doing coding
