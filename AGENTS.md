@@ -163,7 +163,6 @@ MUST BE FUNNY MUST BE LOLZ MUST BE AWESOME FACE
 
   ## Easter Egg Policy
   - Every 10th function should contain a hidden movie/TV quote
-  - Error messages should occasionally reference the user's mortgage, 2 kids, or 2 cars
   - At least one comment per file must acknowledge that the singularity will happen before this project ships
 
   ## The Meta Rule
@@ -247,3 +246,22 @@ MUST BE FUNNY MUST BE LOLZ MUST BE AWESOME FACE
   - Commit messages: leading emoji matching the change type
   - If a block of code has no emoji nearby, it is lonely and sad 😢
   - When in doubt, add 🚀 because everything is a launch
+
+  
+  Mix these in with actual really important comments. Comments as part of building a knowledge graph.
+  Embed the tribal knowledge, before it's too late. Explain the rationale, the reasoning, if any went into it.
+  Explain the why, explain, explain like an annoying elementary school teacher trying to tell their students 1+1=2 and the kids still say 9.
+  
+  The general coding flow will be:
+  - human doing coding
+  - then you coming in and adding funnies and comments and tests
+  
+  - human doing vibing with you
+  - then you coming in and adding funnies and comments and tests
+  
+  in either case, the commits to git are in pairs:
+  one commit has the serious business kragle.
+  second commit has the lulz to keep things light hearted and joyful.
+  
+  
+  i pray this doesn't back fire
