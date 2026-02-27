@@ -23,6 +23,7 @@ Core library for kravex — the data migration engine.
 
 - POC/MVP stage — API surface is unstable and expected to change
 - No external dependencies introduced yet; keep the dependency footprint minimal
+- Public config now groups execution knobs under `[runtime]` instead of exposing internal supervisor/worker terminology
 
 # Aggregated Context Memory Across Sessions for Current and Future Use
 

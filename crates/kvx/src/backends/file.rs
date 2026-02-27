@@ -24,13 +24,16 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
-use tokio::{fs::File, io::{self, AsyncBufReadExt, AsyncWriteExt}};
+use tokio::{
+    fs::File,
+    io::{self, AsyncBufReadExt, AsyncWriteExt},
+};
 use tracing::trace;
 
-use crate::backends::{Source, Sink};
+use crate::backends::{Sink, Source};
 use crate::common::HitBatch;
 use crate::progress::ProgressMetrics;
-use crate::supervisors::config::{CommonSourceConfig, CommonSinkConfig};
+use crate::supervisors::config::{CommonSinkConfig, CommonSourceConfig};
 
 // 📂 FileSourceConfig — "It's just a file", said no sysadmin ever before the disk filled up.
 // Lives here now, close to the FileSource that actually uses it. Ethos pattern, baby. 🎯
@@ -62,7 +65,7 @@ fn default_file_common_source_config() -> CommonSourceConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct FileSinkConfig {
     pub file_name: String,
-    #[serde(default = "default_file_common_sink_config")]
+    #[serde(flatten, default = "default_file_common_sink_config")]
     pub common_config: CommonSinkConfig,
 }
 
@@ -143,11 +146,7 @@ impl FileSource {
         // ⚠️  known edge case: if the file is being written to while we read, size may be stale/wrong.
         //    This is fine. We will not panic. We are calm. The borrow checker, however, is not calm.
         //    The borrow checker is never calm. The borrow checker has seen things.
-        let file_size = file_handle
-            .metadata()
-            .await
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let file_size = file_handle.metadata().await.map(|m| m.len()).unwrap_or(0);
 
         let buf_reader = io::BufReader::new(file_handle);
 
@@ -179,7 +178,8 @@ impl Source for FileSource {
     /// A deeply unsexy race between two integers.
     async fn next_batch(&mut self) -> Result<HitBatch> {
         // 📦 pre-allocate with the expected batch size — we're not savages
-        let mut hits_batch = Vec::with_capacity(self.source_config.common_config.max_batch_size_docs);
+        let mut hits_batch =
+            Vec::with_capacity(self.source_config.common_config.max_batch_size_docs);
         let mut total_bytes_read = 0usize;
         // ⚠️  1MB initial capacity per line — because NDJSON documents can be chunky.
         // If a single document exceeds this, tokio's BufReader will realloc. It's fine.
@@ -223,10 +223,14 @@ impl Source for FileSource {
 
         // 🚀 batch assembled. Report to the troops. Or at least to the trace log.
         // Nobody is awake to read this at 3am. But if they are: hello. Go drink some water.
-        trace!("📖 hauled {} bytes out of the file like a digital fishing trip — catch of the day", total_bytes_read);
+        trace!(
+            "📖 hauled {} bytes out of the file like a digital fishing trip — catch of the day",
+            total_bytes_read
+        );
         // 📊 report the batch to progress — every byte counts, every doc matters, every metric
         // feeds the progress table in the TUI. This is how the human knows we're not dead.
-        self.progress.update(total_bytes_read as u64, hits_batch.len() as u64);
+        self.progress
+            .update(total_bytes_read as u64, hits_batch.len() as u64);
 
         HitBatch::new(hits_batch)
     }
@@ -262,15 +266,13 @@ impl FileSink {
         // The file refused to be born. Perhaps the directory didn't exist. Perhaps permissions
         // were set by someone who really, truly, did not want this file to exist.
         // We respect their energy. We do not respect their disk ACLs.
-        let file_handle = File::create(&sink_config.file_name)
-            .await
-            .context(format!(
-                "💀 The sink file '{}' could not be conjured into existence. \
+        let file_handle = File::create(&sink_config.file_name).await.context(format!(
+            "💀 The sink file '{}' could not be conjured into existence. \
                 We stared at the path. The path stared back. \
                 One of us was wrong about whether the parent directory existed. \
                 It was us. It was always us.",
-                &sink_config.file_name
-            ))?;
+            &sink_config.file_name
+        ))?;
         // 📦 BufWriter: because issuing one syscall per document is a war crime.
         // Batch those writes. Your kernel will thank you. Your SRE will thank you.
         // Your future self at 3am will bow before the altar of buffered I/O.
@@ -292,7 +294,10 @@ impl Sink for FileSink {
     /// The extremely anticlimactic `write_all` call at the end of the journey.
     async fn receive(&mut self, batch: HitBatch) -> Result<()> {
         // 🚀 they're heeere — like the movie but for data and significantly less terrifying
-        trace!("📬 {} hits just walked into the sink like they own the place. write them all down.", batch.hits.len());
+        trace!(
+            "📬 {} hits just walked into the sink like they own the place. write them all down.",
+            batch.hits.len()
+        );
         // 🔄 iterate and write — the most honest loop in this entire codebase.
         // No retries. No backoff. No drama. Just write. One document at a time.
         // Like a monk copying manuscripts, but faster and with fewer vows of silence.
@@ -315,14 +320,16 @@ impl Sink for FileSink {
     async fn close(&mut self) -> Result<()> {
         // 🎭 dramatic farewell — she gave everything she had. every byte. every write.
         // and now, at the end, we flush. for her. for the data. for the inode.
-        trace!("🎬 final flush. the file sink takes its bow, the BufWriter empties its soul to disk, the orchestra swells");
+        trace!(
+            "🎬 final flush. the file sink takes its bow, the BufWriter empties its soul to disk, the orchestra swells"
+        );
         self.file_buf.flush().await.context(
             // 💀 poetic error for the poetic act of flushing.
             // The data was SO CLOSE. It was in the buffer. It could SEE the disk.
             // And then the flush failed. A tragedy in one line. Shakespeare would've used more lines.
             "💀 Error flushing file — the buffer held its data to the very end, \
             like a hoarder who finally agreed to let go, only for the storage unit to be locked. \
-            The bytes are still in memory. The disk remains unwritten. The migration weeps."
+            The bytes are still in memory. The disk remains unwritten. The migration weeps.",
         )
     }
 }

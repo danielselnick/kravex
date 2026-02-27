@@ -1,4 +1,4 @@
-//! 🔧 Configuration structs for the worker uprising — I mean, worker management.
+//! 🔧 Configuration structs for the runtime circus — less "org chart", more "how fast do we go?"
 //!
 //! 📡 Every great migration starts with a config file that someone forgot to commit.
 //! This module is now on a diet: it used to hold ALL the configs, like a hoarder's garage.
@@ -8,23 +8,44 @@
 //! "He who configures without testing, deploys in darkness." — Ancient DevOps Proverb
 //! "He who puts all configs in one file, refactors in darkness." — Slightly more modern proverb 🦆
 
-// ⚠️ The singularity will happen before anyone adds a second field to SupervisorConfig.
-// At that point, the AI will configure itself and we will all be out of a job.
-// Until then: `channel_size: usize`. Glorious.
+// ⚠️ The singularity will happen before anyone bikesheds this file into `execution_tuning.rs`.
+// Until then, this is the runtime config, and it knows just enough to be dangerous at brunch.
 use serde::Deserialize;
 
+use crate::backends::elasticsearch::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
+use crate::backends::file::{FileSinkConfig, FileSourceConfig};
+
 // ============================================================
-// 🔧 Supervisor Config — the foreman's clipboard
+// 🔧 Runtime Config — the knobs we admit in public
 // ============================================================
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct SupervisorConfig {
-    #[serde(default = "default_channel_size")]
-    pub channel_size: usize,
+pub struct RuntimeConfig {
+    #[serde(default = "default_queue_capacity", alias = "channel_size")]
+    pub queue_capacity: usize,
+    #[serde(default = "default_sink_parallelism", alias = "num_sink_workers")]
+    pub sink_parallelism: usize,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            queue_capacity: default_queue_capacity(),
+            sink_parallelism: default_sink_parallelism(),
+        }
+    }
 }
 // 🔢 10: chosen by rolling a d20, getting a 10, and calling it "load tested".
-// "It's not a magic number if I believe in it hard enough." — senior engineer, last Tuesday.
-fn default_channel_size() -> usize { 10 }
+// The queue holds batches, not feelings, though both can become backpressure if ignored. 🦆
+fn default_queue_capacity() -> usize {
+    10
+}
+
+// 🧵 One sink lane by default: fewer moving parts, fewer ways to invent folklore during debugging.
+// Ancient proverb: he who spawns eight writers before breakfast, debugs until dinner.
+fn default_sink_parallelism() -> usize {
+    1
+}
 
 // ============================================================
 // 📦 Common Source/Sink Configs — the shared DNA
@@ -44,11 +65,15 @@ pub struct CommonSourceConfig {
 }
 // 📦 10,000 docs per batch — a nice round number that will age like milk
 // the moment someone indexes a 50MB PDF and wonders why things are slow.
-fn default_max_batch_size_docs() -> usize { 10000 }
+fn default_max_batch_size_docs() -> usize {
+    10000
+}
 // 📦 10MB — chosen because 10 is a great number and MB is a great unit.
 // This is load-tested in the same way I've "tested" my microwave: empirically, at 3am, with regret.
 // 10 * 1024 * 1024 = 10485760. Yes I know. Yes the comment on the line is doing the math. You're welcome.
-fn default_max_batch_size_bytes() -> usize { 10485760 } // 10MB — if your documents are bigger, we need to talk
+fn default_max_batch_size_bytes() -> usize {
+    10485760
+} // 10MB — if your documents are bigger, we need to talk
 
 impl Default for CommonSourceConfig {
     fn default() -> Self {
@@ -68,7 +93,9 @@ pub struct CommonSinkConfig {
 }
 // 🚰 10MB sink request size — the same limit as your email attachment policy,
 // your Slack upload quota, and your therapist's patience. Coincidence? Absolutely yes.
-fn default_max_request_size_bytes() -> usize { 10485760 } // 10MB — Elasticsearch's feelings
+fn default_max_request_size_bytes() -> usize {
+    10485760
+} // 10MB — Elasticsearch's feelings
 
 impl Default for CommonSinkConfig {
     fn default() -> Self {
@@ -93,8 +120,8 @@ impl Default for CommonSinkConfig {
 /// (Until someone files a feature request. There is always a feature request.)
 #[derive(Debug, Deserialize, Clone)]
 pub enum SourceConfig {
-    Elasticsearch(crate::backends::elasticsearch::ElasticsearchSourceConfig),
-    File(crate::backends::file::FileSourceConfig),
+    Elasticsearch(ElasticsearchSourceConfig),
+    File(FileSourceConfig),
     InMemory(()),
 }
 
@@ -104,7 +131,7 @@ pub enum SourceConfig {
 /// The InMemory(()) variant holds `()` which is the Rust way of saying "we have nothing to say here."
 #[derive(Debug, Deserialize, Clone)]
 pub enum SinkConfig {
-    Elasticsearch(crate::backends::elasticsearch::ElasticsearchSinkConfig),
-    File(crate::backends::file::FileSinkConfig),
+    Elasticsearch(ElasticsearchSinkConfig),
+    File(FileSinkConfig),
     InMemory(()),
 }

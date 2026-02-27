@@ -190,7 +190,8 @@ impl ProgressMetrics {
         }
 
         // 📦 push the current moment into the window — the present is always relevant
-        self.rate_samples.push_back((now, self.total_bytes, self.total_docs));
+        self.rate_samples
+            .push_back((now, self.total_bytes, self.total_docs));
 
         // 📊 compare now vs oldest sample in window to get deltas
         if let Some(&(oldest_time, oldest_bytes, oldest_docs)) = self.rate_samples.front() {
@@ -214,7 +215,11 @@ impl ProgressMetrics {
         }
 
         // 💤 not enough elapsed time yet — return zeros and maintain composure
-        Rates { docs_per_sec: 0.0, mib_per_sec: 0.0, percent_per_sec: 0.0 }
+        Rates {
+            docs_per_sec: 0.0,
+            mib_per_sec: 0.0,
+            percent_per_sec: 0.0,
+        }
     }
 
     /// 🎨 Render the full progress display as a comfy-table message on the progress bar.
@@ -283,12 +288,14 @@ impl ProgressMetrics {
         ]);
         // 📦 row 2: byte throughput and cumulative progress
         table.add_row(vec![
-            Cell::new(format!("{:.2} MiB/s", rates.mib_per_sec)).set_alignment(CellAlignment::Right),
+            Cell::new(format!("{:.2} MiB/s", rates.mib_per_sec))
+                .set_alignment(CellAlignment::Right),
             Cell::new(bytes_progress).set_alignment(CellAlignment::Right),
         ]);
         // 📊 row 3: percent throughput and overall completion
         table.add_row(vec![
-            Cell::new(format!("{:.2} %/s", rates.percent_per_sec)).set_alignment(CellAlignment::Right),
+            Cell::new(format!("{:.2} %/s", rates.percent_per_sec))
+                .set_alignment(CellAlignment::Right),
             Cell::new(format!("{:.2}%", percent)).set_alignment(CellAlignment::Right),
         ]);
         // ⏱️ row 4: time elapsed and estimated time remaining
@@ -299,6 +306,7 @@ impl ProgressMetrics {
 
         // 🎨 slam it all into the progress bar message
         // indicatif will handle the terminal magic (cursor positioning, redraw, etc.)
-        self.progress_bar.set_message(format!("source: {}\n{}", self.source_name, table));
+        self.progress_bar
+            .set_message(format!("source: {}\n{}", self.source_name, table));
     }
 }

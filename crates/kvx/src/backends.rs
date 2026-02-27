@@ -13,9 +13,9 @@
 //!
 //! 🦆 The duck is here because every file must have one. This is law. Do not question the duck.
 
+use crate::common::HitBatch;
 use anyhow::Result;
 use async_trait::async_trait;
-use crate::common::HitBatch;
 
 // ===== Source Trait and Backend Enum =====
 
@@ -37,20 +37,15 @@ pub(crate) trait Source: std::fmt::Debug {
     async fn next_batch(&mut self) -> Result<HitBatch>;
 }
 
-pub(crate) mod in_mem_source;
-pub(crate) mod in_mem_sink;
-pub(crate) mod file_source;
-pub(crate) mod file_sink;
-pub(crate) mod elasticsearch_source;
-pub(crate) mod elasticsearch_sink;
+pub(crate) mod elasticsearch;
+pub(crate) mod file;
+pub(crate) mod in_mem;
 
 // 🎯 Re-export backend-specific configs so callers can do `backends::FileSourceConfig`
 // instead of spelunking into `backends::file::FileSourceConfig`.
 // Convenience is a feature. So is not typing "backends::file::" fourteen times per file.
-pub(crate) use file_source::FileSourceConfig;
-pub(crate) use file_sink::FileSinkConfig;
-pub(crate) use elasticsearch_source::ElasticsearchSourceConfig;
-pub(crate) use elasticsearch_sink::ElasticsearchSinkConfig;
+pub(crate) use elasticsearch::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
+pub(crate) use file::{FileSinkConfig, FileSourceConfig};
 
 /// 🎭 The many faces of a Source — a polymorphic casting call for data origins.
 ///
@@ -62,9 +57,9 @@ pub(crate) use elasticsearch_sink::ElasticsearchSinkConfig;
 /// And there is no warranty. Ancient proverb: "He who hardcodes the backend, migrates only once."
 #[derive(Debug)]
 pub(crate) enum SourceBackend {
-    InMemory(in_mem_source::InMemorySource),
-    File(file_source::FileSource),
-    Elasticsearch(elasticsearch_source::ElasticsearchSource),
+    InMemory(in_mem::InMemorySource),
+    File(file::FileSource),
+    Elasticsearch(elasticsearch::ElasticsearchSource),
 }
 
 #[async_trait]
@@ -110,9 +105,9 @@ pub(crate) trait Sink: std::fmt::Debug {
 /// Ignorance is a feature. It's called "abstraction." We put it in AGENTS.md.
 #[derive(Debug)]
 pub(crate) enum SinkBackend {
-    InMemory(in_mem_sink::InMemorySink),
-    File(file_sink::FileSink),
-    Elasticsearch(elasticsearch_sink::ElasticsearchSink),
+    InMemory(in_mem::InMemorySink),
+    File(file::FileSink),
+    Elasticsearch(elasticsearch::ElasticsearchSink),
 }
 
 #[async_trait]

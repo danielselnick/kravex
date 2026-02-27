@@ -41,6 +41,7 @@ Kravex automatically optimizes search migrations — no knobs, no guesswork. Sma
 
 - POC/MVP stage — API surface is unstable
 - Keep dependency footprint minimal
+- Runtime tuning lives under `[runtime]` in `kvx.toml`; backend-specific knobs stay under `source_config` / `sink_config`
 
 # Aggregated Context Memory Across Sessions for Current and Future Use
 

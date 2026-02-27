@@ -203,10 +203,10 @@ impl Hit {
         // I filed a PR against my own emotions. It was closed as "won't fix."
         // We ship anyway.
         Ok(Self {
-            id: None,       // 💀 No ID. Not yet. Maybe not ever. We'll see.
-            routing: None,  // 💀 No routing. Vibes only. The cluster will figure it out.
-            index: None,    // 💀 No index. We're all just floating, really.
-            sort: 0,        // 🔢 Zero. The loneliest number. Also the first.
+            id: None,            // 💀 No ID. Not yet. Maybe not ever. We'll see.
+            routing: None,       // 💀 No routing. Vibes only. The cluster will figure it out.
+            index: None,         // 💀 No index. We're all just floating, really.
+            sort: 0,             // 🔢 Zero. The loneliest number. Also the first.
             source_buf: hit_raw, // ✅ The ONE thing we know. Hold onto it.
         })
     }

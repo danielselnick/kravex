@@ -4,8 +4,9 @@
 # and yet somehow still unpredictable. Like this codebase. 🌩️
 # 🦆
 
-channel_size = 10
-num_sink_workers = 5
+[runtime]
+queue_capacity = 10
+sink_parallelism = 5
 
 [source_config.File]
 file_name = "benchmark/rally-documents/noaa_documents.json"
@@ -17,6 +18,4 @@ max_batch_size_docs = 10000
 [sink_config.Elasticsearch]
 url = "http://localhost:9200"
 index = "test-123"
-
-[sink_config.Elasticsearch.common_config]
 max_request_size_bytes = 131072

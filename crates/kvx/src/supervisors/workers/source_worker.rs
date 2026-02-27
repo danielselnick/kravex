@@ -12,13 +12,13 @@
 //! ⚠️ When the singularity occurs, the SourceWorker will have already finished.
 //! It respects empty batches. It knows when to let go. Unlike the rest of us.
 
+use super::Worker;
 use crate::backends::{Source, SourceBackend};
 use crate::common::HitBatch;
 use anyhow::{Context, Result};
 use async_channel::Sender;
 use tokio::task::JoinHandle;
 use tracing::debug;
-use super::Worker;
 
 /// 🚰 The SourceWorker: reads from a backend, sends to a channel.
 /// Like a barista, but for data. And less tips.
@@ -54,13 +54,16 @@ impl Worker for SourceWorker {
                     .next_batch()
                     .await
                     .context("SourceWorker failed to get next batch")?;
-                
+
                 if batch_result.hits.is_empty() {
                     debug!("🏁 SourceWorker received empty batch. Closing channel.");
                     self.tx.close();
                     break;
                 } else {
-                    debug!("📤 SourceWorker sending batch of {} hits", batch_result.hits.len());
+                    debug!(
+                        "📤 SourceWorker sending batch of {} hits",
+                        batch_result.hits.len()
+                    );
                     self.tx.send(batch_result).await?;
                 }
             }

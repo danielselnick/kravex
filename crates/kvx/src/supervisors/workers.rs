@@ -27,4 +27,3 @@ pub(crate) trait Worker {
     /// 🚀 Start the worker.
     fn start(self) -> JoinHandle<Result<()>>;
 }
-

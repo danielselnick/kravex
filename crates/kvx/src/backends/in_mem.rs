@@ -25,8 +25,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
+use crate::backends::{Sink, Source};
 use crate::common::HitBatch;
-use crate::backends::{Source, Sink};
 
 /// 📦 The world's most optimistic data source.
 ///

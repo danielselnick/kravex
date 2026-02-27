@@ -4,8 +4,9 @@
 # "In a world where storage is cheap... one engineer still used files." — tagline, probably.
 # 🦆
 
-channel_size = 2
-num_sink_workers = 1
+[runtime]
+queue_capacity = 2
+sink_parallelism = 1
 
 [source_config.File]
 file_name = "benchmark/rally-documents/noaa_documents.json"
@@ -16,6 +17,4 @@ max_batch_size_docs = 100000
 
 [sink_config.File]
 file_name = "output.json"
-
-[sink_config.File.common_config]
 max_request_size_bytes = 268435456

@@ -8,16 +8,19 @@
 
 // 🗑️ TODO: clean up the dedz (dead code, not the grateful kind)
 #![allow(dead_code, unused_variables, unused_imports)]
-mod supervisors;
 pub mod app_config;
-pub(crate) mod common;
 pub(crate) mod backends;
+pub(crate) mod common;
 pub(crate) mod progress;
-use anyhow::{Context, Result};
+mod supervisors;
 use crate::app_config::AppConfig;
+use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSource};
+use crate::backends::file::{FileSink, FileSource};
+use crate::backends::in_mem::{InMemorySink, InMemorySource};
+use crate::backends::{SinkBackend, SourceBackend};
 use crate::supervisors::Supervisor;
-
-use crate::backends::{SourceBackend, SinkBackend};
+use crate::supervisors::config::{RuntimeConfig, SinkConfig, SourceConfig};
+use anyhow::{Context, Result};
 use std::time::SystemTime;
 use tracing::info;
 
@@ -27,20 +30,31 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     info!("🚀 KRAVEX IS BLASTING OFF — hold onto your indices, we are MIGRATING, baby!");
 
     // Build the backends from config
-    // Note: We currently don't have implementations, so this will panic or fail when we add them. 
+    // Note: We currently don't have implementations, so this will panic or fail when we add them.
     // We are passing an unimplemented mock mapping for now.
-    let source_backend = from_source_config(&app_config).await.context("Failed to create source backend")?;
-    
-    let num_sink_workers = app_config.num_sink_workers;
-    let mut sink_backends = Vec::with_capacity(num_sink_workers);
-    for _ in 0..num_sink_workers {
-        sink_backends.push(from_sink_config(&app_config).await.context("Failed to create sink backend")?);
+    let source_backend = from_source_config(&app_config)
+        .await
+        .context("Failed to create source backend")?;
+
+    let sink_parallelism = app_config.runtime.sink_parallelism;
+    let mut sink_backends = Vec::with_capacity(sink_parallelism);
+    for _ in 0..sink_parallelism {
+        sink_backends.push(
+            from_sink_config(&app_config)
+                .await
+                .context("Failed to create sink backend")?,
+        );
     }
 
     let supervisor = Supervisor::new(app_config.clone());
-    supervisor.start_workers(source_backend, sink_backends).await?;
+    supervisor
+        .start_workers(source_backend, sink_backends)
+        .await?;
 
-    info!("🎉 MIGRATION COMPLETE! Took: {:#?} — not bad for a Rust crate that was \"almost done\" six sprints ago 🦆", start_time.elapsed()?);
+    info!(
+        "🎉 MIGRATION COMPLETE! Took: {:#?} — not bad for a Rust crate that was \"almost done\" six sprints ago 🦆",
+        start_time.elapsed()?
+    );
     Ok(())
 }
 
@@ -48,20 +62,20 @@ async fn from_source_config(config: &AppConfig) -> Result<SourceBackend> {
     match &config.source_config {
         // 📂 The File arm: ancient, reliable, and smells faintly of 2003.
         // Like a filing cabinet that somehow learned async/await.
-        crate::supervisors::config::SourceConfig::File(file_cfg) => {
-            let src = crate::backends::file::FileSource::new(file_cfg.clone()).await?;
+        SourceConfig::File(file_cfg) => {
+            let src = FileSource::new(file_cfg.clone()).await?;
             Ok(SourceBackend::File(src))
         }
         // 🧠 The InMemory arm: blazing fast, lives and dies with the process.
         // No persistence. No regrets. No disk. Very YOLO.
-        crate::supervisors::config::SourceConfig::InMemory(_) => {
-            let src = crate::backends::in_mem::InMemorySource::new().await?;
+        SourceConfig::InMemory(_) => {
+            let src = InMemorySource::new().await?;
             Ok(SourceBackend::InMemory(src))
         }
         // 📡 The Elasticsearch arm: HTTP calls, JSON parsing, and the constant
         // fear of a 429 response that ruins your Thursday afternoon.
-        crate::supervisors::config::SourceConfig::Elasticsearch(es_cfg) => {
-            let src = crate::backends::elasticsearch::ElasticsearchSource::new(es_cfg.clone()).await?;
+        SourceConfig::Elasticsearch(es_cfg) => {
+            let src = ElasticsearchSource::new(es_cfg.clone()).await?;
             Ok(SourceBackend::Elasticsearch(src))
         }
     }
@@ -71,20 +85,20 @@ async fn from_sink_config(config: &AppConfig) -> Result<SinkBackend> {
     match &config.sink_config {
         // 📂 File sink: data goes in, data stays in. It's basically a digital shoebox
         // under the bed. Hope you labeled it.
-        crate::supervisors::config::SinkConfig::File(file_cfg) => {
-            let sink = crate::backends::file::FileSink::new(file_cfg.clone()).await?;
+        SinkConfig::File(file_cfg) => {
+            let sink = FileSink::new(file_cfg.clone()).await?;
             Ok(SinkBackend::File(sink))
         }
         // 🧠 InMemory sink: it holds all your data, beautifully, until the process
         // ends and takes everything with it like a sandcastle at high tide. 🌊
-        crate::supervisors::config::SinkConfig::InMemory(_) => {
-            let sink = crate::backends::in_mem::InMemorySink::new().await?;
+        SinkConfig::InMemory(_) => {
+            let sink = InMemorySink::new().await?;
             Ok(SinkBackend::InMemory(sink))
         }
         // 📡 Elasticsearch sink: data goes in at the speed of HTTP, which is to say,
         // "fast enough until it isn't." May your bulk indexing be ever green. 🌿
-        crate::supervisors::config::SinkConfig::Elasticsearch(es_cfg) => {
-            let sink = crate::backends::elasticsearch::ElasticsearchSink::new(es_cfg.clone()).await?;
+        SinkConfig::Elasticsearch(es_cfg) => {
+            let sink = ElasticsearchSink::new(es_cfg.clone()).await?;
             Ok(SinkBackend::Elasticsearch(sink))
         }
     }
@@ -107,25 +121,26 @@ pub(crate) async fn stop() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backends::in_mem::{InMemorySource, InMemorySink};
-    use crate::supervisors::config::{SupervisorConfig, SourceConfig, SinkConfig};
+    use crate::supervisors::config::{RuntimeConfig, SinkConfig, SourceConfig};
 
     #[tokio::test]
     async fn the_one_where_four_docs_made_it_home_safely() -> Result<()> {
         let app_config = AppConfig {
-            supervisor_config: SupervisorConfig { channel_size: 10 },
+            runtime: RuntimeConfig {
+                queue_capacity: 10,
+                sink_parallelism: 1,
+            },
             source_config: SourceConfig::InMemory(()),
             sink_config: SinkConfig::InMemory(()),
-            num_sink_workers: 1,
         };
 
         let source = SourceBackend::InMemory(InMemorySource::new().await?);
         let sink_inner = InMemorySink::new().await?;
         let sink = SinkBackend::InMemory(sink_inner.clone());
-        
+
         let supervisor = Supervisor::new(app_config);
         supervisor.start_workers(source, vec![sink]).await?;
-        
+
         let received = sink_inner.received.lock().await;
         assert_eq!(received.len(), 1, "Should have received exactly 1 batch");
         assert_eq!(received[0].hits.len(), 4, "Batch should contain 4 hits");

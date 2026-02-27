@@ -46,10 +46,10 @@ use tracing::{debug, trace};
 
 // 🏗️ The local souls this module depends on. They did not ask to be imported.
 // They were called. They answered. This is their burden.
-use crate::backends::{Source, Sink};
+use crate::backends::{Sink, Source};
 use crate::common::HitBatch;
 use crate::progress::ProgressMetrics;
-use crate::supervisors::config::{CommonSourceConfig, CommonSinkConfig};
+use crate::supervisors::config::{CommonSinkConfig, CommonSourceConfig};
 
 // 📡 ElasticsearchSourceConfig — "It's just Elasticsearch", she said, before the cluster went red.
 // Moved here from supervisors/config.rs because configs should live near the thing they configure.
@@ -105,7 +105,7 @@ pub struct ElasticsearchSinkConfig {
     /// You've been warned. The existential error message is very existential.
     pub index: Option<String>,
     /// 🔧 Common sink config: max batch size in bytes, and other life decisions.
-    #[serde(default)]
+    #[serde(flatten, default)]
     pub common_config: CommonSinkConfig,
 }
 
@@ -251,7 +251,8 @@ impl ElasticsearchSink {
         // We do a basic GET to the root to confirm the URL is real and auth works.
         // If this fails, we fail loudly here, rather than quietly 50,000 docs later.
         let c = config.clone();
-        client.get(&c.url)
+        client
+            .get(&c.url)
             .basic_auth(c.username.unwrap_or_default(), c.password)
             .send()
             .await?;
@@ -294,7 +295,9 @@ impl ElasticsearchSink {
             } else {
                 // ✅ The index exists! It is real! We found it! Like finding your keys in your coat!
                 // The one you already checked! But they were there! They were always there!
-                debug!("✅ Index exists and is accepting visitors — welcome mat is out, cluster is home");
+                debug!(
+                    "✅ Index exists and is accepting visitors — welcome mat is out, cluster is home"
+                );
             }
         }
 
@@ -324,7 +327,8 @@ impl ElasticsearchSink {
         // NDJSON. The only format Elasticsearch respects. Truly the format of people who
         // wanted JSON but also wanted to feel slightly superior about it.
         let bulk_url = format!("{}/_bulk", self.sink_config.url.trim_end_matches('/'));
-        let mut request = self.client
+        let mut request = self
+            .client
             .post(&bulk_url)
             // ⚠️ Content-Type: application/x-ndjson — not application/json. VERY important.
             // Elasticsearch will return a 406 or silently misbehave without this header.
@@ -364,7 +368,9 @@ impl ElasticsearchSink {
             );
         } else {
             // ✅ Sent! Gone! Into the index! No cap, this function absolutely slapped.
-            trace!("🚀 Bulk request landed successfully — documents have left the building, Elvis-style");
+            trace!(
+                "🚀 Bulk request landed successfully — documents have left the building, Elvis-style"
+            );
         }
 
         Ok(())
@@ -387,9 +393,7 @@ impl ElasticsearchSink {
         // 🔧 Pre-allocate the bulk body string with a rough size estimate.
         // The +100 per hit covers the action JSON line overhead. It's a guesstimate.
         // A vibes-based allocation. The allocator has seen worse.
-        let estimated_size: usize = self.hits.iter()
-            .map(|h| h.source_buf.len() + 100)
-            .sum();
+        let estimated_size: usize = self.hits.iter().map(|h| h.source_buf.len() + 100).sum();
         let mut bulk_body = String::with_capacity(estimated_size);
 
         for hit in &self.hits {
@@ -421,7 +425,9 @@ impl ElasticsearchSink {
                 // We searched the hit. We searched the config. We searched our souls.
                 // There is nothing. There is only this error, and the echoing question:
                 // "Where was this supposed to go?" We do not know. We never knew.
-                anyhow::bail!("💀 A document arrived with no index — not on the hit, not in the config, not written on the back of the envelope it came in. We checked. We double-checked. We checked a third time while making increasingly worried noises. No index. We cannot proceed. The document is lost to the void. Godspeed, little document.")
+                anyhow::bail!(
+                    "💀 A document arrived with no index — not on the hit, not in the config, not written on the back of the envelope it came in. We checked. We double-checked. We checked a third time while making increasingly worried noises. No index. We cannot proceed. The document is lost to the void. Godspeed, little document."
+                )
             }
 
             // 📡 Write action line, then source line. Each separated by a newline.
@@ -458,8 +464,14 @@ impl ElasticsearchSink {
                 // Context is all we have left.
                 .context("💀 The bulk submission stumbled at the finish line. So close. The NDJSON was built with care, the request was formed with love, and something still went sideways. Context chain below tells the story. It's not a happy story. But it is honest.")?;
             // ✅ Logged with personality, as per the 3am readability mandate.
-            debug!("📡 Yeeted {} bytes into the Elasticsearch void — the bytes have left the building", self.current_hits_size_bytes);
-            debug!("✅ {} documents have successfully emigrated to their new index home — may they find happiness there", self.current_hits_size_len);
+            debug!(
+                "📡 Yeeted {} bytes into the Elasticsearch void — the bytes have left the building",
+                self.current_hits_size_bytes
+            );
+            debug!(
+                "✅ {} documents have successfully emigrated to their new index home — may they find happiness there",
+                self.current_hits_size_len
+            );
             // 🗑️ Reset the buffer. Clean slate. Fresh start. Very therapeutic.
             self.clear();
         }
@@ -504,14 +516,18 @@ impl Sink for ElasticsearchSink {
         // 🚀 A new batch has arrived. Welcome, little documents. You've come a long way.
         // You've been deserialized, possibly transformed, and now you're here.
         // Don't get too comfortable. You'll be flushed before you know it.
-        trace!("📦 Batch received — documents have entered the building, please hold your excitement");
+        trace!(
+            "📦 Batch received — documents have entered the building, please hold your excitement"
+        );
         let incoming_batch_size: usize = batch.hits.iter().map(|h| h.source_buf.len()).sum();
         let max_size: usize = self.sink_config.common_config.max_request_size_bytes;
 
         // ⚠️ Overflow check: if adding this batch would exceed max_request_size_bytes,
         // we flush what we have first. This keeps bulk requests under the size limit.
         // Elasticsearch has opinions about payload size. Like a bouncer. A very principled bouncer.
-        if self.current_hits_size_len > 0 && self.current_hits_size_bytes + incoming_batch_size > max_size {
+        if self.current_hits_size_len > 0
+            && self.current_hits_size_bytes + incoming_batch_size > max_size
+        {
             self.flush().await
                 // 💀 "Error flushing during receive" — a poem of poor timing.
                 // The batch arrived. We were not ready. We tried to make room.
@@ -546,7 +562,9 @@ impl Sink for ElasticsearchSink {
         // The sink has received its batches. It has flushed its burdens.
         // Now it stands at the threshold, ready to be dropped.
         // But first: the remaining documents deserve their moment.
-        debug!("🗑️ Elasticsearch sink is gracefully bowing out — final curtain call, documents to the stage");
+        debug!(
+            "🗑️ Elasticsearch sink is gracefully bowing out — final curtain call, documents to the stage"
+        );
         if !self.hits.is_empty() {
             self.flush().await
                 // 💀 "Error during closing of Elasticsearch Sink" — an eulogy.
