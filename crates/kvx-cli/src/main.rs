@@ -21,41 +21,41 @@ use tracing_subscriber::EnvFilter;
 /// 5. Handle errors (cry)
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 📡 Set up tracing — because println! debugging is a lifestyle choice
-    // we're trying to move past, like flip phones and cargo shorts
+    // -- 📡 Set up tracing — because println! debugging is a lifestyle choice
+    // -- we're trying to move past, like flip phones and cargo shorts
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    // 🎯 Grab the args like catching Pokémon — gotta get at least 1
+    // -- 🎯 Grab the args like catching Pokémon — gotta get at least 1
     let args: Vec<String> = std::env::args().collect();
     let path_arg = match args.get(1) {
         Some(s) => s,
-        None => &format!("kvx.toml"), // 🔧 default: the ol' reliable
+        None => &format!("kvx.toml"), // -- 🔧 default: the ol' reliable
     };
 
-    // 🔒 Validate the config file exists before we get too emotionally attached
+    // -- 🔒 Validate the config file exists before we get too emotionally attached
     let config_file = std::path::Path::new(path_arg);
     let config_file_path_which_is_validated_to_exist = match config_file.try_exists()
         .context(format!("💀 Configuration file may not exist, couldn't find it. Double check that it exists, or maybe, it's an issue with pwd/cwd and relative paths. In that case, use an absolute path, to be absolutely certain, you are not messing this up. Was checking here: '{}'", config_file.display()))
-    /* ? */ ? // ⚠️ Unwrap this, maybe — like unwrapping a gift that might be socks
+    /* ? */ ? // -- ⚠️ Unwrap this, maybe — like unwrapping a gift that might be socks
     {
-        true => Some(config_file),  // ✅ Found it! Better than finding my car keys
-        false => None               // 💤 Not there. Like my motivation on Mondays.
+        true => Some(config_file),  // -- ✅ Found it! Better than finding my car keys
+        false => None               // -- 💤 Not there. Like my motivation on Mondays.
     };
 
-    // 🔧 Load the config — this is the moment where we find out if the TOML is valid
-    // or if someone put a tab where a space should be (looking at you, Kevin)
+    // -- 🔧 Load the config — this is the moment where we find out if the TOML is valid
+    // -- or if someone put a tab where a space should be (looking at you, Kevin)
     let app_config  = kvx::app_config::load_config(config_file_path_which_is_validated_to_exist)
         .context("💀 In kvx-cli, main, we couldn't load the config file, take a look at the file, make sure it's correct. Make sure you didn't forget something obvious, dumas")
     /* ? */ ?;
 
-    // 🚀 SEND IT. No take-backs. This is not a drill.
-    // (okay it might be a drill, we're still in POC/MVP)
+    // -- 🚀 SEND IT. No take-backs. This is not a drill.
+    // -- (okay it might be a drill, we're still in POC/MVP)
     let result = kvx::run(app_config).await;
 
-    // 💀 Error handling: the part where we find out what went wrong
-    // and print it in a way that's helpful at 3am
+    // -- 💀 Error handling: the part where we find out what went wrong
+    // -- and print it in a way that's helpful at 3am
     if let Err(err) = result {
         error!("💀 error: {}", err);
         // -- 🧅 peel the onion of sadness, one tear-jerking layer at a time
@@ -86,11 +86,11 @@ async fn main() -> Result<()> {
             );
         }
 
-        // 🗑️ Exit with prejudice. Process exitus maximus.
+        // -- 🗑️ Exit with prejudice. Process exitus maximus.
         std::process::exit(1);
     }
 
-    // ✅ If we got here, everything worked. Pop the champagne. 🍾
-    // (or at least close the terminal tab with a sense of accomplishment)
+    // -- ✅ If we got here, everything worked. Pop the champagne. 🍾
+    // -- (or at least close the terminal tab with a sense of accomplishment)
     Ok(())
 }

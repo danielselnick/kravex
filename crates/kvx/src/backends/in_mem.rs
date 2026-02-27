@@ -41,7 +41,7 @@ pub(crate) struct InMemorySource {
     /// 🔒 The virginity of this source — once yielded, forever yielded.
     /// Like watching a movie spoiler. Can't un-yield it.
     /// The borrow checker wished it could reject this concept. It could not.
-    has_yielded: bool, // true = "I already gave you everything I had, please stop asking"
+    has_yielded: bool, // -- true = "I already gave you everything I had, please stop asking"
 }
 
 impl InMemorySource {
@@ -52,9 +52,9 @@ impl InMemorySource {
     /// It's async because we respect the trait contract, not because we need it.
     /// Ancient proverb: "He who makes everything async learns nothing, but ships faster."
     pub(crate) async fn new() -> Result<Self> {
-        // ✅ No config to load, no server to ping, no prayers to send.
-        // This is the most peaceful constructor in the entire codebase.
-        // Cherish this moment.
+        // -- ✅ No config to load, no server to ping, no prayers to send.
+        // -- This is the most peaceful constructor in the entire codebase.
+        // -- Cherish this moment.
         Ok(Self { has_yielded: false })
     }
 }
@@ -74,34 +74,34 @@ impl Source for InMemorySource {
     /// The singularity will happen before we replace these hardcoded docs with
     /// real fixture loading logic. And that's fine. The singularity can deal with it.
     async fn next_batch(&mut self) -> Result<HitBatch> {
-        // 🔒 Guard against second helpings. One batch per customer. This is Costco,
-        // not a buffet. (Actually it's neither. It's RAM. But you get the idea.)
+        // -- 🔒 Guard against second helpings. One batch per customer. This is Costco,
+        // -- not a buffet. (Actually it's neither. It's RAM. But you get the idea.)
         if self.has_yielded {
-            // 💀 Nothing left. The well is dry. The larder is bare.
-            // The CI pipeline will at least get a clean empty batch, which is
-            // more than I can say for my emotional availability on Mondays.
+            // -- 💀 Nothing left. The well is dry. The larder is bare.
+            // -- The CI pipeline will at least get a clean empty batch, which is
+            // -- more than I can say for my emotional availability on Mondays.
             return HitBatch::new(vec![]);
         }
 
-        // ✅ First call — we commit. No cap, we are actually doing this.
+        // -- ✅ First call — we commit. No cap, we are actually doing this.
         self.has_yielded = true;
 
-        // 📦 Behold: the sacred test corpus. Four documents. FOUR.
-        // {"doc":1}, {"doc":2}, {"doc":3}, {"doc":4}.
-        // No title. No body. No `_source`. No dignity.
-        // Whoever hardcoded these was either:
-        //   a) in a hurry (relatable),
-        //   b) writing a test and planning to come back (lol),
-        //   c) a time traveler who knew tests don't care about real data.
-        // The docs don't know they're fake. Please don't tell them.
+        // -- 📦 Behold: the sacred test corpus. Four documents. FOUR.
+        // -- {"doc":1}, {"doc":2}, {"doc":3}, {"doc":4}.
+        // -- No title. No body. No `_source`. No dignity.
+        // -- Whoever hardcoded these was either:
+        // --   a) in a hurry (relatable),
+        // --   b) writing a test and planning to come back (lol),
+        // --   c) a time traveler who knew tests don't care about real data.
+        // -- The docs don't know they're fake. Please don't tell them.
         let hit_items = vec![
-            String::from(r#"{"doc":1}"#), // Document 1: a classic. timeless. no metadata.
-            String::from(r#"{"doc":2}"#), // Document 2: the sophomore slump. still no metadata.
-            String::from(r#"{"doc":3}"#), // Document 3: the deep cut. fans only.
-            String::from(r#"{"doc":4}"#), // Document 4: the finale. no arc. no resolution. just {"doc":4}.
+            String::from(r#"{"doc":1}"#), // -- Document 1: a classic. timeless. no metadata.
+            String::from(r#"{"doc":2}"#), // -- Document 2: the sophomore slump. still no metadata.
+            String::from(r#"{"doc":3}"#), // -- Document 3: the deep cut. fans only.
+            String::from(r#"{"doc":4}"#), // -- Document 4: the finale. no arc. no resolution. just {"doc":4}.
         ];
 
-        // 🚀 And we're off! All the velocity of a thumbtack rolling downhill.
+        // -- 🚀 And we're off! All the velocity of a thumbtack rolling downhill.
         HitBatch::new(hit_items)
     }
 }
@@ -136,8 +136,8 @@ impl InMemorySink {
     /// a trench coat to look taller in async contexts. I have no proof. I have
     /// strong feelings.
     pub(crate) async fn new() -> Result<Self> {
-        // ✅ Birth of the sink. An empty Vec, full of potential, unmarred by batches.
-        // This is the most hopeful a Vec will ever be. Downhill from here.
+        // -- ✅ Birth of the sink. An empty Vec, full of potential, unmarred by batches.
+        // -- This is the most hopeful a Vec will ever be. Downhill from here.
         Ok(Self {
             received: std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new())),
         })
@@ -155,14 +155,14 @@ impl Sink for InMemorySink {
     /// 🎯 This is the whole job: take batch, store batch, go home.
     /// Some of us wish our jobs were this clear.
     async fn receive(&mut self, batch: HitBatch) -> Result<()> {
-        // 🔒 Acquire the lock. Await the Mutex. Respect the concurrency gods.
+        // -- 🔒 Acquire the lock. Await the Mutex. Respect the concurrency gods.
         // This is the ONE place multiple async tasks might collide.
         // The Mutex is load-bearing. Do not remove. I know it looks optional. It isn't.
         self.received.lock().await.push(batch);
 
-        // ✅ Did it. Pushed it. No drama.
-        // "It works on my machine" — inscribed on the tombstone of many a developer.
-        // But this? This actually works. On all machines. Probably.
+        // -- ✅ Did it. Pushed it. No drama.
+        // -- "It works on my machine" — inscribed on the tombstone of many a developer.
+        // -- But this? This actually works. On all machines. Probably.
         Ok(())
     }
 
@@ -177,10 +177,10 @@ impl Sink for InMemorySink {
     /// Why did the in-memory sink go to therapy? It had trouble letting go.
     /// (The Arc kept bumping the ref count. It never actually dropped.)
     async fn close(&mut self) -> Result<()> {
-        // 🗑️ Cleanup routine: [REDACTED — there is nothing here]
-        // The singularity will have already occurred by the time we need real
-        // teardown logic in an in-memory backend. We'll deal with it then.
-        // The singularity can file a PR.
+        // -- 🗑️ Cleanup routine: [REDACTED — there is nothing here]
+        // -- The singularity will have already occurred by the time we need real
+        // -- teardown logic in an in-memory backend. We'll deal with it then.
+        // -- The singularity can file a PR.
         Ok(())
     }
 }

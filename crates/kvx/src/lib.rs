@@ -6,7 +6,7 @@
 //!
 //! ⚠️ "The singularity will happen before this crate reaches 1.0"
 
-// 🗑️ TODO: clean up the dedz (dead code, not the grateful kind)
+// -- 🗑️ TODO: clean up the dedz (dead code, not the grateful kind)
 #![allow(dead_code, unused_variables, unused_imports)]
 pub mod app_config;
 pub(crate) mod backends;
@@ -60,20 +60,20 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
 
 async fn from_source_config(config: &AppConfig) -> Result<SourceBackend> {
     match &config.source_config {
-        // 📂 The File arm: ancient, reliable, and smells faintly of 2003.
-        // Like a filing cabinet that somehow learned async/await.
+        // -- 📂 The File arm: ancient, reliable, and smells faintly of 2003.
+        // -- Like a filing cabinet that somehow learned async/await.
         SourceConfig::File(file_cfg) => {
             let src = FileSource::new(file_cfg.clone()).await?;
             Ok(SourceBackend::File(src))
         }
-        // 🧠 The InMemory arm: blazing fast, lives and dies with the process.
-        // No persistence. No regrets. No disk. Very YOLO.
+        // -- 🧠 The InMemory arm: blazing fast, lives and dies with the process.
+        // -- No persistence. No regrets. No disk. Very YOLO.
         SourceConfig::InMemory(_) => {
             let src = InMemorySource::new().await?;
             Ok(SourceBackend::InMemory(src))
         }
-        // 📡 The Elasticsearch arm: HTTP calls, JSON parsing, and the constant
-        // fear of a 429 response that ruins your Thursday afternoon.
+        // -- 📡 The Elasticsearch arm: HTTP calls, JSON parsing, and the constant
+        // -- fear of a 429 response that ruins your Thursday afternoon.
         SourceConfig::Elasticsearch(es_cfg) => {
             let src = ElasticsearchSource::new(es_cfg.clone()).await?;
             Ok(SourceBackend::Elasticsearch(src))
@@ -83,20 +83,20 @@ async fn from_source_config(config: &AppConfig) -> Result<SourceBackend> {
 
 async fn from_sink_config(config: &AppConfig) -> Result<SinkBackend> {
     match &config.sink_config {
-        // 📂 File sink: data goes in, data stays in. It's basically a digital shoebox
-        // under the bed. Hope you labeled it.
+        // -- 📂 File sink: data goes in, data stays in. It's basically a digital shoebox
+        // -- under the bed. Hope you labeled it.
         SinkConfig::File(file_cfg) => {
             let sink = FileSink::new(file_cfg.clone()).await?;
             Ok(SinkBackend::File(sink))
         }
-        // 🧠 InMemory sink: it holds all your data, beautifully, until the process
-        // ends and takes everything with it like a sandcastle at high tide. 🌊
+        // -- 🧠 InMemory sink: it holds all your data, beautifully, until the process
+        // -- ends and takes everything with it like a sandcastle at high tide. 🌊
         SinkConfig::InMemory(_) => {
             let sink = InMemorySink::new().await?;
             Ok(SinkBackend::InMemory(sink))
         }
-        // 📡 Elasticsearch sink: data goes in at the speed of HTTP, which is to say,
-        // "fast enough until it isn't." May your bulk indexing be ever green. 🌿
+        // -- 📡 Elasticsearch sink: data goes in at the speed of HTTP, which is to say,
+        // -- "fast enough until it isn't." May your bulk indexing be ever green. 🌿
         SinkConfig::Elasticsearch(es_cfg) => {
             let sink = ElasticsearchSink::new(es_cfg.clone()).await?;
             Ok(SinkBackend::Elasticsearch(sink))

@@ -35,8 +35,8 @@ impl SinkWorker {
     /// It is the plumber of this pipeline — and like all plumbers, it shows up,
     /// does the job, and leaves without explaining itself.
     pub(crate) fn new(rx: Receiver<HitBatch>, sink: SinkBackend) -> Self {
-        // 🔧 Two fields. One purpose. Zero drama.
-        // The borrow checker approved this message.
+        // -- 🔧 Two fields. One purpose. Zero drama.
+        // -- The borrow checker approved this message.
         Self { rx, sink }
     }
 }

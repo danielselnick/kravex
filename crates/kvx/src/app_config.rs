@@ -8,16 +8,16 @@
 
 use anyhow::Context;
 use serde::Deserialize;
-// 🔧 To load the configuration, so I don't have to manually parse
-// environment variables or files. Bleh. Like doing taxes but for bytes.
+// -- 🔧 To load the configuration, so I don't have to manually parse
+// -- environment variables or files. Bleh. Like doing taxes but for bytes.
 use crate::supervisors::config::{RuntimeConfig, SinkConfig, SourceConfig};
 use figment::{
     Figment,
     providers::{Env, Format, Toml},
 };
 use std::path::Path;
-// 🚀 tracing::info — because println! in production is a cry for help.
-// "I used to use println! for debugging... but then I got help." — anonymous dev, 2 kids, 1 wife, 1 mortgage
+// -- 🚀 tracing::info — because println! in production is a cry for help.
+// -- "I used to use println! for debugging... but then I got help." — anonymous dev, 2 kids, 1 wife, 1 mortgage
 use tracing::info;
 
 /// 📦 The AppConfig: one struct to rule them all, one struct to find them,
@@ -49,27 +49,27 @@ pub struct AppConfig {
 /// 💀 Returns an error if config is unparseable. Which it will be. Check the error message though —
 /// it's contextual, informative, and written with love. Or despair. Hard to tell at 3am.
 pub fn load_config(config_file_name: Option<&Path>) -> anyhow::Result<AppConfig> {
-    // 🚀 Log what we're loading — because silent failures are the villain origin story
-    // of every 3am incident. "The config loaded fine." — famous last words.
+    // -- 🚀 Log what we're loading — because silent failures are the villain origin story
+    // -- of every 3am incident. "The config loaded fine." — famous last words.
     info!(
         "🔧 Loading configuration: {:#?}",
         config_file_name.unwrap_or(&Path::new(""))
     );
 
-    // 🏗️ Start with env vars as the base layer — like a good sourdough starter.
-    // ALL KVX_* vars accepted. No ID required. No velvet rope. Everyone's invited.
+    // -- 🏗️ Start with env vars as the base layer — like a good sourdough starter.
+    // -- ALL KVX_* vars accepted. No ID required. No velvet rope. Everyone's invited.
     let config = Figment::new().merge(Env::prefixed("KVX_"));
 
-    // 🎯 Conditionally layer in TOML only if a file was actually provided.
-    // No file? No problem. We trust the env. Like a golden retriever trusts everyone.
-    // Ancient proverb: "He who defaults to config.toml uninvited, deploys to production alone."
+    // -- 🎯 Conditionally layer in TOML only if a file was actually provided.
+    // -- No file? No problem. We trust the env. Like a golden retriever trusts everyone.
+    // -- Ancient proverb: "He who defaults to config.toml uninvited, deploys to production alone."
     let config = match config_file_name {
         Some(file_name) => config.merge(Toml::file(file_name)),
         None => config,
     };
 
     // 💬 Build a context message that will actually TELL you what went wrong.
-    // None of that "error: error" energy. This isn't a Kafka novel. (The author, not the queue.)
+    // -- None of that "error: error" energy. This isn't a Kafka novel. (The author, not the queue.)
     let context_msg = match config_file_name {
         Some(path) => format!(
             "💀 Failed to parse configuration from file '{}' and environment variables (KVX_*). \
@@ -81,8 +81,8 @@ pub fn load_config(config_file_name: Option<&Path>) -> anyhow::Result<AppConfig>
             .to_string(),
     };
 
-    // ✅ or 💀, there is no try — actually there is, it's called `?`
-    // TODO: win the lottery, retire, delete this crate
+    // -- ✅ or 💀, there is no try — actually there is, it's called `?`
+    // -- TODO: win the lottery, retire, delete this crate
     config.extract().context(context_msg)
 }
 
@@ -101,7 +101,7 @@ mod tests {
             "kvx_app_config_{timestamp_of_questionable_life_choices}.toml"
         ));
 
-        // 🧪 We write a real file here because Figment wants TOML from disk, like it's method acting.
+        // -- 🧪 We write a real file here because Figment wants TOML from disk, like it's method acting.
         fs::write(&temp_path, contents)
             .expect("💀 Failed to write test config. The filesystem said 'new phone who dis'.");
         temp_path

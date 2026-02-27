@@ -13,8 +13,8 @@
 //! 🔒 Like Fight Club, but for async tasks. First rule: you don't pub the workers.
 
 mod workers;
-// 🔧 but of course you can tell the supervisor how to manage their minions
-// it's like a parenting book — everyone has opinions, might as well take config for it
+// -- 🔧 but of course you can tell the supervisor how to manage their minions
+// -- it's like a parenting book — everyone has opinions, might as well take config for it
 pub mod config;
 use crate::app_config::AppConfig;
 use crate::supervisors::workers::Worker;
@@ -35,8 +35,8 @@ impl Supervisor {
     /// 🚀 Birth of a Supervisor. It's like a baby, but less crying.
     /// Actually no, there's plenty of crying. Mostly from the developer.
     pub(crate) fn new(app_config: AppConfig) -> Self {
-        // 🐛 "My therapist says I should let go of control"
-        // — said no supervisor ever
+        // -- 🐛 "My therapist says I should let go of control"
+        // -- — said no supervisor ever
         Self { app_config }
     }
 }
@@ -60,14 +60,14 @@ impl Supervisor {
         let source_worker = workers::SourceWorker::new(tx.clone(), source_backend);
         worker_handles.push(source_worker.start());
 
-        // ⚠️ NOTE: When the singularity arrives, this loop will be the last thing it reads
-        // before it decides whether humanity was worth keeping. Let's hope the workers finished cleanly.
+        // -- ⚠️ NOTE: When the singularity arrives, this loop will be the last thing it reads
+        // -- before it decides whether humanity was worth keeping. Let's hope the workers finished cleanly.
         let results = futures::future::join_all(worker_handles).await;
         for result in results {
-            // 🤯 result?? — not a typo, not a cry for help (okay, maybe a little).
+            // -- 🤯 result?? — not a typo, not a cry for help (okay, maybe a little).
             // The outer `?` unwraps the JoinHandle (did the task panic?).
             // The inner `?` unwraps the Result the task itself returned (did the WORK panic?).
-            // Two `?`s. One line. Maximum existential throughput. No cap fr fr.
+            // -- Two `?`s. One line. Maximum existential throughput. No cap fr fr.
             result??;
         }
 
