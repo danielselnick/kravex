@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let path_arg = match args.get(1) {
         Some(s) => s,
-        None => &format!("kvx.toml") // 🔧 default: the ol' reliable
+        None => &format!("kvx.toml"), // 🔧 default: the ol' reliable
     };
 
     // 🔒 Validate the config file exists before we get too emotionally attached
@@ -56,11 +56,34 @@ async fn main() -> Result<()> {
 
     // 💀 Error handling: the part where we find out what went wrong
     // and print it in a way that's helpful at 3am
-    if let Err(err) =  result {
-        error!("💀 error: {:#}", err);
+    if let Err(err) = result {
+        error!("💀 error: {}", err);
+        // -- 🧅 peel the onion of sadness, one tear-jerking layer at a time
+        let mut the_vibes_are_giving_connection_issues = false;
         for cause in err.chain().skip(1) {
-            error!("⚠️  cause: {:#}", cause);
-            // ^ each cause is like peeling an onion of sadness 🧅
+            error!("⚠️  cause: {}", cause);
+            // -- 🕵️ sniff the cause like a truffle pig hunting for connection problems
+            let cause_str = cause.to_string();
+            if cause_str.contains("error sending request")
+                || cause_str.contains("connection refused")
+                || cause_str.contains("Connection refused")
+                || cause_str.contains("tcp connect error")
+                || cause_str.contains("dns error")
+            {
+                the_vibes_are_giving_connection_issues = true;
+            }
+        }
+
+        // -- 📡 if it smells like a connection problem, it's probably a connection problem
+        // -- like when your wifi icon has full bars but nothing loads
+        if the_vibes_are_giving_connection_issues {
+            error!(
+                "🔧 hint: looks like a service isn't reachable. \
+                Double-check that the backing service (Elasticsearch, database, etc.) \
+                is actually running. If you're using Docker, try: \
+                `docker ps` to see what's up, or `docker compose up -d` to resurrect it. \
+                Even servers need a nudge sometimes. ☕"
+            );
         }
 
         // 🗑️ Exit with prejudice. Process exitus maximus.
@@ -71,4 +94,3 @@ async fn main() -> Result<()> {
     // (or at least close the terminal tab with a sense of accomplishment)
     Ok(())
 }
-

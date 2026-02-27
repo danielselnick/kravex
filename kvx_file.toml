@@ -1,0 +1,21 @@
+# kvx_file.toml — file-to-file mode.
+# For when you want to migrate data without involving Elasticsearch.
+# Benchmarking? Testing? Avoiding the cloud bill? We don't judge. 🚀
+# "In a world where storage is cheap... one engineer still used files." — tagline, probably.
+# 🦆
+
+channel_size = 2
+num_sink_workers = 1
+
+[source_config.File]
+file_name = "benchmark/rally-documents/noaa_documents.json"
+
+[source_config.File.common_config]
+max_batch_size_bytes = 268435456
+max_batch_size_docs = 100000
+
+[sink_config.File]
+file_name = "output.json"
+
+[sink_config.File.common_config]
+max_request_size_bytes = 268435456

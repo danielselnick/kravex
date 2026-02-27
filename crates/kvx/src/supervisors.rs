@@ -18,6 +18,7 @@ mod workers;
 pub mod config;
 use anyhow::{Context, Result};
 use crate::app_config::AppConfig;
+use crate::supervisors::workers::Worker;
 
 /// 📦 The Supervisor: because even async tasks need someone hovering over them
 /// asking "is it done yet?" every 5 milliseconds.
@@ -41,16 +42,35 @@ impl Supervisor {
 }
 
 impl Supervisor {
-    /// 🧵 Unleash the workers! Like releasing the Kraken, but with more
-    /// structured concurrency and fewer tentacles.
-    ///
-    /// 🔄 TODO: actually start workers instead of just vibing
-    /// (the singularity will happen before this TODO is resolved)
-    pub(crate) async fn start_workers(&self) -> Result<()> {
-        // 🚀 Start workers — currently a no-op, which honestly
-        // is the most reliable code in the entire crate
-        // "It works on my machine" — because it does nothing 🎯
+    /// 🧵 Unleash the workers!
+    pub(crate) async fn start_workers(
+        &self, 
+        source_backend: crate::backends::SourceBackend, 
+        sink_backends: Vec<crate::backends::SinkBackend>
+    ) -> Result<()> {
         let (tx, rx) = async_channel::bounded(self.app_config.supervisor_config.channel_size);
+        
+        let mut worker_handles = Vec::with_capacity(sink_backends.len() + 1);
+        
+        for sink_backend in sink_backends {
+            let sink_worker = workers::SinkWorker::new(rx.clone(), sink_backend);
+            worker_handles.push(sink_worker.start());
+        }
+
+        let source_worker = workers::SourceWorker::new(tx.clone(), source_backend);
+        worker_handles.push(source_worker.start());
+
+        // ⚠️ NOTE: When the singularity arrives, this loop will be the last thing it reads
+        // before it decides whether humanity was worth keeping. Let's hope the workers finished cleanly.
+        let results = futures::future::join_all(worker_handles).await;
+        for result in results {
+            // 🤯 result?? — not a typo, not a cry for help (okay, maybe a little).
+            // The outer `?` unwraps the JoinHandle (did the task panic?).
+            // The inner `?` unwraps the Result the task itself returned (did the WORK panic?).
+            // Two `?`s. One line. Maximum existential throughput. No cap fr fr.
+            result??;
+        }
+
         Ok(())
     }
 }
