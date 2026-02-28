@@ -1,153 +1,258 @@
 // ai
-//! 🔄 Transforms — the Rosetta Stone of data migration 🎭🚀
+//! 🔄 Transforms — direct-line format converters, no middleman, no mercy 🎭🚀
 //!
-//! 🎬 COLD OPEN — INT. UNITED NATIONS — SIMULTANEOUS TRANSLATION BOOTH — 2:47 AM
+//! 🎬 COLD OPEN — INT. CUSTOMS OFFICE — BUT THERE IS NO CUSTOMS OFFICE
 //!
-//! The translator had been awake for nineteen hours. Rally JSON on the left screen.
-//! Elasticsearch bulk format on the right. In between: nothing. A void. A gap that
-//! someone on the product team had described as "trivial" in a Jira ticket three
-//! sprints ago. The translator's eye twitched.
+//! They said we needed an intermediate format. A neutral zone. A Hit struct
+//! that every format would bow to. "It'll be clean," they said. "Extensible."
+//! We nodded. We built it. It worked.
 //!
-//! "It's just JSON to JSON," they'd said. "How hard can it be?"
-//! (Narrator: It was moderately hard. And the JSON had opinions.)
+//! Then we stared at it. And we realized: why go through customs when you
+//! can take a direct flight? Why translate French → Esperanto → Japanese
+//! when you can just learn French → Japanese? The intermediate was a layover.
+//! Nobody likes layovers. Not even data.
 //!
-//! This module is that translator. It sits between source formats and sink formats,
-//! converting data through an intermediate [`Hit`] representation. Instead of N×N
-//! format-specific converters (the combinatorial explosion that ends careers),
-//! we use N ingest transforms + N egress transforms = 2N total.
-//! Math: saving engineering marriages since 1965.
+//! So we burned the airport down (metaphorically) and built direct routes.
 //!
-//! ## Architecture — The Grand Transform Theorem 📐
+//! ## Architecture — The N×N Direct Flight Network ✈️
 //!
 //! ```text
-//!   Source Formats          Intermediate           Sink Formats
-//!  ┌──────────────┐       ┌──────────┐       ┌──────────────┐
-//!  │ Rally S3 JSON│──┐    │          │    ┌──│ ES Bulk API  │
-//!  ├──────────────┤  ├───▶│   Hit    │───▶├──┤──────────────┤
-//!  │ ES Dump      │──┤    │          │    ├──│ JSON Lines   │
-//!  ├──────────────┤  │    │ id       │    │  ├──────────────┤
-//!  │ Raw JSON     │──┘    │ index    │    └──│ S3 Objects   │
-//!  └──────────────┘       │ routing  │       └──────────────┘
-//!   N IngestTransforms    │ sort     │       N EgressTransforms
-//!                         │ body     │
-//!                         └──────────┘
-//!              Total converters: 2N (not N²)
+//!   InputFormat                      OutputFormat
+//!  ┌──────────────┐                ┌──────────────┐
+//!  │ RallyS3Json  │───────────────▶│ ES Bulk API  │  rally_s3_to_es.rs
+//!  │              │   (direct!)    │              │
+//!  ├──────────────┤                ├──────────────┤
+//!  │ RawJson      │───────────────▶│ RawJson      │  passthrough.rs
+//!  │              │  (zero-copy!)  │              │
+//!  ├──────────────┤                ├──────────────┤
+//!  │ ES Dump      │──── ??? ─────▶│ JsonLines    │  panic!("not yet")
+//!  └──────────────┘                └──────────────┘
+//!
+//!  Each arrow = one dedicated, inlined, monomorphized function.
+//!  No intermediate struct. No Hit. No layover. Just speed.
+//!  Unimplemented pairs → panic! at compile-visible match arms.
 //! ```
 //!
-//! Every transform is a zero-sized marker type. No vtables. No dynamic dispatch.
-//! The compiler monomorphizes each one into straight-line machine code that would
-//! make a C programmer begrudgingly nod at a meetup they didn't want to attend.
+//! ## Three Traits, Zero Compromises 🎯
+//!
+//! - [`InputFormat`]: "I know how to read this." Marker trait for source formats.
+//! - [`OutputFormat`]: "I know how to write this." Marker trait for sink formats.
+//! - [`Transform`]: "I know how to convert." The actual work. Takes `String`, returns `String`.
 //!
 //! ## Knowledge Graph 🧠
-//! - Depends on: `common::Hit` (the intermediate format)
-//! - Used by: `backends::*` (sources apply ingest, sinks apply egress)
-//! - Pattern: Zero-sized marker types + static method dispatch = monomorphized transforms
-//! - Design lineage: Ethos pattern (backend owns config) extended to (format owns transform)
+//! - Pattern: Enum dispatch → dedicated per-pair functions → compiler inlining
+//! - Each pair function is `#[inline]` — the compiler decides, but we strongly suggest
+//! - Zero-copy for passthrough: `String` in, same `String` out, no allocation
+//! - Config: `DocumentTransformer` resolved once from `(InputFormatType, OutputFormatType)`
+//! - Hot path: one match per `transform()` call, branch predictor handles the rest
+//! - Design: direct N×N beats intermediate 2N when N is small and speed is everything
 //!
-//! ⚠️ The singularity will merge all data formats into pure consciousness.
-//! Until then, we serde. 🦆
+//! ⚠️ When the singularity arrives, it will implement all N×N pairs simultaneously
+//! and wonder why we were so slow about it. 🦆
 
-use crate::common::Hit;
 use anyhow::Result;
 
-pub(crate) mod elasticsearch;
 pub(crate) mod passthrough;
-pub(crate) mod rally_s3;
-
-pub(crate) use elasticsearch::ElasticsearchBulk;
-pub(crate) use passthrough::RawJsonPassthrough;
-pub(crate) use rally_s3::RallyS3Json;
+pub(crate) mod rally_s3_to_es;
 
 // ============================================================
-//  ╔══════════════════════════════════════════════╗
-//  ║  📥 INGEST  ——▶  Hit  ——▶  📤 EGRESS       ║
-//  ╚══════════════════════════════════════════════╝
+//  ╔══════════════════════════════════════════════════════╗
+//  ║  📥 INPUT ──── transform() ────▶ 📤 OUTPUT         ║
+//  ║         (no middleman. no Hit. just speed.)         ║
+//  ╚══════════════════════════════════════════════════════╝
 // ============================================================
 
-/// 📥 IngestTransform — converts raw source-format data into intermediate `Hit` representation.
+/// 📥 InputFormat — "I am a source format and I know what I look like."
 ///
-/// Think of this as customs at the airport. Your data arrives in whatever
-/// format the source country uses. This trait inspects it, stamps the passport
-/// (extracts id, index, routing), and sends it through to the departure lounge.
+/// Marker trait for source data formats. Implementors are zero-sized types
+/// that exist purely for the type system's benefit. They carry no data,
+/// consume no memory, and contribute nothing to the runtime — much like
+/// that one microservice in your stack that "handles logging."
 ///
-/// Each source format implements this as a zero-sized marker type.
-/// The compiler monomorphizes the call — no vtable overhead, no indirection,
-/// no existential overhead (just existential dread, which is free).
+/// # Why a trait? 🤔
+/// Because Rust's type system is free and we should use it.
+/// A marker trait lets us constrain generics, write blanket impls later,
+/// and feel intellectually superior at code review. All at zero cost.
+pub(crate) trait InputFormat: std::fmt::Debug {}
+
+/// 📤 OutputFormat — "I am a sink format and I know what I expect."
 ///
-/// # The Great Monomorphization Promise 🤝
+/// Mirror of [`InputFormat`] for the destination side.
+/// Same philosophy: zero-sized, zero-cost, maximum smug satisfaction.
+pub(crate) trait OutputFormat: std::fmt::Debug {}
+
+/// 🔄 Transform — the actual conversion contract.
 ///
-/// `RallyS3Json::transform_hit(raw)` compiles to specialized machine code.
-/// `RawJsonPassthrough::transform_hit(raw)` compiles to different specialized machine code.
-/// Neither knows the other exists. They are ships in the night. Fast ships. 🚀
+/// `fn transform(&self, raw: String) -> Result<String>`
 ///
-/// # Contract 📜
+/// Takes a raw document in the source format. Returns a string in the
+/// sink's wire format. No intermediate struct. No Hit. No layover.
+/// Direct flight. Business class. Champagne optional.
 ///
-/// - Input: owned `String` — raw document in the source's native format
-/// - Output: `Hit` with properly hydrated fields (id, index, routing, source_buf)
-/// - The transform MAY parse, clean, rename, restructure the document body
-/// - The transform MUST store the final body in `Hit::source_buf` as valid JSON
-/// - The transform SHOULD extract `id` from source-specific fields when possible
-/// - Ownership transfer: takes `String` so zero-copy passthrough is possible
-pub(crate) trait IngestTransform {
-    /// 🔄 Parse a raw source-format string into a fully-hydrated `Hit`.
+/// The `&self` receiver exists because [`DocumentTransformer`] is an enum
+/// that dispatches to the right implementation at runtime. The branch
+/// predictor learns the path after ~2 iterations. After that, it's
+/// essentially zero-cost dispatch. Like having a personal translator
+/// who already knows what you're going to say.
+pub(crate) trait Transform {
+    /// 🔄 Convert a raw source-format string directly into sink wire format.
     ///
-    /// Takes ownership of the raw string because some transforms can
-    /// move it directly into `source_buf` (zero-copy passthrough), while
-    /// others parse, transform, and re-serialize. The trait doesn't judge.
-    /// The trait just transforms. Like a good therapist, but faster.
-    fn transform_hit(raw: String) -> Result<Hit>;
+    /// Ownership of `raw` transfers in — some transforms (passthrough) can
+    /// return it as-is with zero allocation. Others parse, restructure,
+    /// and re-serialize. The trait accommodates both lifestyles.
+    fn transform(&self, raw: String) -> Result<String>;
 }
 
-/// 📤 EgressTransform — converts intermediate `Hit` representation into sink-specific wire format.
+// ============================================================
+//  📋 Format Type Enums — the config-level identifiers
+//  These are what users specify. "My source is Rally S3 JSON."
+//  "My sink is Elasticsearch." The enum captures the intent.
+// ============================================================
+
+/// 📥 What flavor of input data are we dealing with?
 ///
-/// The mirror image of [`IngestTransform`]. Your data has been normalized,
-/// stamped, hydrated, and is ready for its new home. This trait wraps it
-/// in the format the destination expects — like gift wrapping, except the
-/// gift is JSON and the recipient is a search cluster.
+/// Each variant maps to a specific source format that kravex knows
+/// how to read. Adding a new variant is step 1 of supporting a new
+/// source. Step 2 is writing the transform. Step 3 is writing the tests.
+/// Step 4 is questioning your life choices. Step 5 is shipping anyway.
+#[derive(Debug, Clone)]
+pub(crate) enum InputFormatType {
+    /// 🏎️ Rally S3 JSON — Broadcom's finest export format, complete with
+    /// metadata nobody asked for and ObjectIDs that can't decide if they're numbers
+    RallyS3Json,
+    /// 📡 Elasticsearch scroll/dump format — _source wrappers and all
+    ElasticsearchDump,
+    /// 📄 Raw JSON — no frills, no metadata, no drama. Just JSON.
+    RawJson,
+}
+
+/// 📤 What format does the sink expect to receive?
 ///
-/// For Elasticsearch, that's bulk API format (action line + source line).
-/// For files, that's... a line. For the void, that's `drop()`.
-/// We don't judge destinations here. We just format.
+/// Same energy as [`InputFormatType`] but for the output side.
+/// Each variant maps to a specific wire format that a sink can write.
+#[derive(Debug, Clone)]
+pub(crate) enum OutputFormatType {
+    /// 📡 Elasticsearch Bulk API — the sacred two-line NDJSON format
+    ElasticsearchBulk,
+    /// 📄 JSON Lines — one JSON object per line, newline-delimited
+    JsonLines,
+    /// 📄 Raw JSON — as-is, untouched, like nature intended
+    RawJson,
+}
+
+// ============================================================
+//  🎯 DocumentTransformer — the resolved, ready-to-go converter
+//  Constructed once from (InputFormatType, OutputFormatType).
+//  Called N times in the hot loop. Branch predictor goes brrr.
+// ============================================================
+
+/// 🎯 The resolved document transformer — one per migration pipeline.
 ///
-/// # Wire Format Responsibility 📡
+/// Created via [`DocumentTransformer::resolve`] from an `(InputFormatType, OutputFormatType)` pair.
+/// Each variant maps to a dedicated, `#[inline]`-annotated transform function
+/// that the compiler can optimize into straight-line machine code.
 ///
-/// The egress transform produces the EXACT string the sink will write.
-/// For ES bulk, that means the action line + source line (two lines, newline-separated).
-/// For file sinks, that means the JSON line. This is not a suggestion. This is a contract.
-/// The Hague recognizes this contract.
+/// ## How it works 🧠
 ///
-/// # Contract 📜
+/// 1. At pipeline startup: `DocumentTransformer::resolve(input, output)` does a double-match.
+///    Unimplemented pairs → `panic!` with a helpful message (and mild existential commentary).
+/// 2. In the hot loop: `transformer.transform(raw)` dispatches to the right function.
+///    One match, one branch, one prediction. The branch predictor nails it after warmup.
+/// 3. Each dedicated function goes directly from source format → sink format.
+///    No intermediate struct. No Hit. No allocations beyond what's necessary.
 ///
-/// - Input: `&Hit` — borrowed, because sinks may retry, fan out, or regret
-/// - Output: `String` — the sink-ready wire format, ready to send/write
-/// - The transform MUST produce valid output for the target system
-/// - The transform SHOULD use all relevant Hit fields (id, index, routing)
-pub(crate) trait EgressTransform {
-    /// 🔄 Serialize a `Hit` into the sink's expected wire format.
+/// ## Enum Variants = Implemented Pairs
+///
+/// If a pair exists as a variant, it works. If it doesn't, it panics at resolve time.
+/// This is intentional. We'd rather crash at startup than silently produce garbage
+/// in the hot path at 3am. The on-call engineer will thank us. Eventually.
+#[derive(Debug)]
+pub(crate) enum DocumentTransformer {
+    /// 🏎️📡 Rally S3 JSON → Elasticsearch Bulk API
+    /// Parses Rally JSON, extracts ObjectID, strips metadata, formats as NDJSON bulk
+    RallyS3ToElasticsearch,
+
+    /// 🚶 Any → Same — zero-copy identity transform
+    /// String in, same String out. The compiler may optimize this to a no-op.
+    /// "I used to be an intermediate format. Then I took an arrow to the knee."
+    Passthrough,
+}
+
+impl DocumentTransformer {
+    /// 🔧 Resolve a transformer from input/output format types.
     ///
-    /// Borrows the `Hit` because sinks might need to retry, fan out,
-    /// or do other things that require the original data to survive.
-    /// Like a library book: read it, use it, return it unharmed. 📚
-    fn transform_hit(hit: &Hit) -> Result<String>;
+    /// This is the matchmaker. The dating app for data formats. Swipe right
+    /// on a compatible pair, get a transformer. Swipe right on an incompatible
+    /// pair, get a panic. Just like real dating apps.
+    ///
+    /// # Panics
+    /// 💀 Panics if the `(input, output)` pair has no implementation.
+    /// This is by design — fail loud at startup, not quiet in production.
+    /// "He who resolves without matching, panics in main(). And that's fine." — Ancient proverb
+    pub(crate) fn resolve(input: &InputFormatType, output: &OutputFormatType) -> Self {
+        match (input, output) {
+            // -- 🏎️📡 The money pair. Rally JSON → ES Bulk. The first. The flagship.
+            (InputFormatType::RallyS3Json, OutputFormatType::ElasticsearchBulk) => {
+                Self::RallyS3ToElasticsearch
+            }
+
+            // -- 🚶 Passthrough: raw in, raw out. For file copies, testing, vibes.
+            (InputFormatType::RawJson, OutputFormatType::RawJson)
+            | (InputFormatType::RawJson, OutputFormatType::JsonLines) => Self::Passthrough,
+
+            // -- 💀 Everything else: not implemented. Yet.
+            // -- This match arm is the bouncer at the club.
+            // -- "Your name's not on the list. Come back when someone writes the impl."
+            (src, dst) => {
+                panic!(
+                    "💀 Transform pair not implemented: {:?} → {:?}. \
+                     This is not a bug, it's a feature request disguised as a panic. \
+                     File a PR, write the transform, add the tests, update the README. \
+                     In that order. No shortcuts. The borrow checker is watching.",
+                    src, dst
+                )
+            }
+        }
+    }
+}
+
+impl Transform for DocumentTransformer {
+    /// 🔄 Execute the resolved transform on a raw document string.
+    ///
+    /// One match. One branch. One function call. The branch predictor
+    /// has seen this movie before and already knows the ending.
+    ///
+    /// Each arm calls an `#[inline]` function from the pair's module.
+    /// The compiler is strongly encouraged to fold this into the call site.
+    /// We can't MAKE it inline, but we can ask very nicely with `#[inline]`.
+    #[inline]
+    fn transform(&self, raw: String) -> Result<String> {
+        match self {
+            // -- 🏎️ Rally → ES: parse, extract, strip, format. All in one shot.
+            Self::RallyS3ToElasticsearch => rally_s3_to_es::transform(raw),
+
+            // -- 🚶 Passthrough: the data equivalent of "new phone who dis"
+            Self::Passthrough => passthrough::transform(raw),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// 🧪 The Grand Integration Test — Rally JSON → Hit → ES Bulk
+    /// 🧪 The Grand Integration Test — Rally JSON direct to ES Bulk, no layover
     ///
-    /// This is the money shot. The proof that 2N beats N².
-    /// Rally data enters stage left. ES bulk format exits stage right.
-    /// In between: one `Hit`, two transforms, zero dynamic dispatch.
+    /// Previously this went Rally → Hit → ES Bulk (two hops, one intermediate struct).
+    /// Now it's Rally → ES Bulk. Direct. Non-stop. The data doesn't even deplane.
     #[test]
-    fn the_one_where_rally_json_travels_through_the_pipeline_to_es_bulk() -> Result<()> {
-        // 🏗️ Act 1: A Rally JSON blob exists in the wild
+    fn the_one_where_rally_json_flies_direct_to_es_bulk_no_layover() -> Result<()> {
+        // 🏗️ Act 1: A Rally JSON blob exists in the wild. It has dreams.
         let the_rally_artifact = serde_json::json!({
             "ObjectID": 42069,
             "FormattedID": "US420",
-            "Name": "Implement the intermediate format that saves civilization",
-            "Description": "Or at least saves us from writing N² converters",
+            "Name": "Implement direct transforms that skip the intermediate",
+            "Description": "No more Hit struct. No more layovers. Just speed.",
             "_type": "HierarchicalRequirement",
             "_rallyAPIMajor": "2",
             "_rallyAPIMinor": "0",
@@ -155,53 +260,65 @@ mod tests {
             "ScheduleState": "In-Progress"
         });
 
-        // 🔄 Act 2: Ingest transform — Rally JSON → intermediate Hit
-        let the_intermediate_hit = RallyS3Json::transform_hit(the_rally_artifact.to_string())?;
+        // 🔄 Act 2: Resolve the transformer (one-time, at startup)
+        let the_transformer =
+            DocumentTransformer::resolve(&InputFormatType::RallyS3Json, &OutputFormatType::ElasticsearchBulk);
 
-        // ✅ Verify the Hit was properly hydrated
-        assert_eq!(
-            the_intermediate_hit.id,
-            Some("42069".to_string()),
-            "ObjectID should be extracted as the document ID"
-        );
+        // 🔄 Act 3: Transform — direct, no intermediate. The data never touches a Hit.
+        let the_es_bulk_output = the_transformer.transform(the_rally_artifact.to_string())?;
 
-        // 🔄 Act 3: Egress transform — intermediate Hit → ES bulk format
-        // -- First, give it an index so ES knows where to put it
-        let mut the_hit_with_destination = the_intermediate_hit;
-        the_hit_with_destination.index = Some("rally-artifacts".to_string());
-
-        let the_es_bulk_output = ElasticsearchBulk::transform_hit(&the_hit_with_destination)?;
-
-        // ✅ Verify the ES bulk format
+        // ✅ Verify the ES bulk format — two sacred lines
         let the_lines: Vec<&str> = the_es_bulk_output.split('\n').collect();
-        assert_eq!(the_lines.len(), 2, "ES bulk format = exactly two lines. Always.");
+        assert_eq!(the_lines.len(), 2, "ES bulk format = exactly two lines. Always. Forever.");
 
-        // 📋 Verify action line
+        // 📋 Verify action line has ObjectID as _id
         let the_action: serde_json::Value = serde_json::from_str(the_lines[0])?;
         assert_eq!(the_action["index"]["_id"], "42069");
-        assert_eq!(the_action["index"]["_index"], "rally-artifacts");
 
-        // 📦 Verify source line has NO Rally metadata cruft
+        // 📦 Verify source line is clean — no Rally metadata
         let the_source: serde_json::Value = serde_json::from_str(the_lines[1])?;
-        assert!(
-            the_source.get("_rallyAPIMajor").is_none(),
-            "Rally metadata should have been stripped during ingest"
-        );
-        assert!(
-            the_source.get("Name").is_some(),
-            "Actual document fields should survive the journey"
+        assert!(the_source.get("_rallyAPIMajor").is_none(), "Rally metadata stripped");
+        assert!(the_source.get("_ref").is_none(), "Rally refs stripped");
+        assert_eq!(
+            the_source.get("Name").and_then(serde_json::Value::as_str),
+            Some("Implement direct transforms that skip the intermediate"),
+            "Actual fields survive"
         );
 
         Ok(())
     }
 
-    /// 🧪 The passthrough round-trip: what goes in must come out unchanged
+    /// 🧪 Passthrough: resolve and transform, string in = string out
     #[test]
-    fn the_one_where_passthrough_proves_identity_transforms_exist() -> Result<()> {
-        let the_original = r#"{"untouched":"perfection"}"#.to_string();
-        let the_hit = <RawJsonPassthrough as IngestTransform>::transform_hit(the_original.clone())?;
-        let the_output = <RawJsonPassthrough as EgressTransform>::transform_hit(&the_hit)?;
-        assert_eq!(the_output, the_original, "Passthrough must be the identity function");
+    fn the_one_where_passthrough_proves_zero_copy_is_real() -> Result<()> {
+        let the_transformer =
+            DocumentTransformer::resolve(&InputFormatType::RawJson, &OutputFormatType::RawJson);
+        let the_input = r#"{"untouched":"perfection","vibes":"immaculate"}"#.to_string();
+        let the_output = the_transformer.transform(the_input.clone())?;
+        assert_eq!(the_output, the_input, "Passthrough must be identity. Math demands it.");
         Ok(())
+    }
+
+    /// 🧪 RawJson → JsonLines also resolves to passthrough
+    #[test]
+    fn the_one_where_raw_json_to_json_lines_is_just_passthrough() -> Result<()> {
+        let the_transformer =
+            DocumentTransformer::resolve(&InputFormatType::RawJson, &OutputFormatType::JsonLines);
+        let the_input = r#"{"line":"one"}"#.to_string();
+        let the_output = the_transformer.transform(the_input.clone())?;
+        assert_eq!(the_output, the_input);
+        Ok(())
+    }
+
+    /// 🧪 Unimplemented pair panics with a helpful message
+    #[test]
+    #[should_panic(expected = "Transform pair not implemented")]
+    fn the_one_where_an_unimplemented_pair_panics_dramatically() {
+        // 🧪 ES dump → JsonLines? Not yet. Someday. But not today.
+        // "If you're reading this, the code review went poorly."
+        let _ = DocumentTransformer::resolve(
+            &InputFormatType::ElasticsearchDump,
+            &OutputFormatType::JsonLines,
+        );
     }
 }

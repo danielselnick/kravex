@@ -12,14 +12,14 @@ Core library for kravex — the data migration engine.
 - **Dependents**: `kvx-cli`
 - **Dependencies**: anyhow, async-channel, figment, reqwest, serde, serde_json, tokio, tracing, async-trait, futures, indicatif, comfy-table
 - **Edition**: 2024
-- **Modules**: `backends` (Source/Sink traits + impls), `common` (Hit/HitBatch), `transforms` (IngestTransform/EgressTransform), `supervisors` (pipeline orchestration), `progress` (TUI metrics), `app_config` (Figment-based config)
+- **Modules**: `backends` (Source/Sink traits + impls), `common` (Hit/HitBatch — legacy, being phased out), `transforms` (direct pair transforms), `supervisors` (pipeline orchestration), `progress` (TUI metrics), `app_config` (Figment-based config)
 
 ## Module Dependency Graph
 ```
 app_config ──► supervisors ──► backends ──► common
-                    │                         ▲
-                    ▼                         │
-               transforms ───────────────────┘
+                    │
+                    ▼
+               transforms (standalone, no common dependency)
 ```
 
 # Key Concepts
@@ -27,37 +27,47 @@ app_config ──► supervisors ──► backends ──► common
 - **Adaptive throttling**: 429 backoff/ramp
 - **Zero-config optimization**: sensible defaults, optional overrides
 - **Cutover management**: pause/resume/retry/validation
-- **Intermediate format**: `Hit` struct IS the intermediate — all source formats convert TO it (IngestTransform), all sink formats convert FROM it (EgressTransform). Reduces N×N converters to 2N.
-- **Monomorphized transforms**: zero-sized marker types (RallyS3Json, ElasticsearchBulk, RawJsonPassthrough) — compiler generates specialized code per format pair. No vtables.
-- **Ethos pattern**: backend/format owns its own config and transform. Enums point at implementations, not the other way around.
+- **Direct pair transforms**: N×N dedicated converters. Each (input, output) pair gets its own `#[inline]` function. No intermediate struct. `String` in, `String` out.
+- **Three transform traits**: `InputFormat` (marker for sources), `OutputFormat` (marker for sinks), `Transform` (`fn transform(&self, String) -> Result<String>`)
+- **DocumentTransformer enum**: resolved once from `(InputFormatType, OutputFormatType)` at startup. Dispatches via match in hot loop. Branch predictor handles the rest.
+- **Unimplemented pairs panic at resolve time** — fail loud at startup, not silent in production.
+- **Ethos pattern**: backend/format owns its own config and transform.
 
 ## Transform Architecture
 ```
-Source Formats       Intermediate        Sink Formats
-┌──────────────┐    ┌──────────┐    ┌──────────────┐
-│ Rally S3 JSON│─┐  │   Hit    │  ┌─│ ES Bulk API  │
-│ ES Dump      │─┼─▶│ id,index │─▶├─│ JSON Lines   │
-│ Raw JSON     │─┘  │ routing  │  └─│ S3 Objects   │
-└──────────────┘    │ source_buf│    └──────────────┘
-N IngestTransforms  └──────────┘    N EgressTransforms
-                Total: 2N (not N²)
+InputFormat                      OutputFormat
+┌──────────────┐                ┌──────────────┐
+│ RallyS3Json  │───────────────▶│ ES Bulk API  │  rally_s3_to_es.rs
+│ RawJson      │───────────────▶│ RawJson      │  passthrough.rs (zero-copy)
+│ ES Dump      │──── panic! ───▶│ JsonLines    │  not yet implemented
+└──────────────┘                └──────────────┘
+Each arrow = one dedicated, inlined function. No intermediate struct.
 ```
+
+## Implemented Transform Pairs
+
+| Input | Output | Module | Notes |
+|-------|--------|--------|-------|
+| RallyS3Json | ElasticsearchBulk | `rally_s3_to_es.rs` | Extracts ObjectID→_id, strips 6 metadata fields, produces NDJSON |
+| RawJson | RawJson | `passthrough.rs` | Zero-copy `Ok(raw)` — ownership transfer, no allocation |
+| RawJson | JsonLines | `passthrough.rs` | Same as above |
 
 # Notes for future reference
 
 - POC/MVP stage — API surface is unstable and expected to change
 - Public config groups execution knobs under `[runtime]`
-- `Hit` struct (common.rs) serves dual purpose: pipeline data carrier AND intermediate transform format
-- Transforms operate on individual Hits, not batches — batch-level optimization can be added later
-- Rally S3 ingest strips 6 metadata fields (_rallyAPIMajor/Minor, _ref, _refObjectUUID, _objectVersion, _CreatedAt)
-- ES bulk egress produces two-line NDJSON (action + source), no trailing newline (sink handles that)
-- Passthrough transform exists for testing and raw file-to-file copies
+- `Hit` struct (common.rs) still used by backends/workers pipeline — will be phased out as transforms take over
+- Rally S3 transform strips 6 top-level metadata fields; nested refs (Project._ref) survive
+- ES bulk action line includes `_id` only; `_index` set by sink URL or future config layer
+- Passthrough doesn't validate input — not-JSON passes through. This is intentional.
+- `escape_json_string()` in rally_s3_to_es.rs avoids serde round-trip for simple action lines
+- `channel_data.rs` still empty — to be repurposed or removed
 
 # Aggregated Context Memory Across Sessions for Current and Future Use
 
 - Initial scaffold: empty `lib.rs`, no public API defined yet
-- Transform layer added: `IngestTransform` and `EgressTransform` traits with 3 implementations (RallyS3Json, ElasticsearchBulk, RawJsonPassthrough)
-- Transforms are NOT yet wired into the Source/Sink pipeline — next step is integrating them into SourceWorker/SinkWorker
-- S3 source backend not yet implemented — need to find ethos project reference for download patterns
-- `channel_data.rs` still empty — could be repurposed or removed
-- 19 tests passing, including full pipeline integration test (Rally JSON → Hit → ES Bulk)
+- v1 transform layer: IngestTransform/EgressTransform traits + Hit intermediate (2N approach) — **superseded**
+- v2 transform layer: direct pair transforms via DocumentTransformer enum dispatch (N×N approach). No Hit intermediate. `String` in, `String` out. Zero-copy passthrough.
+- Transforms NOT yet wired into Source/Sink pipeline — next step: integrate into SourceWorker/SinkWorker
+- S3 source backend not yet implemented — ethos project reference not found on filesystem
+- 20 tests passing, including integration tests and panic test for unimplemented pairs

@@ -1,77 +1,49 @@
 // ai
-//! 🚶 Passthrough Transform — the "I changed nothing and took credit" of data transforms 🎭🔄
+//! 🚶 Passthrough Transform — zero-copy, zero-effort, zero apologies 🔄✈️
 //!
-//! 🎬 COLD OPEN — INT. OFFICE — STANDUP MEETING — 9:03 AM
+//! 🎬 COLD OPEN — INT. AIRPORT — TSA PRECHECK LINE — 6:00 AM
 //!
-//! "What did you do yesterday?"
-//! "I passed data through unchanged."
-//! "And what are you doing today?"
-//! "Passing data through unchanged."
-//! "Any blockers?"
-//! "No. I am the blocker. I am become passthrough, destroyer of nothing."
+//! Everyone else is in line. Shoes off. Laptops out. Dignity abandoned.
+//! But not you. You have PreCheck. You walk through. You don't stop.
+//! You don't unpack. You don't even slow down. The scanner beeps.
+//! Nobody cares. You're already at the gate.
 //!
-//! This module implements the identity transform — data goes in, same data comes out.
-//! It exists for testing, for "I just want to move files without transforming them,"
-//! and for that one developer who runs benchmarks without transforms to prove the
-//! transforms aren't the bottleneck (they aren't, Kevin, it's always the network).
+//! That's this function. Data comes in. Data goes out. Nothing changes.
+//! No parsing. No reformatting. No allocation. The `String` ownership
+//! transfers directly. `Ok(raw)` — three characters of pure efficiency.
 //!
 //! ## Knowledge Graph 🧠
-//! - Implements: `IngestTransform`, `EgressTransform`
-//! - Used for: testing, benchmarking, raw file-to-file copies
-//! - Cost: zero. Literally zero. The compiler may even optimize this to nothing.
-//! - Side effects: existential satisfaction that identity functions exist in production
+//! - Pair: `RawJson → RawJson`, `RawJson → JsonLines`
+//! - Resolved via: `DocumentTransformer::Passthrough`
+//! - Allocation: zero (ownership transfer of the input `String`)
+//! - CPU cost: one function call, one `Ok` wrapper, one return
+//! - Used for: file-to-file copies, testing, benchmarking raw throughput
 //!
-//! Zero-cost abstraction? Try zero-effort abstraction.
-//! ⚠️ The singularity won't even notice this module exists. 🦆
+//! ⚠️ The singularity will look at this function and say "I could have
+//! written that." Yes. Yes it could have. That's the point. 🦆
 
-use super::{EgressTransform, IngestTransform};
-use crate::common::Hit;
 use anyhow::Result;
 
-/// 🚶 RawJsonPassthrough — when you want your data moved, not understood.
+/// 🚶 Pass data through unchanged. Zero-copy. Zero-effort.
 ///
-/// Implements both [`IngestTransform`] and [`EgressTransform`] as identity operations.
-/// The data goes in raw. The data comes out raw. Nobody is transformed.
-/// Nobody is changed. It's like a hallway: architecturally necessary,
-/// emotionally neutral, and surprisingly load-bearing.
+/// Takes ownership of the input `String` and returns it as-is.
+/// The compiler is encouraged to inline this into nothingness.
+/// No parsing. No serde. No allocation. Just vibes.
 ///
-/// # When to use this 🤔
-/// - File → File copies (just move the bytes, don't ask questions)
-/// - Testing the pipeline without format-specific logic
-/// - Benchmarking raw throughput (is it the transform? no. it's never the transform.)
-/// - When you genuinely don't care what the JSON looks like inside
-pub(crate) struct RawJsonPassthrough;
-
-impl IngestTransform for RawJsonPassthrough {
-    /// 🔄 "Transform" is a strong word for what happens here.
-    ///
-    /// Takes the raw string. Puts it in a Hit. That's it.
-    /// No parsing. No extraction. No id, no routing, no index.
-    /// The Hit is born nameless and indexless — like a protagonist
-    /// at the start of an RPG who hasn't chosen a class yet.
-    /// Bureaucracy and identity come later. Or never. We don't judge.
-    fn transform_hit(raw: String) -> Result<Hit> {
-        // -- 📋 The UN translator shrugs. "It's already in the target language."
-        // -- The borrow checker nods approvingly. Ownership transferred cleanly.
-        // -- Everyone goes home early. This is the dream.
-        Ok(Hit {
-            id: None,       // 💀 No ID. Identity is a social construct anyway.
-            routing: None,  // 💀 No routing. Go wherever you want. Be free.
-            index: None,    // 💀 No index. The void awaits. Or the default. Same thing.
-            sort: 0,        // 🔢 Zero. The existential default.
-            source_buf: raw, // ✅ The ONE thing we keep. Zero-copy. Zero-effort. Zero regrets.
-        })
-    }
-}
-
-impl EgressTransform for RawJsonPassthrough {
-    /// 🔄 Returns `source_buf` as-is. The data equivalent of forwarding an email
-    /// without reading it. We've all done it. Don't lie. HR knows.
-    fn transform_hit(hit: &Hit) -> Result<String> {
-        // -- 📬 Return to sender. No modification. No judgment. Just vibes.
-        // -- Clone because the trait borrows. The clone is the cost of politeness.
-        Ok(hit.source_buf.clone())
-    }
+/// "I used to have an intermediate format. Then I took an `Ok(raw)` to the knee."
+///
+/// # When to use 🤔
+/// - File → File copies where format conversion isn't needed
+/// - Testing the pipeline without transform overhead
+/// - Benchmarking to prove the transform ISN'T the bottleneck (it never is)
+/// - When you don't care what the JSON looks like, you just want it THERE
+#[inline]
+pub(crate) fn transform(raw: String) -> Result<String> {
+    // -- 🚶 And just like that... it's done. Three characters of implementation.
+    // -- The function is the code equivalent of a glass of water:
+    // -- transparent, essential, and wildly underappreciated.
+    // -- "What do you do?" "I return the input." "That's it?" "That's everything."
+    Ok(raw)
 }
 
 #[cfg(test)]
@@ -79,53 +51,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_one_where_passthrough_ingest_preserves_everything() -> Result<()> {
-        // 🧪 What goes in must come out. Conservation of data.
-        // Newton would have approved, if he'd had JSON.
-        let the_original_masterpiece = r#"{"sacred":"data","do_not":"touch"}"#.to_string();
-        let the_hit = <RawJsonPassthrough as IngestTransform>::transform_hit(the_original_masterpiece.clone())?;
-
-        assert_eq!(the_hit.source_buf, the_original_masterpiece, "source_buf must be identical");
-        assert_eq!(the_hit.id, None, "No id extraction for passthrough");
-        assert_eq!(the_hit.index, None, "No index assignment for passthrough");
-        assert_eq!(the_hit.routing, None, "No routing for passthrough");
-        assert_eq!(the_hit.sort, 0, "Sort is always 0 for passthrough");
-
-        Ok(())
-    }
-
-    #[test]
-    fn the_one_where_passthrough_egress_is_literally_a_clone() -> Result<()> {
-        // 🧪 Egress should return source_buf unchanged.
-        // If this test fails, physics is broken. Call CERN.
-        let the_hit = Hit {
-            id: Some("ignored-anyway".to_string()),
-            index: Some("also-ignored".to_string()),
-            routing: Some("yep-ignored-too".to_string()),
-            sort: 42,
-            source_buf: r#"{"the":"payload"}"#.to_string(),
-        };
-
-        let the_output = <RawJsonPassthrough as EgressTransform>::transform_hit(&the_hit)?;
-        assert_eq!(the_output, r#"{"the":"payload"}"#, "Egress must return source_buf as-is");
-
-        Ok(())
-    }
-
-    #[test]
-    fn the_one_where_passthrough_roundtrip_is_identity() -> Result<()> {
-        // 🧪 Ingest → Egress should be the identity function.
-        // If f(g(x)) != x, we have invented a new kind of math. Patent pending.
-        let the_sacred_input = r#"{"round":"trip","verified":true}"#.to_string();
-
-        let the_hit = <RawJsonPassthrough as IngestTransform>::transform_hit(the_sacred_input.clone())?;
-        let the_output = <RawJsonPassthrough as EgressTransform>::transform_hit(&the_hit)?;
-
+    fn the_one_where_passthrough_is_literally_the_identity_function() -> Result<()> {
+        // 🧪 f(x) = x. That's it. That's the test.
+        // If this fails, mathematics is broken and we have bigger problems.
+        let the_sacred_input = r#"{"untouched":"perfection","vibes":"immaculate"}"#.to_string();
+        let the_output = transform(the_sacred_input.clone())?;
         assert_eq!(
             the_output, the_sacred_input,
-            "Round-trip must be identity. Math demands it."
+            "Passthrough must return input unchanged. This is not negotiable."
         );
+        Ok(())
+    }
 
+    #[test]
+    fn the_one_where_empty_string_passes_through() -> Result<()> {
+        // 🧪 Empty string? Still valid. Still passes through.
+        // Nature abhors a vacuum, but passthrough doesn't judge.
+        let the_void = String::new();
+        let the_output = transform(the_void.clone())?;
+        assert_eq!(the_output, the_void);
+        Ok(())
+    }
+
+    #[test]
+    fn the_one_where_complex_json_survives_untouched() -> Result<()> {
+        // 🧪 Nested objects, arrays, emoji, unicode — all must survive.
+        let the_complex_beast = r#"{"nested":{"deep":{"deeper":true}},"array":[1,2,3],"emoji":"🦆","unicode":"日本語"}"#.to_string();
+        let the_output = transform(the_complex_beast.clone())?;
+        assert_eq!(the_output, the_complex_beast, "Complex JSON must pass through byte-identical");
+        Ok(())
+    }
+
+    #[test]
+    fn the_one_where_non_json_also_passes_through_because_we_dont_validate() -> Result<()> {
+        // 🧪 Passthrough doesn't parse. It doesn't validate. It doesn't care.
+        // You could send it your diary entry and it would return it unchanged.
+        // This is a feature, not a bug.
+        let not_json = "this is definitely not json and we're fine with that".to_string();
+        let the_output = transform(not_json.clone())?;
+        assert_eq!(the_output, not_json);
         Ok(())
     }
 }
