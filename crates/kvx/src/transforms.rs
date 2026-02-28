@@ -1,55 +1,56 @@
 // ai
-//! 🔄 Transforms — direct-line format converters, no middleman, no mercy 🎭🚀
+//! 🔄 Transforms — same pattern as backends, because consistency is a feature 🎭🚀
 //!
-//! 🎬 COLD OPEN — INT. CUSTOMS OFFICE — BUT THERE IS NO CUSTOMS OFFICE
+//! 🎬 COLD OPEN — INT. ARCHITECTURE REVIEW — THE WHITEBOARD DIAGRAM MAKES SENSE NOW
 //!
-//! They said we needed an intermediate format. A neutral zone. A Hit struct
-//! that every format would bow to. "It'll be clean," they said. "Extensible."
-//! We nodded. We built it. It worked.
+//! Someone squinted at the backend code. `Source` trait. `FileSource` impl.
+//! `SourceBackend` enum. Dispatch via match. Clean. Predictable. Works.
 //!
-//! Then we stared at it. And we realized: why go through customs when you
-//! can take a direct flight? Why translate French → Esperanto → Japanese
-//! when you can just learn French → Japanese? The intermediate was a layover.
-//! Nobody likes layovers. Not even data.
+//! Then someone squinted at the transform code. Three traits. Two enums.
+//! Zero implementations. Free functions floating in space. A `Transform` trait
+//! that only the enum implements, not the actual transforms. It was like
+//! building a house with blueprints for a different house.
 //!
-//! So we burned the airport down (metaphorically) and built direct routes.
+//! So we tore it down. Same materials. Same lot. Different blueprint.
+//! The BACKEND blueprint. Because if a pattern works for Source/Sink,
+//! it works for transforms. Consistency isn't just a virtue — it's a
+//! compile-time optimization strategy.
 //!
-//! ## Architecture — The N×N Direct Flight Network ✈️
+//! ## Architecture — Mirror of backends.rs 📐
 //!
 //! ```text
-//!   InputFormat                      OutputFormat
-//!  ┌──────────────┐                ┌──────────────┐
-//!  │ RallyS3Json  │───────────────▶│ ES Bulk API  │  rally_s3_to_es.rs
-//!  │              │   (direct!)    │              │
-//!  ├──────────────┤                ├──────────────┤
-//!  │ RawJson      │───────────────▶│ RawJson      │  passthrough.rs
-//!  │              │  (zero-copy!)  │              │
-//!  ├──────────────┤                ├──────────────┤
-//!  │ ES Dump      │──── ??? ─────▶│ JsonLines    │  panic!("not yet")
-//!  └──────────────┘                └──────────────┘
-//!
-//!  Each arrow = one dedicated, inlined, monomorphized function.
-//!  No intermediate struct. No Hit. No layover. Just speed.
-//!  Unimplemented pairs → panic! at compile-visible match arms.
+//!   backends.rs pattern:             transforms.rs pattern:
+//!   ┌──────────────────┐            ┌──────────────────────┐
+//!   │ trait Source      │            │ trait Transform       │
+//!   │   fn next_batch() │            │   fn transform()     │
+//!   └────────┬─────────┘            └────────┬─────────────┘
+//!            │                                │
+//!   ┌────────┴─────────┐            ┌────────┴─────────────┐
+//!   │ FileSource       │            │ RallyS3ToEs          │
+//!   │ InMemorySource   │            │ Passthrough          │
+//!   │ ElasticsearchSrc │            │ (more as we add them)│
+//!   └────────┬─────────┘            └────────┬─────────────┘
+//!            │                                │
+//!   ┌────────┴─────────┐            ┌────────┴─────────────┐
+//!   │ enum SourceBackend│            │ enum DocumentTransfmr│
+//!   │   impl Source     │            │   impl Transform     │
+//!   │   match dispatch  │            │   match dispatch      │
+//!   └──────────────────┘            └──────────────────────┘
 //! ```
 //!
-//! ## Three Traits, Zero Compromises 🎯
-//!
-//! - [`InputFormat`]: "I know how to read this." Marker trait for source formats.
-//! - [`OutputFormat`]: "I know how to write this." Marker trait for sink formats.
-//! - [`Transform`]: "I know how to convert." The actual work. Takes `String`, returns `String`.
-//!
 //! ## Knowledge Graph 🧠
-//! - Pattern: Enum dispatch → dedicated per-pair functions → compiler inlining
-//! - Each pair function is `#[inline]` — the compiler decides, but we strongly suggest
-//! - Zero-copy for passthrough: `String` in, same `String` out, no allocation
-//! - Config: `DocumentTransformer` resolved once from `(InputFormatType, OutputFormatType)`
-//! - Hot path: one match per `transform()` call, branch predictor handles the rest
-//! - Design: direct N×N beats intermediate 2N when N is small and speed is everything
+//! - Pattern: same as `backends.rs` — trait → concrete impls → enum dispatch
+//! - Trait: `Transform` (one trait, like `Source`/`Sink`)
+//! - Concrete impls: `RallyS3ToEs`, `Passthrough` (like `FileSource`, `InMemorySink`)
+//! - Enum: `DocumentTransformer` (like `SourceBackend`, `SinkBackend`)
+//! - Resolver: `from_configs(SourceConfig, SinkConfig)` (like `from_source_config()`)
+//! - Each concrete type's `transform()` is statically dispatched within the match arm
+//! - The match itself is the only runtime dispatch — branch predictor eliminates it
 //!
-//! ⚠️ When the singularity arrives, it will implement all N×N pairs simultaneously
-//! and wonder why we were so slow about it. 🦆
+//! ⚠️ The singularity will look at this and say "you reinvented vtables but worse."
+//! And we'll say "yes, but the branch predictor makes it free. Checkmate, AGI." 🦆
 
+use crate::supervisors::config::{SinkConfig, SourceConfig};
 use anyhow::Result;
 
 pub(crate) mod passthrough;
@@ -57,158 +58,104 @@ pub(crate) mod rally_s3_to_es;
 
 // ============================================================
 //  ╔══════════════════════════════════════════════════════╗
-//  ║  📥 INPUT ──── transform() ────▶ 📤 OUTPUT         ║
-//  ║         (no middleman. no Hit. just speed.)         ║
+//  ║  📥 raw String ──▶ Transform ──▶ 📤 wire String    ║
+//  ║        (same pattern as Source/Sink. finally.)      ║
 //  ╚══════════════════════════════════════════════════════╝
 // ============================================================
 
-/// 📥 InputFormat — "I am a source format and I know what I look like."
+/// 🔄 Transform — the one trait for format conversion.
 ///
-/// Marker trait for source data formats. Implementors are zero-sized types
-/// that exist purely for the type system's benefit. They carry no data,
-/// consume no memory, and contribute nothing to the runtime — much like
-/// that one microservice in your stack that "handles logging."
+/// Exactly like [`Source`](crate::backends::Source) and [`Sink`](crate::backends::Sink):
+/// one trait, multiple concrete implementations, dispatched through an enum.
 ///
-/// # Why a trait? 🤔
-/// Because Rust's type system is free and we should use it.
-/// A marker trait lets us constrain generics, write blanket impls later,
-/// and feel intellectually superior at code review. All at zero cost.
-pub(crate) trait InputFormat: std::fmt::Debug {}
-
-/// 📤 OutputFormat — "I am a sink format and I know what I expect."
+/// Each concrete type (e.g., [`RallyS3ToEs`](rally_s3_to_es::RallyS3ToEs),
+/// [`Passthrough`](passthrough::Passthrough)) implements this trait.
+/// The [`DocumentTransformer`] enum wraps them all and dispatches via match.
 ///
-/// Mirror of [`InputFormat`] for the destination side.
-/// Same philosophy: zero-sized, zero-cost, maximum smug satisfaction.
-pub(crate) trait OutputFormat: std::fmt::Debug {}
-
-/// 🔄 Transform — the actual conversion contract.
-///
-/// `fn transform(&self, raw: String) -> Result<String>`
-///
-/// Takes a raw document in the source format. Returns a string in the
-/// sink's wire format. No intermediate struct. No Hit. No layover.
-/// Direct flight. Business class. Champagne optional.
-///
-/// The `&self` receiver exists because [`DocumentTransformer`] is an enum
-/// that dispatches to the right implementation at runtime. The branch
-/// predictor learns the path after ~2 iterations. After that, it's
-/// essentially zero-cost dispatch. Like having a personal translator
-/// who already knows what you're going to say.
-pub(crate) trait Transform {
-    /// 🔄 Convert a raw source-format string directly into sink wire format.
+/// # Contract 📜
+/// - Input: owned `String` — raw document in the source's native format
+/// - Output: `String` — formatted for the sink's wire protocol
+/// - Transforms MUST produce valid output for the target system
+/// - Passthrough is allowed to skip validation (it doesn't parse)
+/// - Errors should be descriptive enough to debug at 3am during an incident
+pub(crate) trait Transform: std::fmt::Debug {
+    /// 🔄 Convert a raw source-format document into sink wire format.
     ///
-    /// Ownership of `raw` transfers in — some transforms (passthrough) can
-    /// return it as-is with zero allocation. Others parse, restructure,
-    /// and re-serialize. The trait accommodates both lifestyles.
+    /// Ownership of `raw` transfers in — passthrough returns it as-is
+    /// (zero allocation), while format converters parse and re-serialize.
     fn transform(&self, raw: String) -> Result<String>;
 }
 
 // ============================================================
-//  📋 Format Type Enums — the config-level identifiers
-//  These are what users specify. "My source is Rally S3 JSON."
-//  "My sink is Elasticsearch." The enum captures the intent.
+//  🎯 DocumentTransformer — the dispatching enum
+//  Mirrors SourceBackend / SinkBackend exactly.
 // ============================================================
 
-/// 📥 What flavor of input data are we dealing with?
+/// 🎯 The dispatching enum for transforms. Same pattern as `SourceBackend` / `SinkBackend`.
 ///
-/// Each variant maps to a specific source format that kravex knows
-/// how to read. Adding a new variant is step 1 of supporting a new
-/// source. Step 2 is writing the transform. Step 3 is writing the tests.
-/// Step 4 is questioning your life choices. Step 5 is shipping anyway.
-#[derive(Debug, Clone)]
-pub(crate) enum InputFormatType {
-    /// 🏎️ Rally S3 JSON — Broadcom's finest export format, complete with
-    /// metadata nobody asked for and ObjectIDs that can't decide if they're numbers
-    RallyS3Json,
-    /// 📡 Elasticsearch scroll/dump format — _source wrappers and all
-    ElasticsearchDump,
-    /// 📄 Raw JSON — no frills, no metadata, no drama. Just JSON.
-    RawJson,
-}
-
-/// 📤 What format does the sink expect to receive?
+/// Each variant wraps a concrete type that implements [`Transform`].
+/// The enum itself implements `Transform` by matching on the variant
+/// and delegating to the inner type. Callers never need to know which
+/// concrete transform is running — they just call `.transform(raw)`.
 ///
-/// Same energy as [`InputFormatType`] but for the output side.
-/// Each variant maps to a specific wire format that a sink can write.
-#[derive(Debug, Clone)]
-pub(crate) enum OutputFormatType {
-    /// 📡 Elasticsearch Bulk API — the sacred two-line NDJSON format
-    ElasticsearchBulk,
-    /// 📄 JSON Lines — one JSON object per line, newline-delimited
-    JsonLines,
-    /// 📄 Raw JSON — as-is, untouched, like nature intended
-    RawJson,
-}
-
-// ============================================================
-//  🎯 DocumentTransformer — the resolved, ready-to-go converter
-//  Constructed once from (InputFormatType, OutputFormatType).
-//  Called N times in the hot loop. Branch predictor goes brrr.
-// ============================================================
-
-/// 🎯 The resolved document transformer — one per migration pipeline.
+/// ## Static dispatch inside the match 🧠
 ///
-/// Created via [`DocumentTransformer::resolve`] from an `(InputFormatType, OutputFormatType)` pair.
-/// Each variant maps to a dedicated, `#[inline]`-annotated transform function
-/// that the compiler can optimize into straight-line machine code.
+/// When the match selects `Self::RallyS3ToEs(t)`, the call `t.transform(raw)`
+/// is a direct (non-virtual) function call to `RallyS3ToEs::transform()`.
+/// The compiler knows the concrete type. It inlines. It optimizes.
+/// The only runtime cost is the match arm selection, which the branch
+/// predictor eliminates after ~2 iterations in a tight loop.
 ///
-/// ## How it works 🧠
-///
-/// 1. At pipeline startup: `DocumentTransformer::resolve(input, output)` does a double-match.
-///    Unimplemented pairs → `panic!` with a helpful message (and mild existential commentary).
-/// 2. In the hot loop: `transformer.transform(raw)` dispatches to the right function.
-///    One match, one branch, one prediction. The branch predictor nails it after warmup.
-/// 3. Each dedicated function goes directly from source format → sink format.
-///    No intermediate struct. No Hit. No allocations beyond what's necessary.
-///
-/// ## Enum Variants = Implemented Pairs
-///
-/// If a pair exists as a variant, it works. If it doesn't, it panics at resolve time.
-/// This is intentional. We'd rather crash at startup than silently produce garbage
-/// in the hot path at 3am. The on-call engineer will thank us. Eventually.
+/// This is exactly how `SourceBackend::next_batch()` works.
+/// If it's good enough for I/O, it's good enough for transforms.
 #[derive(Debug)]
 pub(crate) enum DocumentTransformer {
-    /// 🏎️📡 Rally S3 JSON → Elasticsearch Bulk API
-    /// Parses Rally JSON, extracts ObjectID, strips metadata, formats as NDJSON bulk
-    RallyS3ToElasticsearch,
-
-    /// 🚶 Any → Same — zero-copy identity transform
-    /// String in, same String out. The compiler may optimize this to a no-op.
-    /// "I used to be an intermediate format. Then I took an arrow to the knee."
-    Passthrough,
+    RallyS3ToEs(rally_s3_to_es::RallyS3ToEs),
+    Passthrough(passthrough::Passthrough),
 }
 
 impl DocumentTransformer {
-    /// 🔧 Resolve a transformer from input/output format types.
+    /// 🔧 Resolve a transformer from source/sink config enums.
     ///
-    /// This is the matchmaker. The dating app for data formats. Swipe right
-    /// on a compatible pair, get a transformer. Swipe right on an incompatible
-    /// pair, get a panic. Just like real dating apps.
+    /// Same approach as `from_source_config()` / `from_sink_config()` in `lib.rs`:
+    /// match on the config enum, construct the right concrete type, wrap in the
+    /// dispatching enum.
+    ///
+    /// The (SourceConfig, SinkConfig) pair determines which transform to use:
+    /// - File → Elasticsearch = Rally S3 to ES bulk (the flagship pair)
+    /// - File → File = Passthrough
+    /// - InMemory → InMemory = Passthrough (testing)
+    /// - Elasticsearch → File = Passthrough (ES dump to file)
     ///
     /// # Panics
-    /// 💀 Panics if the `(input, output)` pair has no implementation.
-    /// This is by design — fail loud at startup, not quiet in production.
-    /// "He who resolves without matching, panics in main(). And that's fine." — Ancient proverb
-    pub(crate) fn resolve(input: &InputFormatType, output: &OutputFormatType) -> Self {
-        match (input, output) {
-            // -- 🏎️📡 The money pair. Rally JSON → ES Bulk. The first. The flagship.
-            (InputFormatType::RallyS3Json, OutputFormatType::ElasticsearchBulk) => {
-                Self::RallyS3ToElasticsearch
+    /// 💀 Panics if the `(source, sink)` pair has no transform implementation.
+    /// Fail loud at startup, not silent in the hot path.
+    pub(crate) fn from_configs(source: &SourceConfig, sink: &SinkConfig) -> Self {
+        match (source, sink) {
+            // -- 🏎️📡 File source → Elasticsearch sink:
+            // -- The first and flagship pair. Rally JSON to ES bulk.
+            // -- "In a world where JSON had too many fields... one function dared to strip them."
+            (SourceConfig::File(_), SinkConfig::Elasticsearch(_)) => {
+                Self::RallyS3ToEs(rally_s3_to_es::RallyS3ToEs)
             }
 
-            // -- 🚶 Passthrough: raw in, raw out. For file copies, testing, vibes.
-            (InputFormatType::RawJson, OutputFormatType::RawJson)
-            | (InputFormatType::RawJson, OutputFormatType::JsonLines) => Self::Passthrough,
+            // -- 🚶 Passthrough pairs: same format, no conversion needed.
+            // -- File→File, InMemory→InMemory, ES→File — just move the bytes.
+            (SourceConfig::File(_), SinkConfig::File(_))
+            | (SourceConfig::InMemory(_), SinkConfig::InMemory(_))
+            | (SourceConfig::Elasticsearch(_), SinkConfig::File(_)) => {
+                Self::Passthrough(passthrough::Passthrough)
+            }
 
-            // -- 💀 Everything else: not implemented. Yet.
-            // -- This match arm is the bouncer at the club.
-            // -- "Your name's not on the list. Come back when someone writes the impl."
+            // -- 💀 Unimplemented pairs: panic with context.
+            // -- "Failed to connect: The server ghosted us. Like my college roommate.
+            // -- Kevin, if you're reading this, I want my blender back."
+            #[allow(unreachable_patterns)]
             (src, dst) => {
                 panic!(
-                    "💀 Transform pair not implemented: {:?} → {:?}. \
-                     This is not a bug, it's a feature request disguised as a panic. \
-                     File a PR, write the transform, add the tests, update the README. \
-                     In that order. No shortcuts. The borrow checker is watching.",
+                    "💀 No transform implemented for source {:?} → sink {:?}. \
+                     This is the resolve() equivalent of 'new phone who dis.' \
+                     Add a variant to DocumentTransformer, write the impl, add tests.",
                     src, dst
                 )
             }
@@ -216,23 +163,14 @@ impl DocumentTransformer {
     }
 }
 
+/// `DocumentTransformer` dispatches to the concrete type inside each variant.
+/// Same pattern as `impl Source for SourceBackend` in `backends.rs`.
 impl Transform for DocumentTransformer {
-    /// 🔄 Execute the resolved transform on a raw document string.
-    ///
-    /// One match. One branch. One function call. The branch predictor
-    /// has seen this movie before and already knows the ending.
-    ///
-    /// Each arm calls an `#[inline]` function from the pair's module.
-    /// The compiler is strongly encouraged to fold this into the call site.
-    /// We can't MAKE it inline, but we can ask very nicely with `#[inline]`.
     #[inline]
     fn transform(&self, raw: String) -> Result<String> {
         match self {
-            // -- 🏎️ Rally → ES: parse, extract, strip, format. All in one shot.
-            Self::RallyS3ToElasticsearch => rally_s3_to_es::transform(raw),
-
-            // -- 🚶 Passthrough: the data equivalent of "new phone who dis"
-            Self::Passthrough => passthrough::transform(raw),
+            Self::RallyS3ToEs(t) => t.transform(raw),
+            Self::Passthrough(t) => t.transform(raw),
         }
     }
 }
@@ -240,85 +178,125 @@ impl Transform for DocumentTransformer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backends::file::{FileSinkConfig, FileSourceConfig};
+    use crate::backends::ElasticsearchSinkConfig;
+    use crate::supervisors::config::{CommonSinkConfig, CommonSourceConfig};
 
-    /// 🧪 The Grand Integration Test — Rally JSON direct to ES Bulk, no layover
-    ///
-    /// Previously this went Rally → Hit → ES Bulk (two hops, one intermediate struct).
-    /// Now it's Rally → ES Bulk. Direct. Non-stop. The data doesn't even deplane.
+    /// 🧪 Resolve File→ES to RallyS3ToEs, then transform.
     #[test]
-    fn the_one_where_rally_json_flies_direct_to_es_bulk_no_layover() -> Result<()> {
-        // 🏗️ Act 1: A Rally JSON blob exists in the wild. It has dreams.
-        let the_rally_artifact = serde_json::json!({
-            "ObjectID": 42069,
-            "FormattedID": "US420",
-            "Name": "Implement direct transforms that skip the intermediate",
-            "Description": "No more Hit struct. No more layovers. Just speed.",
-            "_type": "HierarchicalRequirement",
-            "_rallyAPIMajor": "2",
-            "_rallyAPIMinor": "0",
-            "_ref": "https://rally1.rallydev.com/slm/webservice/v2.0/hr/42069",
-            "ScheduleState": "In-Progress"
+    fn the_one_where_config_enums_resolve_to_the_right_transform() -> Result<()> {
+        // 🔧 Build source/sink configs like the real pipeline does
+        let source = SourceConfig::File(FileSourceConfig {
+            file_name: "rally_export.json".to_string(),
+            common_config: CommonSourceConfig::default(),
+        });
+        let sink = SinkConfig::Elasticsearch(ElasticsearchSinkConfig {
+            url: "http://localhost:9200".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            index: Some("rally".to_string()),
+            common_config: CommonSinkConfig::default(),
         });
 
-        // 🔄 Act 2: Resolve the transformer (one-time, at startup)
-        let the_transformer =
-            DocumentTransformer::resolve(&InputFormatType::RallyS3Json, &OutputFormatType::ElasticsearchBulk);
+        // 🎯 Resolve — should give us RallyS3ToEs
+        let the_transformer = DocumentTransformer::from_configs(&source, &sink);
+        assert!(
+            matches!(the_transformer, DocumentTransformer::RallyS3ToEs(_)),
+            "File → ES should resolve to RallyS3ToEs"
+        );
 
-        // 🔄 Act 3: Transform — direct, no intermediate. The data never touches a Hit.
-        let the_es_bulk_output = the_transformer.transform(the_rally_artifact.to_string())?;
+        // 🔄 Transform a Rally blob through it
+        let rally_blob = serde_json::json!({
+            "ObjectID": 42069,
+            "Name": "Test story",
+            "_rallyAPIMajor": "2"
+        });
+        let the_output = the_transformer.transform(rally_blob.to_string())?;
 
-        // ✅ Verify the ES bulk format — two sacred lines
-        let the_lines: Vec<&str> = the_es_bulk_output.split('\n').collect();
-        assert_eq!(the_lines.len(), 2, "ES bulk format = exactly two lines. Always. Forever.");
-
-        // 📋 Verify action line has ObjectID as _id
+        // ✅ Should be ES bulk format
+        let the_lines: Vec<&str> = the_output.split('\n').collect();
+        assert_eq!(the_lines.len(), 2, "ES bulk = two lines");
         let the_action: serde_json::Value = serde_json::from_str(the_lines[0])?;
         assert_eq!(the_action["index"]["_id"], "42069");
 
-        // 📦 Verify source line is clean — no Rally metadata
-        let the_source: serde_json::Value = serde_json::from_str(the_lines[1])?;
-        assert!(the_source.get("_rallyAPIMajor").is_none(), "Rally metadata stripped");
-        assert!(the_source.get("_ref").is_none(), "Rally refs stripped");
-        assert_eq!(
-            the_source.get("Name").and_then(serde_json::Value::as_str),
-            Some("Implement direct transforms that skip the intermediate"),
-            "Actual fields survive"
-        );
-
         Ok(())
     }
 
-    /// 🧪 Passthrough: resolve and transform, string in = string out
+    /// 🧪 Resolve File→File to Passthrough.
     #[test]
-    fn the_one_where_passthrough_proves_zero_copy_is_real() -> Result<()> {
-        let the_transformer =
-            DocumentTransformer::resolve(&InputFormatType::RawJson, &OutputFormatType::RawJson);
-        let the_input = r#"{"untouched":"perfection","vibes":"immaculate"}"#.to_string();
-        let the_output = the_transformer.transform(the_input.clone())?;
-        assert_eq!(the_output, the_input, "Passthrough must be identity. Math demands it.");
-        Ok(())
-    }
+    fn the_one_where_file_to_file_resolves_to_passthrough() -> Result<()> {
+        let source = SourceConfig::File(FileSourceConfig {
+            file_name: "input.json".to_string(),
+            common_config: CommonSourceConfig::default(),
+        });
+        let sink = SinkConfig::File(FileSinkConfig {
+            file_name: "output.json".to_string(),
+            common_config: CommonSinkConfig::default(),
+        });
 
-    /// 🧪 RawJson → JsonLines also resolves to passthrough
-    #[test]
-    fn the_one_where_raw_json_to_json_lines_is_just_passthrough() -> Result<()> {
-        let the_transformer =
-            DocumentTransformer::resolve(&InputFormatType::RawJson, &OutputFormatType::JsonLines);
-        let the_input = r#"{"line":"one"}"#.to_string();
+        let the_transformer = DocumentTransformer::from_configs(&source, &sink);
+        assert!(matches!(the_transformer, DocumentTransformer::Passthrough(_)));
+
+        // 🔄 Passthrough returns input unchanged
+        let the_input = r#"{"whatever":"goes"}"#.to_string();
         let the_output = the_transformer.transform(the_input.clone())?;
         assert_eq!(the_output, the_input);
+
         Ok(())
     }
 
-    /// 🧪 Unimplemented pair panics with a helpful message
+    /// 🧪 Resolve InMemory→InMemory to Passthrough (testing config).
     #[test]
-    #[should_panic(expected = "Transform pair not implemented")]
-    fn the_one_where_an_unimplemented_pair_panics_dramatically() {
-        // 🧪 ES dump → JsonLines? Not yet. Someday. But not today.
-        // "If you're reading this, the code review went poorly."
-        let _ = DocumentTransformer::resolve(
-            &InputFormatType::ElasticsearchDump,
-            &OutputFormatType::JsonLines,
-        );
+    fn the_one_where_in_memory_resolves_to_passthrough_for_testing() {
+        let source = SourceConfig::InMemory(());
+        let sink = SinkConfig::InMemory(());
+        let the_transformer = DocumentTransformer::from_configs(&source, &sink);
+        assert!(matches!(the_transformer, DocumentTransformer::Passthrough(_)));
+    }
+
+    /// 🧪 Full pipeline integration: resolve + transform Rally→ES.
+    #[test]
+    fn the_one_where_rally_json_flies_direct_to_es_bulk_via_config_resolution() -> Result<()> {
+        let source = SourceConfig::File(FileSourceConfig {
+            file_name: "data.json".to_string(),
+            common_config: CommonSourceConfig::default(),
+        });
+        let sink = SinkConfig::Elasticsearch(ElasticsearchSinkConfig {
+            url: "http://localhost:9200".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            index: Some("rally-artifacts".to_string()),
+            common_config: CommonSinkConfig::default(),
+        });
+
+        let the_transformer = DocumentTransformer::from_configs(&source, &sink);
+
+        let rally_blob = serde_json::json!({
+            "ObjectID": 99999,
+            "FormattedID": "US001",
+            "Name": "The one that made it through the whole pipeline",
+            "_rallyAPIMajor": "2",
+            "_ref": "https://rally1.rallydev.com/slm/webservice/v2.0/hr/99999",
+            "_CreatedAt": "2024-01-01T00:00:00.000Z"
+        });
+
+        let the_output = the_transformer.transform(rally_blob.to_string())?;
+        let the_lines: Vec<&str> = the_output.split('\n').collect();
+        assert_eq!(the_lines.len(), 2);
+
+        // 📋 Action line
+        let the_action: serde_json::Value = serde_json::from_str(the_lines[0])?;
+        assert_eq!(the_action["index"]["_id"], "99999");
+
+        // 📦 Source line — metadata stripped
+        let the_source: serde_json::Value = serde_json::from_str(the_lines[1])?;
+        assert!(the_source.get("_rallyAPIMajor").is_none());
+        assert!(the_source.get("_ref").is_none());
+        assert!(the_source.get("_CreatedAt").is_none());
+        assert_eq!(the_source["Name"], "The one that made it through the whole pipeline");
+
+        Ok(())
     }
 }
