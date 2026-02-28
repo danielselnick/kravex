@@ -13,6 +13,7 @@ pub(crate) mod backends;
 pub(crate) mod common;
 pub(crate) mod progress;
 mod supervisors;
+pub(crate) mod transforms;
 use crate::app_config::AppConfig;
 use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSource};
 use crate::backends::file::{FileSink, FileSource};
