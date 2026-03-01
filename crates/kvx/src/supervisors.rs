@@ -17,6 +17,7 @@ mod workers;
 // -- it's like a parenting book — everyone has opinions, might as well take config for it
 pub mod config;
 use crate::app_config::AppConfig;
+use crate::collectors::CollectorBackend;
 use crate::supervisors::workers::Worker;
 use crate::transforms::DocumentTransformer;
 use anyhow::{Context, Result};
@@ -43,29 +44,34 @@ impl Supervisor {
 }
 
 impl Supervisor {
-    /// 🧵 Unleash the workers! Now with transform powers.
+    /// 🧵 Unleash the workers! Now with transform AND collector powers.
     ///
     /// 🧠 Knowledge graph: the pipeline flow is now:
     /// ```text
-    /// Source → Vec<String> → channel → SinkWorker(transform + binary collect) → Sink(I/O)
+    /// Source → Vec<String> → channel → SinkWorker(transform → collect → sink.send) → Sink(I/O)
     /// ```
-    /// Each SinkWorker gets its own clone of the `DocumentTransformer`.
-    /// Since transforms are zero-sized structs, cloning is free. The compiler laughs.
+    /// Each SinkWorker gets its own clone of the `DocumentTransformer` and `CollectorBackend`.
+    /// Since transforms and collectors are zero-sized structs, cloning is free.
     pub(crate) async fn start_workers(
         &self,
         source_backend: crate::backends::SourceBackend,
         sink_backends: Vec<crate::backends::SinkBackend>,
         transformer: DocumentTransformer,
+        collector: CollectorBackend,
     ) -> Result<()> {
         // 📬 Channel carries Vec<String> — raw doc strings from source to sink workers.
         let (tx, rx) = async_channel::bounded(self.app_config.runtime.queue_capacity);
 
         let mut worker_handles = Vec::with_capacity(sink_backends.len() + 1);
 
-        // 🗑️ Spawn N sink workers, each with its own transformer clone and shared receiver.
+        // 🗑️ Spawn N sink workers, each with its own transformer + collector clones.
         for sink_backend in sink_backends {
-            let sink_worker =
-                workers::SinkWorker::new(rx.clone(), sink_backend, transformer.clone());
+            let sink_worker = workers::SinkWorker::new(
+                rx.clone(),
+                sink_backend,
+                transformer.clone(),
+                collector.clone(),
+            );
             worker_handles.push(sink_worker.start());
         }
 

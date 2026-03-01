@@ -3,66 +3,74 @@
 //! *[the clock on the wall reads 2:47am.]*
 //! *[nobody asked for this data migration. and yet, here we are.]*
 //!
-//! 🗑️ The SinkWorker module — now with TRANSFORM POWERS. It receives raw doc strings
-//! from the channel, transforms each one via `DocumentTransformer`, binary-collects
-//! the results into a single payload string, and sends it to the Sink.
+//! 🗑️ The SinkWorker module — the orchestrator between transforms and sinks.
+//! It receives raw doc strings from the channel, transforms each one via
+//! `DocumentTransformer`, assembles them via `CollectorBackend` into the
+//! sink's wire format, and sends the final payload to the Sink.
 //!
-//! 🧠 Knowledge graph: SinkWorker is the bridge between raw source strings and the sink's
-//! I/O abstraction. The transform + binary collect happen HERE, not in the sink.
-//! Sinks are pure I/O — HTTP POST, file write, memory push. That's it.
+//! 🧠 Knowledge graph: SinkWorker is the bridge between raw source strings and
+//! the sink's I/O abstraction. Three concerns, three abstractions:
+//! - **Transform**: per-document format conversion (Rally→ES bulk, passthrough)
+//! - **Collector**: payload assembly format (NDJSON, JSON array)
+//! - **Sink**: pure I/O (HTTP POST, file write, memory push)
 //!
 //! ```text
-//!   channel(Vec<String>) → SinkWorker → transform each → binary collect → Sink::send(payload)
+//!   channel(Vec<String>) → SinkWorker → transform each → collector.collect → Sink::send
 //! ```
 //!
 //! 🦆 (the duck has no comment at this time, but it approves of the separation of concerns)
 //!
 //! ⚠️ When the singularity occurs, the SinkWorker will still be transforming documents.
-//! It will not notice. It does not notice things. It only transforms and sinks.
+//! It will not notice. It does not notice things. It only transforms, collects, and sinks.
 
 use super::Worker;
 use crate::backends::{Sink, SinkBackend};
+use crate::collectors::{CollectorBackend, PayloadCollector};
 use crate::transforms::{DocumentTransformer, Transform};
 use anyhow::{Context, Result};
 use async_channel::Receiver;
 use tokio::task::JoinHandle;
 use tracing::debug;
 
-/// 🗑️ The SinkWorker: receives raw strings, transforms them, binary-collects into a payload,
-/// and sends the payload to the sink. The plumber AND the translator of this pipeline.
+/// 🗑️ The SinkWorker: receives raw strings, transforms them, collects into a payload,
+/// and sends the payload to the sink. Three phases. Three abstractions. Zero drama.
 ///
-/// 🧠 Holds its own `DocumentTransformer` — each SinkWorker gets a clone.
-/// Since transforms are zero-sized structs (RallyS3ToEs, Passthrough), cloning is free.
-/// The compiler may inline the transform call directly into the hot loop. Branch predictor
-/// eliminates the enum match after ~2 iterations. It's basically zero-cost abstraction.
+/// 🧠 Holds its own `DocumentTransformer` and `CollectorBackend` — each SinkWorker
+/// gets clones. Since both are zero-sized structs under the hood, cloning is free.
+/// The compiler inlines everything. Branch prediction handles the enum matches.
 ///
-/// 📜 The binary collect: each transformed string gets a trailing `\n`, then concatenated.
-/// For ES bulk: "action\nsource\naction\nsource\n" — valid NDJSON.
-/// For passthrough: "doc\ndoc\ndoc\n" — valid newline-delimited output.
+/// 📜 The three phases per batch:
+/// 1. **Transform**: each raw doc → sink wire format (e.g., Rally JSON → ES bulk lines)
+/// 2. **Collect**: Vec of transformed strings → single payload (NDJSON or JSON array)
+/// 3. **Send**: payload → Sink (HTTP POST, file write, memory push)
 #[derive(Debug)]
 pub(crate) struct SinkWorker {
     rx: Receiver<Vec<String>>,
     sink: SinkBackend,
-    /// 🔄 The transformer — resolves from (SourceConfig, SinkConfig) pair.
-    /// Transforms each raw doc string into the sink's wire format.
+    /// 🔄 Per-document format conversion — resolves from (SourceConfig, SinkConfig).
     transformer: DocumentTransformer,
+    /// 📦 Payload assembly — resolves from SinkConfig. NDJSON for ES/File, JSON array for InMemory.
+    collector: CollectorBackend,
 }
 
 impl SinkWorker {
-    /// 🏗️ Constructs a new SinkWorker with a receiver, sink, and transformer.
+    /// 🏗️ Constructs a new SinkWorker with receiver, sink, transformer, and collector.
     ///
-    /// The transformer decides HOW to format each doc (Rally→ES bulk, passthrough, etc.)
-    /// The sink decides WHERE to send it (HTTP POST, file write, etc.)
-    /// The worker decides WHEN — which is "as fast as the channel delivers, no cap."
+    /// The transformer decides HOW to format each doc (Rally→ES bulk, passthrough)
+    /// The collector decides HOW to assemble them (NDJSON newlines, JSON array brackets)
+    /// The sink decides WHERE to send it (HTTP POST, file write, memory push)
+    /// The worker decides WHEN — "as fast as the channel delivers, no cap." 🦆
     pub(crate) fn new(
         rx: Receiver<Vec<String>>,
         sink: SinkBackend,
         transformer: DocumentTransformer,
+        collector: CollectorBackend,
     ) -> Self {
         Self {
             rx,
             sink,
             transformer,
+            collector,
         }
     }
 }
@@ -70,7 +78,7 @@ impl SinkWorker {
 impl Worker for SinkWorker {
     fn start(mut self) -> JoinHandle<Result<()>> {
         tokio::spawn(async move {
-            debug!("📥 SinkWorker started — transform + binary collect + sink, let's go");
+            debug!("📥 SinkWorker started — transform → collect → sink, let's go");
             loop {
                 let receive_result = self.rx.recv().await;
                 match receive_result {
@@ -78,25 +86,24 @@ impl Worker for SinkWorker {
                         debug!("🪣 SinkWorker received {} raw docs from channel", raw_docs.len());
 
                         // 🔄 Phase 1: Transform each raw doc string through the DocumentTransformer.
-                        // Each transform call converts a raw source-format string into the sink's
-                        // wire format. For Rally→ES: parses JSON, strips metadata, builds NDJSON lines.
+                        // Each call converts a raw source-format string into the per-doc wire format.
+                        // For Rally→ES: parses JSON, strips metadata, builds action+source lines.
                         // For passthrough: returns the string unchanged (zero allocation).
-                        let mut payload = String::new();
+                        let mut transformed = Vec::with_capacity(raw_docs.len());
                         for raw_doc in raw_docs {
-                            let transformed = self.transformer.transform(raw_doc)
+                            let the_transformed_doc = self.transformer.transform(raw_doc)
                                 .context("💀 SinkWorker transform failed — a raw doc went in and screaming came out. Check the transform logic and the source data quality.")?;
-
-                            // 📦 Phase 2: Binary collect — append each transformed string + newline.
-                            // This builds the final payload the sink will send as-is.
-                            // For ES bulk: each transform output is "action\nsource", so we get
-                            // "action\nsource\naction\nsource\n" — valid NDJSON for /_bulk.
-                            // For passthrough: "doc\ndoc\n" — valid newline-delimited file content.
-                            payload.push_str(&transformed);
-                            payload.push('\n');
+                            transformed.push(the_transformed_doc);
                         }
 
+                        // 📦 Phase 2: Collect — assemble transformed strings into final payload.
+                        // NDJSON: each string gets trailing \n → "doc\ndoc\n"
+                        // JSON Array: wrapped in [] with commas → "[doc,doc]"
+                        // The collector owns the format. The worker just calls it.
+                        let payload = self.collector.collect(&transformed);
+
                         // 📡 Phase 3: Send the fully rendered payload to the sink. Pure I/O.
-                        if !payload.is_empty() {
+                        if !payload.is_empty() && payload != "[]" {
                             self.sink
                                 .send(payload)
                                 .await

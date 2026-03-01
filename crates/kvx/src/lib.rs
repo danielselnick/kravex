@@ -10,6 +10,7 @@
 #![allow(dead_code, unused_variables, unused_imports)]
 pub mod app_config;
 pub(crate) mod backends;
+pub(crate) mod collectors;
 pub(crate) mod common;
 pub(crate) mod progress;
 mod supervisors;
@@ -21,6 +22,7 @@ use crate::backends::in_mem::{InMemorySink, InMemorySource};
 use crate::backends::{SinkBackend, SourceBackend};
 use crate::supervisors::Supervisor;
 use crate::supervisors::config::{RuntimeConfig, SinkConfig, SourceConfig};
+use crate::collectors::CollectorBackend;
 use crate::transforms::DocumentTransformer;
 use anyhow::{Context, Result};
 use std::time::SystemTime;
@@ -54,9 +56,14 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     let transformer =
         DocumentTransformer::from_configs(&app_config.source_config, &app_config.sink_config);
 
+    // 📦 Resolve the payload collector from sink config.
+    // 🧠 ES/File → NDJSON (\n-delimited), InMemory → JSON array ([doc,doc]).
+    // The collector assembles transformed strings into the sink's wire format.
+    let collector = CollectorBackend::from_sink_config(&app_config.sink_config);
+
     let supervisor = Supervisor::new(app_config.clone());
     supervisor
-        .start_workers(source_backend, sink_backends, transformer)
+        .start_workers(source_backend, sink_backends, transformer, collector)
         .await?;
 
     info!(
@@ -132,7 +139,10 @@ mod tests {
     use crate::supervisors::config::{RuntimeConfig, SinkConfig, SourceConfig};
 
     /// 🧪 Full pipeline integration: InMemory→Passthrough→InMemory.
-    /// Four raw docs in, one binary-collected payload out. The whole journey.
+    /// Four raw docs in, one JSON array payload out. The whole journey.
+    ///
+    /// 🧠 InMemory sink uses JsonArrayCollector, so the payload is `[doc,doc,doc,doc]`.
+    /// No serde involved — just brackets, commas, and raw passthrough strings.
     #[tokio::test]
     async fn the_one_where_four_docs_made_it_home_safely() -> Result<()> {
         let app_config = AppConfig {
@@ -154,21 +164,25 @@ mod tests {
             &app_config.sink_config,
         );
 
+        // 📦 InMemory sink → JsonArrayCollector: [doc,doc,doc,doc]
+        let collector = CollectorBackend::from_sink_config(&app_config.sink_config);
+
         let supervisor = Supervisor::new(app_config);
         supervisor
-            .start_workers(source, vec![sink], transformer)
+            .start_workers(source, vec![sink], transformer, collector)
             .await?;
 
-        // 📦 SinkWorker received 4 docs, transformed (passthrough), binary collected into 1 payload.
-        // Each doc gets a trailing \n, so payload = '{"doc":1}\n{"doc":2}\n{"doc":3}\n{"doc":4}\n'
+        // 📦 SinkWorker received 4 docs, passthrough-transformed, collected into JSON array.
+        // Payload = '[{"doc":1},{"doc":2},{"doc":3},{"doc":4}]'
         let received = sink_inner.received.lock().await;
         assert_eq!(received.len(), 1, "Should have received exactly 1 payload");
 
         let the_payload = &received[0];
-        let the_lines: Vec<&str> = the_payload.lines().collect();
-        assert_eq!(the_lines.len(), 4, "Payload should contain 4 lines (one per doc)");
-        assert_eq!(the_lines[0], r#"{"doc":1}"#);
-        assert_eq!(the_lines[3], r#"{"doc":4}"#);
+        assert_eq!(
+            the_payload,
+            r#"[{"doc":1},{"doc":2},{"doc":3},{"doc":4}]"#,
+            "InMemory sink should receive a valid JSON array — zero serde, just brackets and commas"
+        );
 
         Ok(())
     }
