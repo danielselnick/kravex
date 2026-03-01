@@ -13,9 +13,6 @@
 //! 🔒 Like Fight Club, but for async tasks. First rule: you don't pub the workers.
 
 mod workers;
-// -- 🔧 but of course you can tell the supervisor how to manage their minions
-// -- it's like a parenting book — everyone has opinions, might as well take config for it
-pub mod config;
 use crate::app_config::AppConfig;
 use crate::composers::ComposerBackend;
 use crate::supervisors::workers::Worker;

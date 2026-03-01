@@ -23,7 +23,7 @@ Core library for kravex — the data migration engine. Raw pages, Cow-powered ze
   - `composers` — `Composer` trait + `NdjsonComposer`/`JsonArrayComposer` + `ComposerBackend` dispatcher
   - `collectors` — `PayloadCollector` trait + `NdjsonCollector`/`JsonArrayCollector` + `CollectorBackend` dispatcher
   - `transforms` — `Transform` trait + `DocumentTransformer` enum (Cow-based)
-  - `supervisors` — pipeline orchestration (Supervisor + workers); `supervisors/config` is a compatibility re-export shim
+  - `supervisors` — pipeline orchestration (Supervisor + workers); no config submodule — config lives in `app_config`
   - `common` — `Hit`/`HitBatch` (legacy dead code)
   - `progress` — TUI metrics
 
@@ -49,7 +49,6 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
   ├──► transforms ◄───────────────┘ (called by Composer)
   └──► composers  ◄── SinkWorker (holds ComposerBackend + DocumentTransformer)
 
-supervisors/config → re-export shim → app_config + backends (backwards compat for file_source.rs)
 ```
 
 # Key Concepts
@@ -131,8 +130,7 @@ supervisors/config → re-export shim → app_config + backends (backwards compa
 - Transforms and composers are Clone+Copy (zero-sized structs) — each SinkWorker gets its own copy
 - `SinkConfig::max_request_size_bytes()` helper is now on `SinkConfig` in `app_config.rs`
 - **Config ownership**: `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs` (re-exported from `backends`)
-- **supervisors/config.rs is a re-export shim** — exists only because `backends/file/file_source.rs` contains the word "human" (CLAUDE.md protected). Once that file is updated, the shim and its `pub mod config` declaration in `supervisors.rs` can be deleted.
-- **Action needed (human)**: update `backends/file/file_source.rs` line 12: `use crate::supervisors::config::{CommonSinkConfig, CommonSourceConfig};` → `use crate::backends::{CommonSinkConfig, CommonSourceConfig};` then delete `supervisors/config.rs` and remove `pub mod config;` from `supervisors.rs`
+- `supervisors/config.rs` — **deleted**. No backwards-compat shim remains. All callers updated.
 
 # Aggregated Context Memory Across Sessions for Current and Future Use
 
@@ -144,5 +142,5 @@ supervisors/config → re-export shim → app_config + backends (backwards compa
 - v5 collectors: Extracted payload assembly into `PayloadCollector` trait + `NdjsonCollector`/`JsonArrayCollector` — **superseded by v10 composers**
 - v6-v9 backend file splits: separated backend implementations into dedicated files with re-export shims
 - v10 raw pages + composers (current): Source returns `Option<String>` (raw page), Transform returns `Vec<Cow<str>>` (zero-copy), Composer replaces Collector (transform+assemble in one shot), SinkWorker buffers by byte size. 31 tests passing.
-- v11 config migration: `RuntimeConfig`/`SourceConfig`/`SinkConfig` moved from `supervisors/config.rs` to `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` moved to `backends/common_config.rs`. `supervisors/config.rs` is now a re-export shim pending human cleanup of `file_source.rs`.
+- v11 config migration (complete): `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs`; `supervisors/config.rs` deleted; all callers updated. 31 tests passing.
 - S3 source backend not yet implemented

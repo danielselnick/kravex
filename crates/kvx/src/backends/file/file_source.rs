@@ -9,7 +9,7 @@ use tracing::trace;
 
 use crate::backends::{Sink, Source};
 use crate::progress::ProgressMetrics;
-use crate::supervisors::config::{CommonSinkConfig, CommonSourceConfig};
+use crate::backends::{CommonSinkConfig, CommonSourceConfig};
 
 // -- 📂 FileSourceConfig — "It's just a file", said no sysadmin ever before the disk filled up.
 // -- Lives here now, close to the FileSource that actually uses it. Ethos pattern, baby. 🎯
