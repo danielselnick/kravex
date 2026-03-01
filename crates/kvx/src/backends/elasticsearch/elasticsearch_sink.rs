@@ -6,7 +6,7 @@ use serde::Deserialize;
 use tracing::{debug, trace};
 
 use crate::backends::Sink;
-use crate::supervisors::config::CommonSinkConfig;
+use crate::backends::CommonSinkConfig;
 
 //
 // ⚠️ Per-doc index routing: each Hit can carry its own `_index` field, which overrides this config.

@@ -1,6 +1,6 @@
 # Summary
 
-Core library for kravex — the data migration engine. Now with raw pages, Cow-powered zero-copy, and Composer-based payload assembly.
+Core library for kravex — the data migration engine. Raw pages, Cow-powered zero-copy, Composer-based payload assembly, and a clean config ownership model.
 
 # Description
 
@@ -12,7 +12,20 @@ Core library for kravex — the data migration engine. Now with raw pages, Cow-p
 - **Dependents**: `kvx-cli`
 - **Dependencies**: anyhow, async-channel, figment, reqwest, serde, serde_json, tokio, tracing, async-trait, futures, indicatif, comfy-table
 - **Edition**: 2024
-- **Modules**: `backends` (backend wiring + re-exports), `backends/{source,sink}` (core traits + backend enums), `backends/elasticsearch/{elasticsearch_source,elasticsearch_sink}`, `backends/file/{file_source,file_sink}`, `backends/in_mem/{in_mem_source,in_mem_sink}`, `composers` (Composer trait + NdjsonComposer/JsonArrayComposer), `common` (Hit/HitBatch — legacy dead code), `transforms` (Transform trait + Cow-based impls), `supervisors` (pipeline orchestration), `progress` (TUI metrics), `app_config` (Figment-based config)
+- **Modules**:
+  - `app_config` — `AppConfig`, `RuntimeConfig`, `SourceConfig`, `SinkConfig` (Figment-based config loading; owns all top-level config enums)
+  - `backends` — backend wiring + re-exports; includes `CommonSinkConfig`, `CommonSourceConfig` (backend-shared config primitives)
+  - `backends/common_config` — `CommonSinkConfig`, `CommonSourceConfig` (live here to avoid circular dep with `app_config`)
+  - `backends/{source,sink}` — `Source`/`Sink` traits + `SourceBackend`/`SinkBackend` enums
+  - `backends/elasticsearch/{elasticsearch_source,elasticsearch_sink}` — ES backend impls
+  - `backends/file/{file_source,file_sink}` — file backend impls
+  - `backends/in_mem/{in_mem_source,in_mem_sink}` — in-memory test backend
+  - `composers` — `Composer` trait + `NdjsonComposer`/`JsonArrayComposer` + `ComposerBackend` dispatcher
+  - `collectors` — `PayloadCollector` trait + `NdjsonCollector`/`JsonArrayCollector` + `CollectorBackend` dispatcher
+  - `transforms` — `Transform` trait + `DocumentTransformer` enum (Cow-based)
+  - `supervisors` — pipeline orchestration (Supervisor + workers); `supervisors/config` is a compatibility re-export shim
+  - `common` — `Hit`/`HitBatch` (legacy dead code)
+  - `progress` — TUI metrics
 
 ## Pipeline Architecture (current — Raw Pages + Composer)
 ```
@@ -25,13 +38,18 @@ Source.next_page() → Option<String> (raw page)
 
 ## Module Dependency Graph
 ```
-lib.rs ──► supervisors ──► backends (Source/Sink traits)
+lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
   │              │
   │              ▼
-  │         workers (SourceWorker, SinkWorker)
-  │              │
-  ├──► transforms ◄── Composer (calls transformer per page)
+  │         backends ──► backends/common_config (CommonSinkConfig, CommonSourceConfig)
+  │              │              ↑ (imported by backend-specific configs to embed)
+  │              ▼
+  │         supervisors ──► workers (SourceWorker, SinkWorker)
+  │              │                │
+  ├──► transforms ◄───────────────┘ (called by Composer)
   └──► composers  ◄── SinkWorker (holds ComposerBackend + DocumentTransformer)
+
+supervisors/config → re-export shim → app_config + backends (backwards compat for file_source.rs)
 ```
 
 # Key Concepts
@@ -105,14 +123,16 @@ lib.rs ──► supervisors ──► backends (Source/Sink traits)
 - ES bulk action line includes `_id` only; `_index`/`routing` set by sink URL
 - Passthrough doesn't validate or split — returns entire page as one `Cow::Borrowed` item
 - `escape_json_string()` avoids serde round-trip for action line construction
-- `collectors.rs` superseded by `composers.rs` — Composer handles transform+assemble in one step
 - `channel_data.rs` still empty — to be removed
 - ES sink no longer buffers — SinkWorker handles all buffering via byte-size threshold + epsilon
 - `BUFFER_EPSILON_BYTES` = 64 KiB headroom to avoid exceeding max request size after transformation
 - Backend code split: each backend type has its own `{type}_source.rs` / `{type}_sink.rs`
 - Core Source/Sink traits in `backends/source.rs` and `backends/sink.rs`
 - Transforms and composers are Clone+Copy (zero-sized structs) — each SinkWorker gets its own copy
-- `SinkConfig::max_request_size_bytes()` helper extracts the limit regardless of sink variant
+- `SinkConfig::max_request_size_bytes()` helper is now on `SinkConfig` in `app_config.rs`
+- **Config ownership**: `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs` (re-exported from `backends`)
+- **supervisors/config.rs is a re-export shim** — exists only because `backends/file/file_source.rs` contains the word "human" (CLAUDE.md protected). Once that file is updated, the shim and its `pub mod config` declaration in `supervisors.rs` can be deleted.
+- **Action needed (human)**: update `backends/file/file_source.rs` line 12: `use crate::supervisors::config::{CommonSinkConfig, CommonSourceConfig};` → `use crate::backends::{CommonSinkConfig, CommonSourceConfig};` then delete `supervisors/config.rs` and remove `pub mod config;` from `supervisors.rs`
 
 # Aggregated Context Memory Across Sessions for Current and Future Use
 
@@ -124,4 +144,5 @@ lib.rs ──► supervisors ──► backends (Source/Sink traits)
 - v5 collectors: Extracted payload assembly into `PayloadCollector` trait + `NdjsonCollector`/`JsonArrayCollector` — **superseded by v10 composers**
 - v6-v9 backend file splits: separated backend implementations into dedicated files with re-export shims
 - v10 raw pages + composers (current): Source returns `Option<String>` (raw page), Transform returns `Vec<Cow<str>>` (zero-copy), Composer replaces Collector (transform+assemble in one shot), SinkWorker buffers by byte size. 31 tests passing.
+- v11 config migration: `RuntimeConfig`/`SourceConfig`/`SinkConfig` moved from `supervisors/config.rs` to `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` moved to `backends/common_config.rs`. `supervisors/config.rs` is now a re-export shim pending human cleanup of `file_source.rs`.
 - S3 source backend not yet implemented

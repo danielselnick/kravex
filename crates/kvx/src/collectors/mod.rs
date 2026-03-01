@@ -31,7 +31,7 @@ mod ndjson;
 pub(crate) use json_array::JsonArrayCollector;
 pub(crate) use ndjson::NdjsonCollector;
 
-use crate::supervisors::config::SinkConfig;
+use crate::app_config::SinkConfig;
 
 // ===== Trait =====
 

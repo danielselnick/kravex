@@ -21,7 +21,7 @@ use crate::backends::file::{FileSink, FileSource};
 use crate::backends::in_mem::{InMemorySink, InMemorySource};
 use crate::backends::{SinkBackend, SourceBackend};
 use crate::supervisors::Supervisor;
-use crate::supervisors::config::{RuntimeConfig, SinkConfig, SourceConfig};
+use crate::app_config::{RuntimeConfig, SinkConfig, SourceConfig};
 use crate::composers::ComposerBackend;
 use crate::transforms::DocumentTransformer;
 use anyhow::{Context, Result};
@@ -139,7 +139,7 @@ pub(crate) async fn stop() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::supervisors::config::{RuntimeConfig, SinkConfig, SourceConfig};
+    use crate::app_config::{RuntimeConfig, SinkConfig, SourceConfig};
 
     /// 🧪 Full pipeline integration: InMemory→Passthrough→InMemory.
     /// Four raw docs in (as one newline-delimited page), one JSON array payload out.
