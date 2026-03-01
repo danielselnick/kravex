@@ -47,7 +47,6 @@ use tracing::{debug, trace};
 // -- 🏗️ The local souls this module depends on. They did not ask to be imported.
 // -- They were called. They answered. This is their burden.
 use crate::backends::{Sink, Source};
-use crate::common::HitBatch;
 use crate::progress::ProgressMetrics;
 use crate::supervisors::config::{CommonSinkConfig, CommonSourceConfig};
 
@@ -165,57 +164,37 @@ impl ElasticsearchSource {
 
 #[async_trait]
 impl Source for ElasticsearchSource {
-    /// 📡 Returns the next batch of documents from Elasticsearch.
+    /// 📡 Returns the next batch of raw document strings from Elasticsearch.
     ///
-    /// By "returns," I mean it currently returns an empty `HitBatch::default()` faster than you
-    /// can say "scroll API." It's aspirational. It's a placeholder with excellent posture.
-    ///
+    /// Currently returns an empty vec faster than you can say "scroll API."
+    /// It's aspirational. It's a placeholder with excellent posture.
     /// The borrow checker is fully satisfied. The product manager is not.
-    async fn next_batch(&mut self) -> Result<HitBatch> {
-        // -- TODO: Implement scroll/search_after — look, we KNOW. Okay? We KNOW.
-        // -- It's on the list. The list is long. The list has feelings.
-        // -- scroll has DEPRECATED vibes anyway and search_after is the glow-up we deserve.
-        // -- One day. One glorious, async, pit-of-success day.
-        // -- (If the singularity arrives first, please tell future-superintelligence to finish this.)
-        Ok(HitBatch::default())
+    async fn next_batch(&mut self) -> Result<Vec<String>> {
+        // TODO: Implement search_after — the glow-up we deserve.
+        Ok(vec![])
     }
 }
 
-/// 📦 The sink side of the Elasticsearch backend. The business end of the pipeline.
+/// 📡 The sink side of the Elasticsearch backend — pure I/O, zero buffering.
 ///
-/// `ElasticsearchSink` is where documents go to be indexed, batched, and sent via
-/// the `_bulk` API in glorious NDJSON format. It is stateful, it is async, and it has
-/// seen things. Specifically, it has seen every document your source decided to produce.
-/// Every. Single. One. It does not complain. It flushes. It moves on.
+/// `ElasticsearchSink` accepts a fully rendered NDJSON payload string and POSTs it
+/// to the `_bulk` API. That's it. No internal buffer. No transform logic.
+/// The SinkWorker upstream handles transform + binary collect + size management.
 ///
-/// 🚰 Think of this as the drain at the end of a data pipeline. Which, per the emoji policy,
-/// is exactly what `🚰` means here. We're very thematic. We're professionals.
+/// 🧠 Knowledge graph: Sinks are I/O-only abstractions now. This one does HTTP POST.
+/// The FileSink does file write. The InMemorySink does Vec push.
+/// Buffering, transforming, and collecting moved to SinkWorker. Clean separation.
 ///
 /// Internally holds:
-/// - `client`: the HTTP muscle 💪
-/// - `hits`: the in-flight buffer of documents waiting to be bulk-indexed
-/// - `current_hits_size_bytes`: byte accounting, because nobody wants a 413
-/// - `current_hits_size_len`: doc count accounting, for the logs you'll read at 3am
-/// - `sink_config`: all the auth, URL, and index targeting info
+/// - `client`: the HTTP muscle 💪 — reused across requests
+/// - `sink_config`: auth, URL, index targeting info
 ///
-/// ⚠️ Flushing is NOT automatic on drop. You must call `close()`. If you don't, documents
-/// will silently vanish like a developer at 4:59pm on a Friday. Call. `close()`.
+/// 🚰 Think of this as the drain at the end of a data pipeline. The last stop.
+/// Knock knock. Who's there? HTTP POST. HTTP POST who? HTTP POST your NDJSON
+/// and hope the cluster's in a good mood.
 #[derive(Debug)]
 pub(crate) struct ElasticsearchSink {
-    // -- 📡 reqwest::Client — the envoy we send into the HTTP wilderness. Reused across requests
-    // -- because spinning up a new client per request is the networking equivalent of buying a new
-    // -- car every time you need to go to the grocery store.
     client: reqwest::Client,
-    // -- 📦 The in-flight buffer. Every hit hanging out here, waiting for flush() to set them free.
-    // -- Like passengers in a layover airport. Documents. I mean documents.
-    hits: Vec<crate::common::Hit>,
-    // 🔧 Running total of bytes accumulated in `hits`. Used to enforce max_request_size_bytes.
-    // -- The borrow checker can't protect you from 413s. Only accounting can.
-    current_hits_size_bytes: usize,
-    // 🔧 Running doc count in `hits`. For logging purposes. For the logs. For YOU, at 3am.
-    current_hits_size_len: usize,
-    // 🔧 The full sink config: URL, auth credentials, target index, common settings.
-    // Cloned in from ElasticsearchSinkConfig because we own our config around here.
     sink_config: ElasticsearchSinkConfig,
 }
 
@@ -301,14 +280,10 @@ impl ElasticsearchSink {
             }
         }
 
-        // -- 🚀 All checks passed. We are go. The sink is primed. The cluster awaits.
-        // -- This is the moment. Right here. Everything led to this Ok(Self { ... }).
+        // 🚀 All checks passed. No buffer to init — we're I/O-only now. Clean. Light. Free.
         Ok(Self {
-            hits: Vec::new(),
             sink_config: config,
             client,
-            current_hits_size_bytes: 0,
-            current_hits_size_len: 0,
         })
     }
 
@@ -376,208 +351,30 @@ impl ElasticsearchSink {
         Ok(())
     }
 
-    /// 📦 Transforms the in-memory `hits` buffer into an NDJSON bulk request body.
-    ///
-    /// Each document becomes two lines:
-    /// 1. An action line: `{"index":{"_id":"...","_index":"...","routing":"..."}}` (optional fields)
-    /// 2. A source line: the raw `source_buf` bytes of the document, as-is
-    ///
-    /// 🔧 Index resolution order (per hit):
-    /// - `hit.index` field takes priority (per-document routing, very spicy)
-    /// - falls back to `sink_config.index` (static config, boring but reliable)
-    /// - if both are None: we bail. Hard. With an existential error. You were warned.
-    ///
-    /// ⚠️ `source_buf` is written as raw bytes — no re-serialization. We trust it's valid JSON.
-    /// We also trusted that the last migration would be the last migration. We're optimists.
-    fn transform_into_bulk(&self) -> Result<String> {
-        // 🔧 Pre-allocate the bulk body string with a rough size estimate.
-        // The +100 per hit covers the action JSON line overhead. It's a guesstimate.
-        // -- A vibes-based allocation. The allocator has seen worse.
-        let estimated_size: usize = self.hits.iter().map(|h| h.source_buf.len() + 100).sum();
-        let mut bulk_body = String::with_capacity(estimated_size);
-
-        for hit in &self.hits {
-            // 📦 Build the action metadata object. Starts as `{"index":{}}` and gains fields.
-            // "index" here is the action type, not the index name. Naming things: hard.
-            // -- Elasticsearch chose "index" for both. Classic. What's the DEAL with that?
-            let mut action = serde_json::json!({
-                "index": {}
-            });
-
-            // 🔧 Attach optional per-document metadata fields to the action line.
-            // _id: preserve the original doc ID, so re-indexing is idempotent.
-            if let Some(ref id) = hit.id {
-                action["index"]["_id"] = serde_json::json!(id);
-            }
-            // 🔒 routing: custom shard routing key. For when you've read the docs and
-            // understood shards well enough to make intentional routing decisions.
-            // -- Respect. Also: good luck explaining this to your future self.
-            if let Some(ref routing) = hit.routing {
-                action["index"]["routing"] = serde_json::json!(routing);
-            }
-            // -- 📡 Index resolution: per-doc first, config fallback second, existential crisis third.
-            if let Some(ref index) = hit.index {
-                action["index"]["_index"] = serde_json::json!(index);
-            } else if let Some(ref index) = self.sink_config.index {
-                action["index"]["_index"] = serde_json::json!(index);
-            } else {
-                // -- 💀 No index. No direction. No guidance. The document has no home.
-                // -- We searched the hit. We searched the config. We searched our souls.
-                // -- There is nothing. There is only this error, and the echoing question:
-                // -- "Where was this supposed to go?" We do not know. We never knew.
-                anyhow::bail!(
-                    "💀 A document arrived with no index — not on the hit, not in the config, not written on the back of the envelope it came in. We checked. We double-checked. We checked a third time while making increasingly worried noises. No index. We cannot proceed. The document is lost to the void. Godspeed, little document."
-                )
-            }
-
-            // 📡 Write action line, then source line. Each separated by a newline.
-            // -- NDJSON: because JSON arrays are too mainstream.
-            bulk_body.push_str(&action.to_string());
-            bulk_body.push('\n');
-            bulk_body.push_str(&hit.source_buf);
-            bulk_body.push('\n');
-        }
-
-        Ok(bulk_body)
-    }
-
-    /// 🗑️ Flush the in-memory buffer to Elasticsearch via bulk request.
-    ///
-    /// Only fires if there's actually something to send — no empty bulk requests, please.
-    /// Elasticsearch doesn't want them and frankly neither do we. Boundaries are healthy.
-    ///
-    /// After a successful flush, `clear()` is called to reset the buffer.
-    /// Like emotional catharsis, but for documents. And measurable in bytes.
-    async fn flush(&mut self) -> Result<()> {
-        // ⚠️ Guard clause: if the buffer is empty, we do nothing.
-        // -- This is not laziness. This is efficiency. There is a difference.
-        // -- (It is also a little bit laziness. We are okay with this.)
-        if self.current_hits_size_bytes > 0 && self.current_hits_size_len > 0 {
-            // -- 📦 Serialize hits into NDJSON. The transform step. The moment of truth.
-            let request_body = self.transform_into_bulk()?;
-            self.submit_bulk_request(request_body).await
-                // -- 💀 "Problem submitting bulk request" — a literary failure.
-                // -- The NDJSON was perfect. The auth was correct. The URL was valid.
-                // -- And yet. AND YET. Something in the stack, somewhere between
-                // -- our optimism and the wire, decided today was not the day.
-                // -- The documents returned home, unindexed. We added context.
-                // -- Context is all we have left.
-                .context("💀 The bulk submission stumbled at the finish line. So close. The NDJSON was built with care, the request was formed with love, and something still went sideways. Context chain below tells the story. It's not a happy story. But it is honest.")?;
-            // -- ✅ Logged with personality, as per the 3am readability mandate.
-            debug!(
-                "📡 Yeeted {} bytes into the Elasticsearch void — the bytes have left the building",
-                self.current_hits_size_bytes
-            );
-            debug!(
-                "✅ {} documents have successfully emigrated to their new index home — may they find happiness there",
-                self.current_hits_size_len
-            );
-            // -- 🗑️ Reset the buffer. Clean slate. Fresh start. Very therapeutic.
-            self.clear();
-        }
-        Ok(())
-    }
-
-    /// 🗑️ Resets the internal hit buffer and size counters back to zero.
-    ///
-    /// Called after every successful flush. Wipes the slate clean.
-    /// Like pressing the "clear" button on a calculator, except the calculator
-    /// was holding thousands of JSON documents and the stakes were real.
-    ///
-    /// ⚠️ This does NOT flush first. It just CLEARS. If you call this without flushing,
-    /// those documents are gone. Into the aether. Unindexed. A ghost batch.
-    /// Don't be that person. Flush first. Clear after. In that order. Always.
-    fn clear(&mut self) {
-        // -- 🗑️ Vec::clear() — O(n) to drop contents, O(1) to feel better about yourself.
-        // -- The hits are gone. The bytes are zero. The len is zero. We are reborn.
-        // -- This is the baptism of the buffer. This is the moment before the next batch.
-        // -- Ancient proverb: "He who clears without flushing first inherits a data loss incident."
-        self.hits.clear();
-        self.current_hits_size_bytes = 0;
-        self.current_hits_size_len = 0;
-    }
 }
 
 #[async_trait]
 impl Sink for ElasticsearchSink {
-    /// 📡 Receives a batch of hits and appends them to the internal buffer.
+    /// 📡 POST the fully rendered NDJSON payload to /_bulk. Pure I/O. No buffering. No drama.
     ///
-    /// If adding the incoming batch would push us over `max_request_size_bytes`,
-    /// we flush the current buffer FIRST before accepting the new batch.
-    /// This is the backpressure dance. It is not elegant. It is correct.
-    ///
-    /// 🔄 Note: we check overflow BEFORE appending, not after. This means a single
-    /// incoming batch that is larger than `max_request_size_bytes` will still be accepted
-    /// (after a flush of the existing buffer). We do not split batches. We trust the
-    /// upstream to have sent reasonable batch sizes. We have to trust something.
-    ///
-    /// "What's the DEAL with batch sizes?" — Jerry Seinfeld, genuinely curious now.
-    async fn receive(&mut self, mut batch: HitBatch) -> Result<()> {
-        // -- 🚀 A new batch has arrived. Welcome, little documents. You've come a long way.
-        // -- You've been deserialized, possibly transformed, and now you're here.
-        // -- Don't get too comfortable. You'll be flushed before you know it.
-        trace!(
-            "📦 Batch received — documents have entered the building, please hold your excitement"
+    /// The SinkWorker upstream already transformed each doc and binary-collected them into
+    /// a single NDJSON payload string. We just fire it into the elastic void.
+    /// "In a world where sinks had too many responsibilities... one refactor dared to simplify."
+    async fn send(&mut self, payload: String) -> Result<()> {
+        debug!(
+            "📡 Sending {} bytes to /_bulk — the payload has left the building, Elvis-style",
+            payload.len()
         );
-        let incoming_batch_size: usize = batch.hits.iter().map(|h| h.source_buf.len()).sum();
-        let max_size: usize = self.sink_config.common_config.max_request_size_bytes;
-
-        // ⚠️ Overflow check: if adding this batch would exceed max_request_size_bytes,
-        // we flush what we have first. This keeps bulk requests under the size limit.
-        // -- Elasticsearch has opinions about payload size. Like a bouncer. A very principled bouncer.
-        if self.current_hits_size_len > 0
-            && self.current_hits_size_bytes + incoming_batch_size > max_size
-        {
-            self.flush().await
-                // -- 💀 "Error flushing during receive" — a poem of poor timing.
-                // -- The batch arrived. We were not ready. We tried to make room.
-                // -- The flush reached out to Elasticsearch and was met with silence,
-                // -- or worse: an error. The new batch waits in the hallway.
-                // -- The old documents are in limbo. This is fine. This is fine. This is not fine.
-                .context("💀 Tried to flush the existing buffer to make room for an incoming batch. The flush failed spectacularly. The incoming batch is waiting. The existing documents are suspended mid-migration. Someone set us up the bomb.")?;
-        }
-
-        // 📦 Append the new batch to our internal buffer. O(1) amortized. Very snappy.
-        // -- This is the moment of commitment. These hits are ours now. Our responsibility.
-        // -- Our mortgage. Our two cars. Our precious documents. We will not lose them.
-        self.current_hits_size_len += batch.hits.len();
-        self.hits.append(&mut batch.hits);
-        self.current_hits_size_bytes += incoming_batch_size;
-
+        self.submit_bulk_request(payload).await
+            .context("💀 The bulk submission stumbled at the finish line. The NDJSON was rendered with love, the SinkWorker did its job, and the HTTP layer said 'nah.' Check connectivity. Check your cluster. Check your horoscope.")?;
         Ok(())
     }
 
-    /// 🗑️ Gracefully closes the sink, flushing any remaining documents.
-    ///
-    /// This is the end. The pipeline is winding down. Whatever is left in the buffer
-    /// gets its final send here. Call this. Always call this. If you don't call this,
-    /// your last batch silently disappears and you will spend 45 minutes wondering
-    /// why the document counts don't match. Ask me how I know.
-    ///
-    /// ⚠️ This is not called automatically on drop. Rust does not do async drop.
-    /// You must call `close()` explicitly. This is not a bug. This is a design decision.
-    /// A very inconvenient design decision that we have made peace with.
+    /// 🗑️ Nothing to flush — we don't buffer. The SinkWorker sends complete payloads.
+    /// Close is a no-op. The HTTP client drops cleanly. The connections pool says goodbye.
+    /// Knock knock. Who's there? Nobody. The sink is closed. Go home. 🦆
     async fn close(&mut self) -> Result<()> {
-        // -- 🎬 The dramatic farewell. The final chapter. The last flush.
-        // -- The sink has received its batches. It has flushed its burdens.
-        // -- Now it stands at the threshold, ready to be dropped.
-        // -- But first: the remaining documents deserve their moment.
-        debug!(
-            "🗑️ Elasticsearch sink is gracefully bowing out — final curtain call, documents to the stage"
-        );
-        if !self.hits.is_empty() {
-            self.flush().await
-                // -- 💀 "Error during closing of Elasticsearch Sink" — an eulogy.
-                // -- We came so far. The migration was nearly complete.
-                // -- The final batch was so close to being indexed.
-                // -- And then, at the last possible moment, on the way out the door,
-                // -- keys in hand, Elasticsearch said: "not today."
-                // -- The documents are still in memory. The sink is closed.
-                // -- They will not be indexed. They will be freed with the process.
-                // -- We will remember them as they were: buffered, serialized, and full of potential.
-                // -- (Please check the logs. Please rerun with the remaining IDs. Please.)
-                .context("💀 Final flush during close() failed. We were so close. SO CLOSE. The last batch of documents is now gone with the process. This is the worst possible time for a flush error — at the very end, like a movie that falls apart in the third act. Check the Elasticsearch logs. Then check your life choices. Then rerun.")?;
-        }
+        debug!("🗑️ Elasticsearch sink closing — no buffer to flush, just vibes to release");
         Ok(())
     }
 }

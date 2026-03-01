@@ -57,7 +57,7 @@ const THE_METADATA_FIELDS_WE_DONT_NEED: &[&str] = &[
 /// 4. Build ES bulk action line: `{"index":{"_id":"..."}}`
 /// 5. Re-serialize cleaned body as source line
 /// 6. Return `"{action}\n{source}"` — the sacred two-line format
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct RallyS3ToEs;
 
 impl Transform for RallyS3ToEs {

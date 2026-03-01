@@ -14,7 +14,7 @@
 //! sink file with a BufWriter so we're not doing a syscall per hit like some kind
 //! of 1995 CGI script.
 //!
-//! 🚰 Source → BufReader → HitBatch → BufWriter → Sink
+//! 🚰 Source → BufReader → Vec<String> → SinkWorker(transform+collect) → Sink → BufWriter
 //! 💀 Disk full → your problem now
 //! 🦆 (mandatory, no notes)
 //!
@@ -31,7 +31,6 @@ use tokio::{
 use tracing::trace;
 
 use crate::backends::{Sink, Source};
-use crate::common::HitBatch;
 use crate::progress::ProgressMetrics;
 use crate::supervisors::config::{CommonSinkConfig, CommonSourceConfig};
 
@@ -165,86 +164,69 @@ impl FileSource {
 
 #[async_trait]
 impl Source for FileSource {
-    /// 🔄 Read the next batch of lines from the file. Returns an empty `HitBatch` when EOF.
+    /// 🔄 Read the next batch of lines from the file. Returns empty Vec when EOF.
     ///
-    /// The grind. The loop. The reading of lines. One by one. Like counting sheep,
-    /// except the sheep are JSON documents and there are 40 million of them and it's 11pm
-    /// and you have a migration to finish before the business opens tomorrow morning.
+    /// 🧠 Knowledge graph: sources return `Vec<String>` — raw doc strings, no Hit wrappers.
+    /// Lines are trimmed of trailing newlines here. The SinkWorker adds them back
+    /// during binary collect. This keeps the contract clean: raw strings in, raw strings out.
     ///
     /// KNOWLEDGE GRAPH: two exit conditions exist beyond EOF —
-    ///   1. `max_batch_size_docs`: hit count cap. Don't overwhelm the sink.
+    ///   1. `max_batch_size_docs`: doc count cap. Don't overwhelm the sink.
     ///   2. `max_batch_size_bytes`: byte cap. Protects against massive single-doc JSON blobs.
-    /// Both are checked on every iteration. Whichever fires first wins. It's a race.
-    /// A deeply unsexy race between two integers.
-    async fn next_batch(&mut self) -> Result<HitBatch> {
-        // -- 📦 pre-allocate with the expected batch size — we're not savages
-        let mut hits_batch =
+    /// Both are checked on every iteration. Whichever fires first wins.
+    async fn next_batch(&mut self) -> Result<Vec<String>> {
+        let mut docs_batch =
             Vec::with_capacity(self.source_config.common_config.max_batch_size_docs);
         let mut total_bytes_read = 0usize;
-        // ⚠️  1MB initial capacity per line — because NDJSON documents can be chunky.
-        // If a single document exceeds this, tokio's BufReader will realloc. It's fine.
-        // -- It's fine. We're fine. (It's not fine but it's acceptable.)
+        // ⚠️ 1MB initial capacity per line — because NDJSON documents can be chunky.
         let mut line = String::with_capacity(1024 * 1024);
 
-        // -- 🔄 THE LOOP. The eternal loop. The reading of lines.
-        // -- Each iteration: read a line, check if we're done, accumulate, check limits, repeat.
-        // -- This is the grind. This is the job. This is the thing we get up and do every day
-        // -- except we're an async function so we don't "get up" so much as "get polled by tokio".
         for _ in 0..=self.source_config.common_config.max_batch_size_docs {
-            // -- 📖 read_line appends into `line` and returns bytes read. 0 = EOF. The void calls.
             let bytes_read = self.buf_reader.read_line(&mut line).await?;
             if bytes_read == 0 {
-                // -- ✅ EOF reached. The file has been consumed. Like a bag of chips at midnight.
-                // -- Nothing left. Stare into the empty Vec. Feel something.
                 break;
             }
 
-            // 📊 accumulate — every byte counts (literally, for the progress bar)
             total_bytes_read += bytes_read;
-            hits_batch.push(line.clone());
-            // -- 🗑️  clear the line buffer for the next read. Not the bytes_read counter though.
-            // -- That one keeps running. It's got goals. It's motivated.
+            // 🧹 Strip trailing newlines — sources produce clean strings, SinkWorker handles delimiters.
+            // read_line includes \n (and \r\n on Windows). We strip it so transforms
+            // get pure document content, not line-ending artifacts from the filesystem.
+            let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+            if !trimmed.is_empty() {
+                docs_batch.push(trimmed.to_string());
+            }
             line.clear();
 
-            // -- ⚠️  byte cap check — "have we eaten too much?" check for the batch.
-            // -- Ancient proverb: he who ignores the byte limit, OOMs in staging.
             if total_bytes_read > self.source_config.common_config.max_batch_size_bytes {
                 break;
             }
 
-            // -- ⚠️  doc count cap — belt AND suspenders. Two limits. One batch.
-            // KNOWLEDGE GRAPH: this check is slightly redundant with the for-loop bound above,
-            // but it's explicit and intentional. The loop's upper bound is a safety net;
-            // this check is the actual business logic. Don't remove either one. You'll regret it.
-            if hits_batch.len() > self.source_config.common_config.max_batch_size_docs {
+            if docs_batch.len() > self.source_config.common_config.max_batch_size_docs {
                 break;
             }
         }
 
-        // -- 🚀 batch assembled. Report to the troops. Or at least to the trace log.
-        // -- Nobody is awake to read this at 3am. But if they are: hello. Go drink some water.
         trace!(
             "📖 hauled {} bytes out of the file like a digital fishing trip — catch of the day",
             total_bytes_read
         );
-        // 📊 report the batch to progress — every byte counts, every doc matters, every metric
-        // feeds the progress table in the TUI. This is how the human knows we're not dead.
         self.progress
-            .update(total_bytes_read as u64, hits_batch.len() as u64);
+            .update(total_bytes_read as u64, docs_batch.len() as u64);
 
-        HitBatch::new(hits_batch)
+        Ok(docs_batch)
     }
 }
 
-/// 🚰 FileSink — receives `HitBatch`es and faithfully writes them to a file, line by line.
+/// 🚰 FileSink — receives fully rendered payload strings and writes them to disk. I/O only.
 ///
 /// It's a BufWriter around a tokio `File`. Simple. Honest. Does not complain.
 /// Does not retry. Does not have opinions about your data format. It writes what you give it.
 ///
-/// Think of it as a very loyal golden retriever of a struct. You throw it data, it writes it.
-/// No judgment. Only service. And an occasional `flush()` at the end because manners matter.
+/// 🧠 Knowledge graph: Sinks are pure I/O abstractions now. The SinkWorker upstream handles
+/// transform + binary collect. FileSink just writes the final payload bytes to disk.
+/// Think of it as a very loyal golden retriever. You throw it data, it writes it.
 ///
-/// ⚠️  `File::create` truncates if the file exists. No warning. No backup. Just gone.
+/// ⚠️ `File::create` truncates if the file exists. No warning. No backup. Just gone.
 /// He who runs this without checking the output path, re-migrates in shame.
 #[derive(Debug)]
 pub(crate) struct FileSink {
@@ -286,25 +268,17 @@ impl FileSink {
 
 #[async_trait]
 impl Sink for FileSink {
-    /// 📥 Receive a batch of hits and write them all to the buffered file.
+    /// 📡 Write a fully rendered payload to the file. One write_all call. That's the whole job.
     ///
-    /// No cap, this function low-key carries the whole pipeline fr fr.
-    /// Every document that survives the source, the transformer, the throttler —
-    /// it all ends here. This function is the finish line. The destination.
-    /// The extremely anticlimactic `write_all` call at the end of the journey.
-    async fn receive(&mut self, batch: HitBatch) -> Result<()> {
-        // -- 🚀 they're heeere — like the movie but for data and significantly less terrifying
+    /// The SinkWorker already transformed and binary-collected. We just dump bytes to disk.
+    /// No parsing. No iterating over hits. No drama. Just I/O.
+    /// "What do you do?" "I write bytes." "That's it?" "That's everything." 🦆
+    async fn send(&mut self, payload: String) -> Result<()> {
         trace!(
-            "📬 {} hits just walked into the sink like they own the place. write them all down.",
-            batch.hits.len()
+            "📬 payload of {} bytes walked into the file sink — writing it all down",
+            payload.len()
         );
-        // -- 🔄 iterate and write — the most honest loop in this entire codebase.
-        // -- No retries. No backoff. No drama. Just write. One document at a time.
-        // -- Like a monk copying manuscripts, but faster and with fewer vows of silence.
-        for hit in batch.hits {
-            let source_buf = hit.source_buf;
-            self.file_buf.write_all(source_buf.as_bytes()).await?;
-        }
+        self.file_buf.write_all(payload.as_bytes()).await?;
         Ok(())
     }
 

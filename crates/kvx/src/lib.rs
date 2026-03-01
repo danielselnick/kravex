@@ -21,6 +21,7 @@ use crate::backends::in_mem::{InMemorySink, InMemorySource};
 use crate::backends::{SinkBackend, SourceBackend};
 use crate::supervisors::Supervisor;
 use crate::supervisors::config::{RuntimeConfig, SinkConfig, SourceConfig};
+use crate::transforms::DocumentTransformer;
 use anyhow::{Context, Result};
 use std::time::SystemTime;
 use tracing::info;
@@ -47,9 +48,15 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
         );
     }
 
+    // 🔄 Resolve the transform from source/sink config pair.
+    // 🧠 Knowledge graph: DocumentTransformer::from_configs() matches (source, sink) → transform.
+    // File→ES = RallyS3ToEs, File→File = Passthrough, InMemory→InMemory = Passthrough, etc.
+    let transformer =
+        DocumentTransformer::from_configs(&app_config.source_config, &app_config.sink_config);
+
     let supervisor = Supervisor::new(app_config.clone());
     supervisor
-        .start_workers(source_backend, sink_backends)
+        .start_workers(source_backend, sink_backends, transformer)
         .await?;
 
     info!(
@@ -124,6 +131,8 @@ mod tests {
     use super::*;
     use crate::supervisors::config::{RuntimeConfig, SinkConfig, SourceConfig};
 
+    /// 🧪 Full pipeline integration: InMemory→Passthrough→InMemory.
+    /// Four raw docs in, one binary-collected payload out. The whole journey.
     #[tokio::test]
     async fn the_one_where_four_docs_made_it_home_safely() -> Result<()> {
         let app_config = AppConfig {
@@ -139,12 +148,27 @@ mod tests {
         let sink_inner = InMemorySink::new().await?;
         let sink = SinkBackend::InMemory(sink_inner.clone());
 
-        let supervisor = Supervisor::new(app_config);
-        supervisor.start_workers(source, vec![sink]).await?;
+        // 🔄 InMemory→InMemory resolves to Passthrough transform
+        let transformer = DocumentTransformer::from_configs(
+            &app_config.source_config,
+            &app_config.sink_config,
+        );
 
+        let supervisor = Supervisor::new(app_config);
+        supervisor
+            .start_workers(source, vec![sink], transformer)
+            .await?;
+
+        // 📦 SinkWorker received 4 docs, transformed (passthrough), binary collected into 1 payload.
+        // Each doc gets a trailing \n, so payload = '{"doc":1}\n{"doc":2}\n{"doc":3}\n{"doc":4}\n'
         let received = sink_inner.received.lock().await;
-        assert_eq!(received.len(), 1, "Should have received exactly 1 batch");
-        assert_eq!(received[0].hits.len(), 4, "Batch should contain 4 hits");
+        assert_eq!(received.len(), 1, "Should have received exactly 1 payload");
+
+        let the_payload = &received[0];
+        let the_lines: Vec<&str> = the_payload.lines().collect();
+        assert_eq!(the_lines.len(), 4, "Payload should contain 4 lines (one per doc)");
+        assert_eq!(the_lines[0], r#"{"doc":1}"#);
+        assert_eq!(the_lines[3], r#"{"doc":4}"#);
 
         Ok(())
     }

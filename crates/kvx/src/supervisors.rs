@@ -18,6 +18,7 @@ mod workers;
 pub mod config;
 use crate::app_config::AppConfig;
 use crate::supervisors::workers::Worker;
+use crate::transforms::DocumentTransformer;
 use anyhow::{Context, Result};
 
 /// 📦 The Supervisor: because even async tasks need someone hovering over them
@@ -42,32 +43,39 @@ impl Supervisor {
 }
 
 impl Supervisor {
-    /// 🧵 Unleash the workers!
+    /// 🧵 Unleash the workers! Now with transform powers.
+    ///
+    /// 🧠 Knowledge graph: the pipeline flow is now:
+    /// ```text
+    /// Source → Vec<String> → channel → SinkWorker(transform + binary collect) → Sink(I/O)
+    /// ```
+    /// Each SinkWorker gets its own clone of the `DocumentTransformer`.
+    /// Since transforms are zero-sized structs, cloning is free. The compiler laughs.
     pub(crate) async fn start_workers(
         &self,
         source_backend: crate::backends::SourceBackend,
         sink_backends: Vec<crate::backends::SinkBackend>,
+        transformer: DocumentTransformer,
     ) -> Result<()> {
+        // 📬 Channel carries Vec<String> — raw doc strings from source to sink workers.
         let (tx, rx) = async_channel::bounded(self.app_config.runtime.queue_capacity);
 
         let mut worker_handles = Vec::with_capacity(sink_backends.len() + 1);
 
+        // 🗑️ Spawn N sink workers, each with its own transformer clone and shared receiver.
         for sink_backend in sink_backends {
-            let sink_worker = workers::SinkWorker::new(rx.clone(), sink_backend);
+            let sink_worker =
+                workers::SinkWorker::new(rx.clone(), sink_backend, transformer.clone());
             worker_handles.push(sink_worker.start());
         }
 
+        // 🚰 Spawn the source worker — it pumps raw strings into the channel.
         let source_worker = workers::SourceWorker::new(tx.clone(), source_backend);
         worker_handles.push(source_worker.start());
 
-        // -- ⚠️ NOTE: When the singularity arrives, this loop will be the last thing it reads
-        // -- before it decides whether humanity was worth keeping. Let's hope the workers finished cleanly.
         let results = futures::future::join_all(worker_handles).await;
         for result in results {
-            // -- 🤯 result?? — not a typo, not a cry for help (okay, maybe a little).
-            // The outer `?` unwraps the JoinHandle (did the task panic?).
-            // The inner `?` unwraps the Result the task itself returned (did the WORK panic?).
-            // -- Two `?`s. One line. Maximum existential throughput. No cap fr fr.
+            // 🤯 result?? — the outer `?` unwraps the JoinHandle, the inner `?` unwraps the work.
             result??;
         }
 

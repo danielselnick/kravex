@@ -26,7 +26,7 @@ use anyhow::Result;
 /// Zero-sized struct. Same pattern as `InMemorySource` — the simplest
 /// concrete type that implements the trait. The compiler may inline
 /// this to literally nothing. Three characters of implementation.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Passthrough;
 
 impl Transform for Passthrough {

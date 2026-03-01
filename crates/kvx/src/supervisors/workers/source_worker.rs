@@ -14,32 +14,29 @@
 
 use super::Worker;
 use crate::backends::{Source, SourceBackend};
-use crate::common::HitBatch;
 use anyhow::{Context, Result};
 use async_channel::Sender;
 use tokio::task::JoinHandle;
 use tracing::debug;
 
-/// 🚰 The SourceWorker: reads from a backend, sends to a channel.
+/// 🚰 The SourceWorker: reads raw strings from a backend, sends Vec<String> to the channel.
+///
+/// 🧠 Knowledge graph: Sources now return Vec<String> — raw document strings, no Hit wrappers.
+/// The channel carries Vec<String>. The SinkWorker downstream transforms and binary-collects.
 /// Like a barista, but for data. And less tips.
 #[derive(Debug)]
 pub(crate) struct SourceWorker {
-    tx: Sender<HitBatch>,
+    tx: Sender<Vec<String>>,
     source: SourceBackend,
 }
 
 impl SourceWorker {
-    /// 🏗️ Constructs a new SourceWorker.
+    /// 🏗️ Constructs a new SourceWorker — the headwaters of the pipeline.
     ///
-    /// Give it a sender (where the data goes) and a source backend (where the data comes from).
-    /// It will faithfully poll `next_batch()` like a golden retriever waiting by the door —
-    /// enthusiastic, tireless, and completely unaware that one day the door won't open.
-    ///
-    /// That day is when `hits.is_empty()`. The retriever goes home. The channel closes.
-    /// It's beautiful, in a way. Don't think about it too hard.
-    pub(crate) fn new(tx: Sender<HitBatch>, source: SourceBackend) -> Self {
-        // 📤 tx: the outbox. source: the inbox of the world.
-        // Together they make one very determined data funnel.
+    /// Give it a sender (where the raw strings go) and a source backend (where the data comes from).
+    /// It will faithfully poll `next_batch()` like a golden retriever waiting by the door.
+    /// Empty vec = the retriever goes home. The channel closes.
+    pub(crate) fn new(tx: Sender<Vec<String>>, source: SourceBackend) -> Self {
         Self { tx, source }
     }
 }
@@ -47,24 +44,21 @@ impl SourceWorker {
 impl Worker for SourceWorker {
     fn start(mut self) -> JoinHandle<Result<()>> {
         tokio::spawn(async move {
-            debug!("🚀 SourceWorker started pumping data...");
+            debug!("🚀 SourceWorker started pumping raw strings into the channel...");
             loop {
-                let batch_result = self
+                let raw_docs = self
                     .source
                     .next_batch()
                     .await
-                    .context("SourceWorker failed to get next batch")?;
+                    .context("💀 SourceWorker failed to get next batch — the well collapsed")?;
 
-                if batch_result.hits.is_empty() {
-                    debug!("🏁 SourceWorker received empty batch. Closing channel.");
+                if raw_docs.is_empty() {
+                    debug!("🏁 SourceWorker: empty batch = EOF. Closing channel. The well is dry.");
                     self.tx.close();
                     break;
                 } else {
-                    debug!(
-                        "📤 SourceWorker sending batch of {} hits",
-                        batch_result.hits.len()
-                    );
-                    self.tx.send(batch_result).await?;
+                    debug!("📤 SourceWorker sending {} raw docs to channel", raw_docs.len());
+                    self.tx.send(raw_docs).await?;
                 }
             }
             Ok(())

@@ -108,7 +108,7 @@ pub(crate) trait Transform: std::fmt::Debug {
 ///
 /// This is exactly how `SourceBackend::next_batch()` works.
 /// If it's good enough for I/O, it's good enough for transforms.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum DocumentTransformer {
     RallyS3ToEs(rally_s3_to_es::RallyS3ToEs),
     Passthrough(passthrough::Passthrough),

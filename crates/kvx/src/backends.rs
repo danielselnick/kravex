@@ -13,28 +13,33 @@
 //!
 //! 🦆 The duck is here because every file must have one. This is law. Do not question the duck.
 
-use crate::common::HitBatch;
 use anyhow::Result;
 use async_trait::async_trait;
 
 // ===== Source Trait and Backend Enum =====
 
-/// 🚰 A source that produces hits.
+/// 🚰 A source that produces raw document strings.
 ///
 /// Implement this trait and you too can be the origin of someone else's data problems.
 /// Guaranteed to dispense only the finest organic, free-range, artisanal JSON.
 ///
-/// # Contract
-/// - `next_batch` returns hits until the well runs dry, at which point it returns an empty batch.
-/// - What counts as "empty" is a philosophical question we've deferred to the implementor.
+/// # Contract 📜
+/// - `next_batch` returns `Vec<String>` of raw documents — no wrapping, no Hit structs, just strings.
+/// - Empty vec = source is exhausted. The well is dry. The golden retriever goes home.
 /// - The borrow checker demands `&mut self` because sources have state. And feelings. Mostly state.
+/// - Strings MUST NOT contain trailing newlines — the SinkWorker handles line boundaries.
+///
+/// # Knowledge Graph 🧠
+/// - Pattern: trait → concrete impls (FileSource, InMemorySource, ElasticsearchSource) → SourceBackend enum
+/// - SinkWorker downstream transforms each string via DocumentTransformer before sending to Sink
+/// - Source is a data faucet 🚿 — it pours, the pipeline catches
 #[async_trait]
 pub(crate) trait Source: std::fmt::Debug {
-    /// 📦 Fetch the next batch of hits from wherever the data lives.
+    /// 📦 Fetch the next batch of raw document strings.
     ///
-    /// Returns `Ok(HitBatch)` while data flows. Returns an empty batch when the tap runs dry.
+    /// Returns `Ok(Vec<String>)` while data flows. Returns an empty vec when the tap runs dry.
     /// Returns `Err(...)` when something has gone sideways, sidelong, or fully upside-down.
-    async fn next_batch(&mut self) -> Result<HitBatch>;
+    async fn next_batch(&mut self) -> Result<Vec<String>>;
 }
 
 pub(crate) mod elasticsearch;
@@ -64,7 +69,7 @@ pub(crate) enum SourceBackend {
 
 #[async_trait]
 impl Source for SourceBackend {
-    async fn next_batch(&mut self) -> Result<HitBatch> {
+    async fn next_batch(&mut self) -> Result<Vec<String>> {
         match self {
             SourceBackend::InMemory(i) => i.next_batch().await,
             SourceBackend::File(f) => f.next_batch().await,
@@ -75,22 +80,29 @@ impl Source for SourceBackend {
 
 // ===== Sink Trait and Backend Enum =====
 
-/// 🕳️ A sink that consumes hits.
+/// 🕳️ A sink that sends pre-rendered payloads — pure I/O, zero logic.
 ///
 /// The yin to the source's yang. The drain at the bottom of the pipeline tub.
-/// We promise not to drop (too many) of them — `close()` exists precisely
-/// because some sinks buffer internally and need a moment to compose themselves
-/// before the session ends. Like a contractor who needs five minutes to clean up
-/// after a job. Except this one actually shows up.
+/// Sinks are ONLY an abstraction for how to send the request — HTTP POST to /_bulk,
+/// write to file, stash in memory. They do not buffer. They do not transform.
+/// They receive the full rendered payload and send it. Like a postal worker who
+/// delivers the mail without reading it. (Unlike your actual postal worker, Kevin.)
 ///
-/// # Contract
-/// - `receive` accepts a batch and does something useful with it. Hopefully.
+/// # Contract 📜
+/// - `send` accepts a fully rendered payload string and writes/sends it. That's it.
 /// - `close` flushes, finalizes, and bids the data a fond farewell. MUST be called.
 ///   Skipping `close` is a bug. It is also considered rude.
+/// - Buffering, transforming, and binary collecting happen in the SinkWorker, NOT here.
+///
+/// # Knowledge Graph 🧠
+/// - Pattern: trait → concrete impls (FileSink, InMemorySink, ElasticsearchSink) → SinkBackend enum
+/// - SinkWorker does: transform → buffer → binary collect → call sink.send(payload)
+/// - Sink does: I/O. Just I/O. HTTP POST, file write, memory push. Nothing else.
+/// - Ancient proverb: "He who puts business logic in the Sink, debugs in production."
 #[async_trait]
 pub(crate) trait Sink: std::fmt::Debug {
-    /// 📥 Accept a batch of hits and write/forward/stash them somewhere meaningful.
-    async fn receive(&mut self, batch: HitBatch) -> Result<()>;
+    /// 📡 Send a fully rendered payload to the destination. I/O only. No questions asked.
+    async fn send(&mut self, payload: String) -> Result<()>;
     /// 🗑️ Flush, finalize, and release. Call this. Always. No exceptions. Not even on Fridays.
     async fn close(&mut self) -> Result<()>;
 }
@@ -112,11 +124,11 @@ pub(crate) enum SinkBackend {
 
 #[async_trait]
 impl Sink for SinkBackend {
-    async fn receive(&mut self, batch: HitBatch) -> Result<()> {
+    async fn send(&mut self, payload: String) -> Result<()> {
         match self {
-            SinkBackend::InMemory(sink) => sink.receive(batch).await,
-            SinkBackend::File(sink) => sink.receive(batch).await,
-            SinkBackend::Elasticsearch(sink) => sink.receive(batch).await,
+            SinkBackend::InMemory(sink) => sink.send(payload).await,
+            SinkBackend::File(sink) => sink.send(payload).await,
+            SinkBackend::Elasticsearch(sink) => sink.send(payload).await,
         }
     }
 
