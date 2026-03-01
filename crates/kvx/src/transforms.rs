@@ -52,6 +52,7 @@
 
 use crate::supervisors::config::{SinkConfig, SourceConfig};
 use anyhow::Result;
+use std::borrow::Cow;
 
 pub(crate) mod passthrough;
 pub(crate) mod rally_s3_to_es;
@@ -63,7 +64,7 @@ pub(crate) mod rally_s3_to_es;
 //  ╚══════════════════════════════════════════════════════╝
 // ============================================================
 
-/// 🔄 Transform — the one trait for format conversion.
+/// 🔄 Transform — the one trait for format conversion. Now with Cow powers! 🐄
 ///
 /// Exactly like [`Source`](crate::backends::Source) and [`Sink`](crate::backends::Sink):
 /// one trait, multiple concrete implementations, dispatched through an enum.
@@ -73,17 +74,24 @@ pub(crate) mod rally_s3_to_es;
 /// The [`DocumentTransformer`] enum wraps them all and dispatches via match.
 ///
 /// # Contract 📜
-/// - Input: owned `String` — raw document in the source's native format
-/// - Output: `String` — formatted for the sink's wire protocol
+/// - Input: `&'a str` — borrowed reference to a raw source page
+/// - Output: `Vec<Cow<'a, str>>` — items extracted from the page
+/// - `Cow::Borrowed` = zero-copy passthrough (the dream! the whole point!)
+/// - `Cow::Owned` = format conversion happened (Rally→ES bulk, etc.)
 /// - Transforms MUST produce valid output for the target system
 /// - Passthrough is allowed to skip validation (it doesn't parse)
 /// - Errors should be descriptive enough to debug at 3am during an incident
+///
+/// 🧠 Knowledge graph: the Cow enables zero-copy when source format == sink format.
+/// Passthrough returns `Cow::Borrowed(entire_page)` — literally a pointer. No alloc.
+/// RallyS3ToEs splits by `\n`, transforms each doc, returns `Vec<Cow::Owned(...)>`.
 pub(crate) trait Transform: std::fmt::Debug {
-    /// 🔄 Convert a raw source-format document into sink wire format.
+    /// 🔄 Transform a raw source page into sink-format items.
     ///
-    /// Ownership of `raw` transfers in — passthrough returns it as-is
-    /// (zero allocation), while format converters parse and re-serialize.
-    fn transform(&self, raw: String) -> Result<String>;
+    /// Returns `Vec<Cow<str>>` — borrowed when possible (passthrough), owned when
+    /// format conversion is needed. The Composer iterates these to build the final payload.
+    /// "He who borrows from the page, allocates not in vain." — Ancient Cow proverb 🐄
+    fn transform<'a>(&self, raw_source_page: &'a str) -> Result<Vec<Cow<'a, str>>>;
 }
 
 // ============================================================
@@ -165,12 +173,13 @@ impl DocumentTransformer {
 
 /// `DocumentTransformer` dispatches to the concrete type inside each variant.
 /// Same pattern as `impl Source for SourceBackend` in `backends.rs`.
+/// Now with lifetime parameters because zero-copy demands it. The borrow checker is pleased. 🐄
 impl Transform for DocumentTransformer {
     #[inline]
-    fn transform(&self, raw: String) -> Result<String> {
+    fn transform<'a>(&self, raw_source_page: &'a str) -> Result<Vec<Cow<'a, str>>> {
         match self {
-            Self::RallyS3ToEs(t) => t.transform(raw),
-            Self::Passthrough(t) => t.transform(raw),
+            Self::RallyS3ToEs(t) => t.transform(raw_source_page),
+            Self::Passthrough(t) => t.transform(raw_source_page),
         }
     }
 }
@@ -182,7 +191,7 @@ mod tests {
     use crate::backends::ElasticsearchSinkConfig;
     use crate::supervisors::config::{CommonSinkConfig, CommonSourceConfig};
 
-    /// 🧪 Resolve File→ES to RallyS3ToEs, then transform.
+    /// 🧪 Resolve File→ES to RallyS3ToEs, then transform a single-doc page.
     #[test]
     fn the_one_where_config_enums_resolve_to_the_right_transform() -> Result<()> {
         // 🔧 Build source/sink configs like the real pipeline does
@@ -206,15 +215,18 @@ mod tests {
             "File → ES should resolve to RallyS3ToEs"
         );
 
-        // 🔄 Transform a Rally blob through it
-        let rally_blob = serde_json::json!({
+        // 🔄 Transform a Rally blob page (single doc) through it
+        let rally_page = serde_json::json!({
             "ObjectID": 42069,
             "Name": "Test story",
             "_rallyAPIMajor": "2"
-        });
-        let the_output = the_transformer.transform(rally_blob.to_string())?;
+        })
+        .to_string();
+        let the_items = the_transformer.transform(&rally_page)?;
 
-        // ✅ Should be ES bulk format
+        // ✅ Single doc page → one item, which is ES bulk (action\nsource)
+        assert_eq!(the_items.len(), 1, "Single-doc page → one item");
+        let the_output = the_items[0].as_ref();
         let the_lines: Vec<&str> = the_output.split('\n').collect();
         assert_eq!(the_lines.len(), 2, "ES bulk = two lines");
         let the_action: serde_json::Value = serde_json::from_str(the_lines[0])?;
@@ -223,7 +235,7 @@ mod tests {
         Ok(())
     }
 
-    /// 🧪 Resolve File→File to Passthrough.
+    /// 🧪 Resolve File→File to Passthrough — returns borrowed Cow (zero-copy!).
     #[test]
     fn the_one_where_file_to_file_resolves_to_passthrough() -> Result<()> {
         let source = SourceConfig::File(FileSourceConfig {
@@ -238,10 +250,13 @@ mod tests {
         let the_transformer = DocumentTransformer::from_configs(&source, &sink);
         assert!(matches!(the_transformer, DocumentTransformer::Passthrough(_)));
 
-        // 🔄 Passthrough returns input unchanged
-        let the_input = r#"{"whatever":"goes"}"#.to_string();
-        let the_output = the_transformer.transform(the_input.clone())?;
-        assert_eq!(the_output, the_input);
+        // 🔄 Passthrough returns the entire page as one borrowed Cow item
+        let the_input = r#"{"whatever":"goes"}"#;
+        let the_items = the_transformer.transform(the_input)?;
+        assert_eq!(the_items.len(), 1);
+        assert_eq!(the_items[0].as_ref(), the_input);
+        // 🐄 Verify it's actually borrowed — the whole point of the Cow revolution!
+        assert!(matches!(the_items[0], Cow::Borrowed(_)), "Passthrough must borrow, not clone!");
 
         Ok(())
     }
@@ -255,7 +270,7 @@ mod tests {
         assert!(matches!(the_transformer, DocumentTransformer::Passthrough(_)));
     }
 
-    /// 🧪 Full pipeline integration: resolve + transform Rally→ES.
+    /// 🧪 Full pipeline integration: resolve + transform Rally→ES multi-doc page.
     #[test]
     fn the_one_where_rally_json_flies_direct_to_es_bulk_via_config_resolution() -> Result<()> {
         let source = SourceConfig::File(FileSourceConfig {
@@ -273,29 +288,41 @@ mod tests {
 
         let the_transformer = DocumentTransformer::from_configs(&source, &sink);
 
-        let rally_blob = serde_json::json!({
-            "ObjectID": 99999,
-            "FormattedID": "US001",
-            "Name": "The one that made it through the whole pipeline",
-            "_rallyAPIMajor": "2",
-            "_ref": "https://rally1.rallydev.com/slm/webservice/v2.0/hr/99999",
-            "_CreatedAt": "2024-01-01T00:00:00.000Z"
-        });
+        // 📄 Build a two-doc page (newline-separated Rally blobs)
+        let rally_page = format!(
+            "{}\n{}",
+            serde_json::json!({
+                "ObjectID": 99999,
+                "FormattedID": "US001",
+                "Name": "The one that made it through the whole pipeline",
+                "_rallyAPIMajor": "2",
+                "_ref": "https://rally1.rallydev.com/slm/webservice/v2.0/hr/99999",
+                "_CreatedAt": "2024-01-01T00:00:00.000Z"
+            }),
+            serde_json::json!({
+                "ObjectID": 88888,
+                "Name": "The sequel nobody asked for"
+            })
+        );
 
-        let the_output = the_transformer.transform(rally_blob.to_string())?;
-        let the_lines: Vec<&str> = the_output.split('\n').collect();
+        let the_items = the_transformer.transform(&rally_page)?;
+        assert_eq!(the_items.len(), 2, "Two-doc page → two items");
+
+        // ✅ First doc
+        let the_lines: Vec<&str> = the_items[0].as_ref().split('\n').collect();
         assert_eq!(the_lines.len(), 2);
-
-        // 📋 Action line
         let the_action: serde_json::Value = serde_json::from_str(the_lines[0])?;
         assert_eq!(the_action["index"]["_id"], "99999");
-
-        // 📦 Source line — metadata stripped
         let the_source: serde_json::Value = serde_json::from_str(the_lines[1])?;
         assert!(the_source.get("_rallyAPIMajor").is_none());
         assert!(the_source.get("_ref").is_none());
         assert!(the_source.get("_CreatedAt").is_none());
         assert_eq!(the_source["Name"], "The one that made it through the whole pipeline");
+
+        // ✅ Second doc
+        let the_lines2: Vec<&str> = the_items[1].as_ref().split('\n').collect();
+        let the_action2: serde_json::Value = serde_json::from_str(the_lines2[0])?;
+        assert_eq!(the_action2["index"]["_id"], "88888");
 
         Ok(())
     }

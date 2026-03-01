@@ -20,23 +20,29 @@
 
 use super::Transform;
 use anyhow::Result;
+use std::borrow::Cow;
 
-/// 🚶 Passthrough — returns input unchanged. `Ok(raw)`. That's the whole impl.
+/// 🚶 Passthrough — returns the entire page as a borrowed Cow. Zero alloc. Zero copy. Zero drama.
 ///
 /// Zero-sized struct. Same pattern as `InMemorySource` — the simplest
 /// concrete type that implements the trait. The compiler may inline
-/// this to literally nothing. Three characters of implementation.
+/// this to literally nothing. One `Cow::Borrowed` and we're done.
+///
+/// 🧠 Knowledge graph: Passthrough returns `vec![Cow::Borrowed(raw_source_page)]` — the page
+/// passes through as-is. The Composer then assembles it into the wire format. For NDJSON→NDJSON
+/// scenarios (e.g., file-to-file copy), this means true zero-copy from source buffer to sink payload.
+/// The borrow checker isn't just satisfied — it's *proud*. 🐄
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Passthrough;
 
 impl Transform for Passthrough {
-    /// 🔄 Identity function. `f(x) = x`. The mathematicians would be proud.
-    /// The ownership transfers directly — no allocation, no parse, no copy.
+    /// 🔄 Identity function. `f(x) = [&x]`. The mathematicians would be proud.
+    /// Returns the entire page as one borrowed Cow item — no allocation, no parse, no copy.
+    /// "What do you do?" "I borrow the input." "That's it?" "That's everything." 🐄
     #[inline]
-    fn transform(&self, raw: String) -> Result<String> {
-        // -- 🚶 And just like that... it's done.
-        // -- "What do you do?" "I return the input." "That's it?" "That's everything."
-        Ok(raw)
+    fn transform<'a>(&self, raw_source_page: &'a str) -> Result<Vec<Cow<'a, str>>> {
+        // -- 🚶 TSA PreCheck for data. Walk right through. Don't even slow down.
+        Ok(vec![Cow::Borrowed(raw_source_page)])
     }
 }
 
@@ -46,24 +52,41 @@ mod tests {
 
     #[test]
     fn the_one_where_passthrough_is_the_identity_function() -> Result<()> {
-        // 🧪 f(x) = x. If this fails, mathematics is broken.
-        let the_input = r#"{"untouched":"perfection"}"#.to_string();
-        let the_output = Passthrough.transform(the_input.clone())?;
-        assert_eq!(the_output, the_input);
+        // 🧪 f(x) = [&x]. If this fails, mathematics is broken. And so is Cow.
+        let the_input = r#"{"untouched":"perfection"}"#;
+        let the_items = Passthrough.transform(the_input)?;
+        assert_eq!(the_items.len(), 1);
+        assert_eq!(the_items[0].as_ref(), the_input);
+        // 🐄 The WHOLE POINT: verify it's actually borrowed, not cloned
+        assert!(matches!(the_items[0], Cow::Borrowed(_)));
         Ok(())
     }
 
     #[test]
     fn the_one_where_empty_string_passes_through() -> Result<()> {
-        assert_eq!(Passthrough.transform(String::new())?, "");
+        let the_items = Passthrough.transform("")?;
+        assert_eq!(the_items.len(), 1);
+        assert_eq!(the_items[0].as_ref(), "");
         Ok(())
     }
 
     #[test]
     fn the_one_where_non_json_also_passes_because_we_dont_validate() -> Result<()> {
-        // 🧪 Passthrough doesn't parse. Doesn't validate. Doesn't care.
-        let not_json = "this is not json and that's fine".to_string();
-        assert_eq!(Passthrough.transform(not_json.clone())?, not_json);
+        // 🧪 Passthrough doesn't parse. Doesn't validate. Doesn't care. Doesn't allocate.
+        let not_json = "this is not json and that's fine";
+        let the_items = Passthrough.transform(not_json)?;
+        assert_eq!(the_items[0].as_ref(), not_json);
+        assert!(matches!(the_items[0], Cow::Borrowed(_)), "Still borrowed! Still free!");
+        Ok(())
+    }
+
+    #[test]
+    fn the_one_where_multi_line_page_stays_as_one_item() -> Result<()> {
+        // 🧪 Passthrough treats the whole page as one item — it's the Composer's job to split
+        let multi_line = "line1\nline2\nline3";
+        let the_items = Passthrough.transform(multi_line)?;
+        assert_eq!(the_items.len(), 1, "Passthrough doesn't split — one page, one item");
+        assert_eq!(the_items[0].as_ref(), multi_line);
         Ok(())
     }
 }

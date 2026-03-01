@@ -135,3 +135,23 @@ pub enum SinkConfig {
     File(FileSinkConfig),
     InMemory(()),
 }
+
+impl SinkConfig {
+    /// 📏 Extract `max_request_size_bytes` from whichever sink config variant we are.
+    ///
+    /// Each backend sink config embeds a `CommonSinkConfig` with this field.
+    /// InMemory has no config struct, so it gets the `CommonSinkConfig::default()` value.
+    /// "He who queries the config, avoids the match in the hot path." — Ancient proverb 📜
+    ///
+    /// 🧠 Knowledge graph: SinkWorker uses this to know when to flush its page buffer.
+    /// The buffer accumulates raw pages until their total byte size approaches this limit,
+    /// then the Composer transforms+assembles them into a single payload for the sink.
+    pub fn max_request_size_bytes(&self) -> usize {
+        match self {
+            SinkConfig::Elasticsearch(es) => es.common_config.max_request_size_bytes,
+            SinkConfig::File(f) => f.common_config.max_request_size_bytes,
+            // 🧠 InMemory gets the default — it's testing, we don't limit 🦆
+            SinkConfig::InMemory(_) => CommonSinkConfig::default().max_request_size_bytes,
+        }
+    }
+}

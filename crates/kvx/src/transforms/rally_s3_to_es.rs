@@ -27,6 +27,7 @@
 use super::Transform;
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::borrow::Cow;
 
 /// 🗑️ Rally API metadata fields stripped during transform.
 ///
@@ -61,47 +62,69 @@ const THE_METADATA_FIELDS_WE_DONT_NEED: &[&str] = &[
 pub(crate) struct RallyS3ToEs;
 
 impl Transform for RallyS3ToEs {
-    /// 🔄 Rally JSON in, ES bulk NDJSON out. No intermediate. No layover.
+    /// 🔄 Rally JSON page in, ES bulk items out. Splits by `\n`, transforms each doc.
+    ///
+    /// Returns `Vec<Cow::Owned(...)>` — each item is an ES bulk pair (action\nsource).
+    /// Owned because we parse, strip metadata, and re-serialize. No zero-copy here,
+    /// but that's okay — Rally→ES is a format *conversion*, not a passthrough.
     ///
     /// # Errors
-    /// 💀 Returns error if `raw` is not valid JSON.
+    /// 💀 Returns error if any line in the page is not valid JSON.
     #[inline]
-    fn transform(&self, raw: String) -> Result<String> {
-        // 🔬 Phase 1: Parse the Rally JSON blob
-        let mut doc: Value = serde_json::from_str(&raw).context(
-            "💀 Rally JSON parse failed — the blob from S3 is not valid JSON. \
-             Either the export is corrupted, someone uploaded a JPEG to the JSON bucket, \
-             or Mercury is in retrograde. Check the source data and try again.",
-        )?;
-
-        // 🎯 Phase 2: Extract ObjectID → _id
-        // Rally can't decide if ObjectID is a number or a string. We handle both.
-        let the_document_identity = doc.get("ObjectID").map(|oid| match oid {
-            Value::Number(n) => n.to_string(),
-            Value::String(s) => s.clone(),
-            // 🦆 Bool? Array? Null? Just stringify it and move on.
-            honestly_who_knows => honestly_who_knows.to_string(),
-        });
-
-        // 🗑️ Phase 3: Strip Rally API metadata (top-level only)
-        if let Value::Object(ref mut map) = doc {
-            for doomed_field in THE_METADATA_FIELDS_WE_DONT_NEED {
-                map.remove(*doomed_field);
-            }
-        }
-
-        // 📦 Phase 4: Re-serialize cleaned body
-        let the_cleaned_body = serde_json::to_string(&doc).context(
-            "💀 Failed to re-serialize cleaned Rally JSON. \
-             The JSON went in valid and came out... not. File a bug against physics.",
-        )?;
-
-        // 📡 Phase 5: Build ES bulk action line
-        let the_action_line = build_es_action_line(the_document_identity.as_deref());
-
-        // 🎯 Phase 6: Two sacred lines, newline separated
-        Ok(format!("{}\n{}", the_action_line, the_cleaned_body))
+    fn transform<'a>(&self, raw_source_page: &'a str) -> Result<Vec<Cow<'a, str>>> {
+        // 📄 Split page by newlines, transform each non-empty line
+        raw_source_page
+            .split('\n')
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                transform_single_rally_doc(line).map(Cow::Owned)
+            })
+            .collect()
     }
+}
+
+/// 🔧 Transform a single Rally JSON doc into ES bulk format (action\nsource).
+///
+/// 🧠 Extracted from the old `Transform::transform()` impl so the page-splitting
+/// logic in `transform()` can call this per-line. Same 6-phase pipeline:
+/// parse → extract _id → strip metadata → re-serialize → build action → format.
+///
+/// "He who extracts a helper, tests it twice." — Ancient refactoring proverb 📜
+fn transform_single_rally_doc(raw: &str) -> Result<String> {
+    // 🔬 Phase 1: Parse the Rally JSON blob
+    let mut doc: Value = serde_json::from_str(raw).context(
+        "💀 Rally JSON parse failed — the blob from S3 is not valid JSON. \
+         Either the export is corrupted, someone uploaded a JPEG to the JSON bucket, \
+         or Mercury is in retrograde. Check the source data and try again.",
+    )?;
+
+    // 🎯 Phase 2: Extract ObjectID → _id
+    // Rally can't decide if ObjectID is a number or a string. We handle both.
+    let the_document_identity = doc.get("ObjectID").map(|oid| match oid {
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => s.clone(),
+        // 🦆 Bool? Array? Null? Just stringify it and move on.
+        honestly_who_knows => honestly_who_knows.to_string(),
+    });
+
+    // 🗑️ Phase 3: Strip Rally API metadata (top-level only)
+    if let Value::Object(ref mut map) = doc {
+        for doomed_field in THE_METADATA_FIELDS_WE_DONT_NEED {
+            map.remove(*doomed_field);
+        }
+    }
+
+    // 📦 Phase 4: Re-serialize cleaned body
+    let the_cleaned_body = serde_json::to_string(&doc).context(
+        "💀 Failed to re-serialize cleaned Rally JSON. \
+         The JSON went in valid and came out... not. File a bug against physics.",
+    )?;
+
+    // 📡 Phase 5: Build ES bulk action line
+    let the_action_line = build_es_action_line(the_document_identity.as_deref());
+
+    // 🎯 Phase 6: Two sacred lines, newline separated
+    Ok(format!("{}\n{}", the_action_line, the_cleaned_body))
 }
 
 /// 🏗️ Build an ES bulk `{"index":{...}}` action line.
@@ -158,9 +181,9 @@ mod tests {
 
     #[test]
     fn the_one_where_rally_json_becomes_es_bulk_in_one_shot() -> Result<()> {
-        // 🧪 The headline act. Full Rally blob → ES bulk. Direct.
+        // 🧪 The headline act. Single-doc page → one ES bulk item. Direct.
         let the_transformer = RallyS3ToEs;
-        let rally_blob = serde_json::json!({
+        let rally_page = serde_json::json!({
             "ObjectID": 12345,
             "FormattedID": "US789",
             "Name": "As a user, I want to migrate data without crying",
@@ -172,11 +195,14 @@ mod tests {
             "_objectVersion": "7",
             "_CreatedAt": "2023-01-15T10:00:00.000Z",
             "ScheduleState": "Accepted"
-        });
+        })
+        .to_string();
 
-        let the_output = the_transformer.transform(rally_blob.to_string())?;
+        let the_items = the_transformer.transform(&rally_page)?;
+        assert_eq!(the_items.len(), 1, "Single-doc page → one item");
+
+        let the_output = the_items[0].as_ref();
         let the_lines: Vec<&str> = the_output.split('\n').collect();
-
         assert_eq!(the_lines.len(), 2, "ES bulk = two lines, always");
 
         // 📋 Action line
@@ -194,44 +220,57 @@ mod tests {
     }
 
     #[test]
+    fn the_one_where_multi_doc_page_produces_multiple_items() -> Result<()> {
+        // 🧪 Two-doc page → two items. The page-splitting works!
+        let rally_page = format!(
+            "{}\n{}",
+            serde_json::json!({"ObjectID": 111, "Name": "first"}),
+            serde_json::json!({"ObjectID": 222, "Name": "second"})
+        );
+        let the_items = RallyS3ToEs.transform(&rally_page)?;
+        assert_eq!(the_items.len(), 2, "Two docs on the page → two items");
+        // 🐄 Both should be Owned — Rally→ES is a conversion, not passthrough
+        assert!(matches!(the_items[0], Cow::Owned(_)));
+        assert!(matches!(the_items[1], Cow::Owned(_)));
+        Ok(())
+    }
+
+    #[test]
     fn the_one_where_string_object_id_works() -> Result<()> {
-        let the_output = RallyS3ToEs.transform(
-            serde_json::json!({"ObjectID": "67890", "Name": "test"}).to_string(),
-        )?;
+        let page = serde_json::json!({"ObjectID": "67890", "Name": "test"}).to_string();
+        let the_items = RallyS3ToEs.transform(&page)?;
         let the_action: serde_json::Value =
-            serde_json::from_str(the_output.split('\n').next().unwrap())?;
+            serde_json::from_str(the_items[0].as_ref().split('\n').next().unwrap())?;
         assert_eq!(the_action["index"]["_id"], "67890");
         Ok(())
     }
 
     #[test]
     fn the_one_where_no_object_id_produces_empty_action() -> Result<()> {
-        let the_output = RallyS3ToEs.transform(
-            serde_json::json!({"Name": "no identity"}).to_string(),
-        )?;
+        let page = serde_json::json!({"Name": "no identity"}).to_string();
+        let the_items = RallyS3ToEs.transform(&page)?;
         let the_action: serde_json::Value =
-            serde_json::from_str(the_output.split('\n').next().unwrap())?;
+            serde_json::from_str(the_items[0].as_ref().split('\n').next().unwrap())?;
         assert_eq!(the_action["index"], serde_json::json!({}));
         Ok(())
     }
 
     #[test]
     fn the_one_where_invalid_json_returns_error() {
-        assert!(RallyS3ToEs.transform("not json".to_string()).is_err());
+        assert!(RallyS3ToEs.transform("not json").is_err());
     }
 
     #[test]
     fn the_one_where_nested_refs_survive_the_top_level_purge() -> Result<()> {
-        let the_output = RallyS3ToEs.transform(
-            serde_json::json!({
-                "ObjectID": 11111,
-                "_rallyAPIMajor": "2",
-                "Project": {"_ref": "https://rally1.rallydev.com/project/222", "Name": "Alpha"}
-            })
-            .to_string(),
-        )?;
+        let page = serde_json::json!({
+            "ObjectID": 11111,
+            "_rallyAPIMajor": "2",
+            "Project": {"_ref": "https://rally1.rallydev.com/project/222", "Name": "Alpha"}
+        })
+        .to_string();
+        let the_items = RallyS3ToEs.transform(&page)?;
         let the_source: serde_json::Value =
-            serde_json::from_str(the_output.split('\n').nth(1).unwrap())?;
+            serde_json::from_str(the_items[0].as_ref().split('\n').nth(1).unwrap())?;
         assert!(the_source.get("_rallyAPIMajor").is_none(), "Top-level stripped");
         assert!(the_source["Project"]["_ref"].is_string(), "Nested survives");
         Ok(())
@@ -239,11 +278,10 @@ mod tests {
 
     #[test]
     fn the_one_where_special_chars_in_id_get_escaped() -> Result<()> {
-        let the_output = RallyS3ToEs.transform(
-            serde_json::json!({"ObjectID": "doc\"with\\quotes"}).to_string(),
-        )?;
+        let page = serde_json::json!({"ObjectID": "doc\"with\\quotes"}).to_string();
+        let the_items = RallyS3ToEs.transform(&page)?;
         let parsed: serde_json::Value =
-            serde_json::from_str(the_output.split('\n').next().unwrap())?;
+            serde_json::from_str(the_items[0].as_ref().split('\n').next().unwrap())?;
         assert_eq!(parsed["index"]["_id"], "doc\"with\\quotes");
         Ok(())
     }
@@ -254,5 +292,17 @@ mod tests {
         assert_eq!(escape_json_string(r#"has"quotes"#), r#"has\"quotes"#);
         assert_eq!(escape_json_string("has\\backslash"), "has\\\\backslash");
         assert_eq!(escape_json_string("has\nnewline"), "has\\nnewline");
+    }
+
+    #[test]
+    fn the_one_where_empty_lines_in_page_are_skipped() -> Result<()> {
+        // 🧪 Pages may have trailing newlines or blank lines — they should be ignored
+        let page = format!("{}\n\n{}\n",
+            serde_json::json!({"ObjectID": 1}),
+            serde_json::json!({"ObjectID": 2})
+        );
+        let the_items = RallyS3ToEs.transform(&page)?;
+        assert_eq!(the_items.len(), 2, "Empty lines skipped, two real docs survive");
+        Ok(())
     }
 }

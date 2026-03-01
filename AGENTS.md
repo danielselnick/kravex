@@ -209,5 +209,31 @@ Before commits:
 1) Actual code changes
 2) Post process to ensure comedy laws are adhered
 
+# File/module ordering
+This is the order in which different types of code or aspects must appear within a file:
+1) trait declarations
+  ex: pub trait MyTrait { fn my_trait_method(&self, my_trait_arg: arg_type) -> Result<()>; }
+
+When something has a logical grouping, keep it together;
+Ex: Grouped together, in this order: ElasticsearchSourceConfig, ElasticsearchSource, impl Source for ElasticsearchSource, impl ElasticsearchSource
+  and then ElasticSearchSinkConfig, ElasticSearchSink, impl Sink for ElasticsearchSink, impl ElasticsearchSink
+  Such that one part of the file is one type, and the second half of the file is for the other type
+2) config, configuration structs
+  ex: pub struct MyConfig { my_config_value: usize}
+
+3) enum definitions:
+  ex: pub enum MyEnum { Value1, Value 2 }
+4) enum method trait implementations
+  ex: impl MyTrait for MyEnum {}
+5) enum method implementations
+  ex: impl MyEnum {}
+
+6) struct definitions (just the properties, fn are later)
+  ex: pub struct MyStruct { my_stateful_value: usize }
+7) struct method trait implementations
+  ex: impl MyTrait for MyStruct {}
+8) struct method implementations
+  ex: impl MyStruct {}
+
 # Note from HUMAN:
 i pray this doesn't back fire
