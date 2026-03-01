@@ -17,7 +17,9 @@ mod workers;
 // -- it's like a parenting book — everyone has opinions, might as well take config for it
 pub mod config;
 use crate::app_config::AppConfig;
+use crate::composers::ComposerBackend;
 use crate::supervisors::workers::Worker;
+use crate::transforms::DocumentTransformer;
 use anyhow::{Context, Result};
 
 /// 📦 The Supervisor: because even async tasks need someone hovering over them
@@ -42,32 +44,47 @@ impl Supervisor {
 }
 
 impl Supervisor {
-    /// 🧵 Unleash the workers!
+    /// 🧵 Unleash the workers! Now with Composer powers and page buffering.
+    ///
+    /// 🧠 Knowledge graph: the pipeline flow is now:
+    /// ```text
+    /// Source.next_page() → channel(String) → SinkWorker(buffer pages → composer.compose → sink.send) → Sink(I/O)
+    /// ```
+    /// Each SinkWorker gets its own clone of the `DocumentTransformer` and `ComposerBackend`.
+    /// Since transforms and composers are zero-sized structs, cloning is free.
+    /// The Composer handles both transformation AND assembly — the Cow lives there. 🐄
     pub(crate) async fn start_workers(
         &self,
         source_backend: crate::backends::SourceBackend,
         sink_backends: Vec<crate::backends::SinkBackend>,
+        transformer: DocumentTransformer,
+        composer: ComposerBackend,
+        max_request_size_bytes: usize,
     ) -> Result<()> {
+        // 📬 Channel carries String — raw pages from source to sink workers.
         let (tx, rx) = async_channel::bounded(self.app_config.runtime.queue_capacity);
 
         let mut worker_handles = Vec::with_capacity(sink_backends.len() + 1);
 
+        // 🗑️ Spawn N sink workers, each with its own transformer + composer clones.
         for sink_backend in sink_backends {
-            let sink_worker = workers::SinkWorker::new(rx.clone(), sink_backend);
+            let sink_worker = workers::SinkWorker::new(
+                rx.clone(),
+                sink_backend,
+                transformer.clone(),
+                composer.clone(),
+                max_request_size_bytes,
+            );
             worker_handles.push(sink_worker.start());
         }
 
+        // 🚰 Spawn the source worker — it pumps raw pages into the channel.
         let source_worker = workers::SourceWorker::new(tx.clone(), source_backend);
         worker_handles.push(source_worker.start());
 
-        // -- ⚠️ NOTE: When the singularity arrives, this loop will be the last thing it reads
-        // -- before it decides whether humanity was worth keeping. Let's hope the workers finished cleanly.
         let results = futures::future::join_all(worker_handles).await;
         for result in results {
-            // -- 🤯 result?? — not a typo, not a cry for help (okay, maybe a little).
-            // The outer `?` unwraps the JoinHandle (did the task panic?).
-            // The inner `?` unwraps the Result the task itself returned (did the WORK panic?).
-            // -- Two `?`s. One line. Maximum existential throughput. No cap fr fr.
+            // 🤯 result?? — the outer `?` unwraps the JoinHandle, the inner `?` unwraps the work.
             result??;
         }
 

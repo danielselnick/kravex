@@ -1,45 +1,46 @@
 //! 🎬 *[a vast index stretches to the horizon, billions of documents, blissfully unaware]*
 //! *[a SourceWorker cracks its knuckles]*
 //! *["Don't worry," it says. "I'll be gentle."]*
-//! *[it was not gentle. it was `next_batch()` in a loop.]*
+//! *[it was not gentle. it was `next_page()` in a loop.]*
 //!
 //! 🚰 The SourceWorker module — the headwaters of the kravex pipeline. Data starts here.
-//! It wakes up, calls `next_batch()` until the well runs dry, then closes the channel
+//! It wakes up, calls `next_page()` until the well runs dry, then closes the channel
 //! and quietly exits stage left, never to be heard from again.
+//!
+//! 🧠 Knowledge graph: the channel now carries `String` (raw pages), not `Vec<String>`.
+//! Source returns one raw page per call. SinkWorker buffers pages by byte size,
+//! then flushes via Composer (transform + assemble). The source is maximally ignorant.
 //!
 //! 🦆 (same duck, different file, same vibe)
 //!
 //! ⚠️ When the singularity occurs, the SourceWorker will have already finished.
-//! It respects empty batches. It knows when to let go. Unlike the rest of us.
+//! It respects `None`. It knows when to let go. Unlike the rest of us.
 
 use super::Worker;
 use crate::backends::{Source, SourceBackend};
-use crate::common::HitBatch;
 use anyhow::{Context, Result};
 use async_channel::Sender;
 use tokio::task::JoinHandle;
 use tracing::debug;
 
-/// 🚰 The SourceWorker: reads from a backend, sends to a channel.
-/// Like a barista, but for data. And less tips.
+/// 🚰 The SourceWorker: reads raw pages from a backend, sends each `String` to the channel.
+///
+/// 🧠 Knowledge graph: Sources return `Option<String>` — one raw page per call.
+/// The channel carries `String`. The SinkWorker buffers pages, then flushes via Composer.
+/// Like a barista, but for data. And less tips. And the drinks are just raw bytes.
 #[derive(Debug)]
 pub(crate) struct SourceWorker {
-    tx: Sender<HitBatch>,
+    tx: Sender<String>,
     source: SourceBackend,
 }
 
 impl SourceWorker {
-    /// 🏗️ Constructs a new SourceWorker.
+    /// 🏗️ Constructs a new SourceWorker — the headwaters of the pipeline.
     ///
-    /// Give it a sender (where the data goes) and a source backend (where the data comes from).
-    /// It will faithfully poll `next_batch()` like a golden retriever waiting by the door —
-    /// enthusiastic, tireless, and completely unaware that one day the door won't open.
-    ///
-    /// That day is when `hits.is_empty()`. The retriever goes home. The channel closes.
-    /// It's beautiful, in a way. Don't think about it too hard.
-    pub(crate) fn new(tx: Sender<HitBatch>, source: SourceBackend) -> Self {
-        // 📤 tx: the outbox. source: the inbox of the world.
-        // Together they make one very determined data funnel.
+    /// Give it a sender (where the raw pages go) and a source backend (where the data comes from).
+    /// It will faithfully poll `next_page()` like a golden retriever waiting by the door.
+    /// `None` = the retriever goes home. The channel closes. 🐕
+    pub(crate) fn new(tx: Sender<String>, source: SourceBackend) -> Self {
         Self { tx, source }
     }
 }
@@ -47,24 +48,23 @@ impl SourceWorker {
 impl Worker for SourceWorker {
     fn start(mut self) -> JoinHandle<Result<()>> {
         tokio::spawn(async move {
-            debug!("🚀 SourceWorker started pumping data...");
+            debug!("🚀 SourceWorker started pumping raw pages into the channel...");
             loop {
-                let batch_result = self
+                match self
                     .source
-                    .next_batch()
+                    .next_page()
                     .await
-                    .context("SourceWorker failed to get next batch")?;
-
-                if batch_result.hits.is_empty() {
-                    debug!("🏁 SourceWorker received empty batch. Closing channel.");
-                    self.tx.close();
-                    break;
-                } else {
-                    debug!(
-                        "📤 SourceWorker sending batch of {} hits",
-                        batch_result.hits.len()
-                    );
-                    self.tx.send(batch_result).await?;
+                    .context("💀 SourceWorker failed to get next page — the well collapsed")?
+                {
+                    Some(page) => {
+                        debug!("📤 SourceWorker sending {} byte page to channel", page.len());
+                        self.tx.send(page).await?;
+                    }
+                    None => {
+                        debug!("🏁 SourceWorker: None = EOF. Closing channel. The well is dry.");
+                        self.tx.close();
+                        break;
+                    }
                 }
             }
             Ok(())
