@@ -26,7 +26,7 @@ pub(crate) mod source;
 // Convenience is a feature. So is not typing "backends::file::" fourteen times per file.
 // 🧠 CommonSinkConfig/CommonSourceConfig live here too — they're backend-primitive types
 // shared by every backend config struct. app_config imports them from here to avoid 🔄 circular deps.
-pub(crate) use common_config::{CommonSinkConfig, CommonSourceConfig};
+pub(crate) use common_config::{CommonSinkConfig, CommonSourceConfig, ThrottleConfig};
 pub(crate) use elasticsearch::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
 pub(crate) use file::{FileSinkConfig, FileSourceConfig};
 pub(crate) use s3_rally::{S3RallySourceConfig, RallyTrack};

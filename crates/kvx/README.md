@@ -15,7 +15,8 @@ Core library for kravex — the data migration engine. Raw pages, Cow-powered ze
 - **Modules**:
   - `app_config` — `AppConfig`, `RuntimeConfig`, `SourceConfig`, `SinkConfig` (Figment-based config loading; owns all top-level config enums)
   - `backends` — backend wiring + re-exports; includes `CommonSinkConfig`, `CommonSourceConfig` (backend-shared config primitives)
-  - `backends/common_config` — `CommonSinkConfig`, `CommonSourceConfig` (live here to avoid circular dep with `app_config`)
+  - `backends/common_config` — `CommonSinkConfig`, `CommonSourceConfig`, `ThrottleConfig` (live here to avoid circular dep with `app_config`)
+  - `controllers` — `ThrottleController` trait + `ThrottleControllerBackend` enum + `StaticThrottleController` + `PidControllerBytesToMs` (adaptive throttling; PID controller is LICENSE-EE/BSL)
   - `backends/{source,sink}` — `Source`/`Sink` traits + `SourceBackend`/`SinkBackend` enums
   - `backends/elasticsearch/{elasticsearch_source,elasticsearch_sink}` — ES backend impls
   - `backends/file/{file_source,file_sink}` — file backend impls
@@ -28,13 +29,14 @@ Core library for kravex — the data migration engine. Raw pages, Cow-powered ze
   - `common` — `Hit`/`HitBatch` (legacy dead code)
   - `progress` — TUI metrics
 
-## Pipeline Architecture (current — Raw Pages + Composer)
+## Pipeline Architecture (current — Raw Pages + Composer + Throttle Controller)
 ```
 Source.next_page() → Option<String> (raw page)
   → channel(String)
-  → SinkWorker buffers Vec<String> (by byte size threshold)
+  → SinkWorker buffers Vec<String> (by dynamic byte size from ThrottleController)
   → Composer.compose(&buffer, &transformer) → final payload String
-  → Sink.send(payload)
+  → Sink.send(payload) → measure duration → ThrottleController.measure(ms)
+  → ThrottleController.output() → next cycle's byte target
 ```
 
 ## Module Dependency Graph
@@ -42,11 +44,12 @@ Source.next_page() → Option<String> (raw page)
 lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
   │              │
   │              ▼
-  │         backends ──► backends/common_config (CommonSinkConfig, CommonSourceConfig)
+  │         backends ──► backends/common_config (CommonSinkConfig, CommonSourceConfig, ThrottleConfig)
   │              │              ↑ (imported by backend-specific configs to embed)
   │              ▼
   │         supervisors ──► workers (SourceWorker, SinkWorker)
   │              │                │
+  ├──► controllers ◄──────────────┤ (SinkWorker owns ThrottleControllerBackend)
   ├──► transforms ◄───────────────┘ (called by Composer)
   └──► composers  ◄── SinkWorker (holds ComposerBackend + DocumentTransformer)
 
@@ -56,7 +59,11 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 
 - **Sources return `Option<String>`**: one raw page per call, content uninterpreted. `None` = EOF. Source is maximally ignorant — it's a faucet, not a chef.
 - **Sinks are I/O-only**: accept a fully rendered payload `String`, send it (HTTP POST, file write, memory push)
-- **SinkWorker buffers raw pages** by byte size, flushes via Composer when buffer approaches `max_request_size_bytes`
+- **SinkWorker buffers raw pages** by byte size, flushes via Composer when buffer approaches dynamic target from `ThrottleController.output()`
+- **ThrottleController** (`ThrottleControllerBackend`): adaptive flush threshold:
+  - `StaticThrottleController` → fixed bytes (the OG — backwards compatible default)
+  - `PidControllerBytesToMs` → PID feedback loop: measures sink latency, adjusts byte output (LICENSE-EE/BSL)
+  - Config-driven via `ThrottleConfig` in `CommonSinkConfig` (Static or Pid)
 - **Transform** (`DocumentTransformer`): per-page format conversion. Returns `Vec<Cow<str>>` items:
   - `Cow::Borrowed` = zero-copy passthrough (no allocation!)
   - `Cow::Owned` = format conversion (Rally→ES bulk, etc.)
@@ -107,13 +114,20 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 | File | `NdjsonComposer` | `item\nitem\n` |
 | InMemory | `JsonArrayComposer` | `[item,item]` |
 
+### ThrottleController Resolution (from ThrottleConfig in CommonSinkConfig)
+| ThrottleConfig | Controller | Behavior |
+|---|---|---|
+| `Static` (default) | `StaticThrottleController` | Fixed bytes, no feedback loop |
+| `Pid { set_point_ms, min, max, initial }` | `PidControllerBytesToMs` | PID feedback: measure(ms) → adjust byte output |
+
 ## Responsibility Boundaries
 
 | Component | Responsibility |
 |---|---|
 | Source | Read raw page, return `Option<String>`. Format-ignorant. |
 | Channel | Carry `String` (raw pages) between workers |
-| SinkWorker | Buffer pages by byte size, flush via Composer |
+| SinkWorker | Buffer pages by dynamic byte size from ThrottleController, flush via Composer, measure send duration |
+| ThrottleController | Decide dynamic max request size. Static: fixed. PID: adaptive via latency feedback. |
 | Composer | Transform pages (via Transformer) + assemble wire-format payload |
 | Transform | Per-page → `Vec<Cow<str>>` items (Borrowed=passthrough, Owned=conversion) |
 | Sink | Pure I/O: HTTP POST, file write, memory push |
@@ -133,6 +147,12 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 - Core Source/Sink traits in `backends/source.rs` and `backends/sink.rs`
 - Transforms and composers are Clone+Copy (zero-sized structs) — each SinkWorker gets its own copy
 - `SinkConfig::max_request_size_bytes()` helper is now on `SinkConfig` in `app_config.rs`
+- `SinkConfig::throttle_config()` returns `&ThrottleConfig` from embedded `CommonSinkConfig.throttle`
+- `ThrottleConfig` lives in `common_config.rs` (alongside `CommonSinkConfig`) — serde-tagged enum (`mode = "Static"` or `mode = "Pid"`)
+- PID controller gains auto-tune from ratio of initial output to set point: K_p = max/min, K_i = K_p/10, K_d = sqrt(K_p*K_i)
+- EMA alpha = 0.25, anti-windup bounds = ±5× set point, output clamped to [min_bytes, max_bytes]
+- EMA initialized to set_point (not zero) to prevent cold-start transient overcorrection
+- Each SinkWorker owns its ThrottleControllerBackend exclusively — no shared mutable state, no Mutex
 - **Config ownership**: `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs` (re-exported from `backends`)
 - `supervisors/config.rs` — **deleted**. No backwards-compat shim remains. All callers updated.
 
@@ -147,7 +167,8 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 - v6-v9 backend file splits: separated backend implementations into dedicated files with re-export shims
 - v10 raw pages + composers (current): Source returns `Option<String>` (raw page), Transform returns `Vec<Cow<str>>` (zero-copy), Composer replaces Collector (transform+assemble in one shot), SinkWorker buffers by byte size. 31 tests passing.
 - v11 config migration (complete): `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs`; `supervisors/config.rs` deleted; all callers updated. 31 tests passing.
-- v12 S3 Rally source (current): `S3RallySource` streams Rally benchmark track data from S3. `RallyTrack` enum validates track names. Config: track, bucket, region, optional key override, CommonSourceConfig. Transport: `GetObject` → `ByteStream::into_async_read()` → `BufReader` → `read_line()` (same loop as FileSource). Transform routing: S3Rally→File = Passthrough, S3Rally→ES = RallyS3ToEs. 44 tests passing.
+- v12 S3 Rally source: `S3RallySource` streams Rally benchmark track data from S3. `RallyTrack` enum validates track names. Config: track, bucket, region, optional key override, CommonSourceConfig. Transport: `GetObject` → `ByteStream::into_async_read()` → `BufReader` → `read_line()` (same loop as FileSource). Transform routing: S3Rally→File = Passthrough, S3Rally→ES = RallyS3ToEs. 44 tests passing.
+- v13 PID controller throttling (current): Adaptive throttling system for SinkWorker. `ThrottleController` trait → `StaticThrottleController` (fixed bytes) + `PidControllerBytesToMs` (PID feedback loop, LICENSE-EE/BSL). Config-driven via `ThrottleConfig` enum in `CommonSinkConfig`. SinkWorker measures `sink.send()` duration → feeds to controller → reads dynamic output for next cycle. PID gains auto-tuned from ratio of initial output to set point. EMA smoothing (α=0.25), anti-windup (±5×set_point), output clamping. 55 tests passing.
 
 ## S3 Rally Source Configuration Example
 ```toml
@@ -163,6 +184,22 @@ file_name = "output.json"
 [runtime]
 queue_capacity = 8
 sink_parallelism = 1
+```
+
+## PID Throttle Configuration Example
+```toml
+[sink_config.Elasticsearch]
+url = "https://my-cluster:9200"
+index = "target-index"
+api_key = "base64key"
+max_request_size_bytes = 10485760  # 10MB initial (used if throttle is Static)
+
+[sink_config.Elasticsearch.throttle]
+mode = "Pid"
+set_point_ms = 8000       # target 8s per bulk request
+min_bytes = 1048576        # 1MB floor
+max_bytes = 104857600      # 100MB ceiling
+initial_output_bytes = 10485760  # 10MB starting guess
 ```
 
 ### Available Rally Tracks

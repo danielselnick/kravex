@@ -10,7 +10,7 @@ use anyhow::Context;
 use serde::Deserialize;
 // -- 🔧 To load the configuration, so I don't have to manually parse
 // -- environment variables or files. Bleh. Like doing taxes but for bytes.
-use crate::backends::{CommonSinkConfig, ElasticsearchSinkConfig, ElasticsearchSourceConfig, FileSinkConfig, FileSourceConfig, S3RallySourceConfig};
+use crate::backends::{CommonSinkConfig, ElasticsearchSinkConfig, ElasticsearchSourceConfig, FileSinkConfig, FileSourceConfig, S3RallySourceConfig, ThrottleConfig};
 use figment::{
     Figment,
     providers::{Env, Format, Toml},
@@ -121,6 +121,23 @@ impl SinkConfig {
             SinkConfig::File(f) => f.common_config.max_request_size_bytes,
             // 🧠 InMemory gets the default — it's testing, we don't limit 🦆
             SinkConfig::InMemory(_) => CommonSinkConfig::default().max_request_size_bytes,
+        }
+    }
+
+    /// 🧠 Extract the throttle configuration from whichever sink config variant we are.
+    ///
+    /// Returns the `ThrottleConfig` embedded in the backend's `CommonSinkConfig`.
+    /// InMemory gets the default (Static). Because test sinks don't need PID. They barely need love. 🦆
+    ///
+    /// 🧠 Knowledge graph: used in `lib.rs` to build a `ThrottleControllerBackend` which is
+    /// then passed to the Supervisor and ultimately to each SinkWorker.
+    pub fn throttle_config(&self) -> &ThrottleConfig {
+        match self {
+            SinkConfig::Elasticsearch(es) => &es.common_config.throttle,
+            SinkConfig::File(f) => &f.common_config.throttle,
+            // 🧊 InMemory → Static (the default). Tests don't need adaptive throttling.
+            // Returning a reference to a temporary isn't possible, so we use a static default.
+            SinkConfig::InMemory(_) => &ThrottleConfig::STATIC_DEFAULT,
         }
     }
 }
