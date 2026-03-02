@@ -451,6 +451,8 @@ fn build_source_from_cli_args(source_type: &SourceType, args: &RunArgs) -> Resul
                 username: args.source_username.clone(),
                 password: args.source_password.clone(),
                 api_key: args.source_api_key.clone(),
+                index: None,
+                query: None,
                 common_config: the_common_source_config,
             }))
         }
