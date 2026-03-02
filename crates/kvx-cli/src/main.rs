@@ -22,7 +22,7 @@ use tracing_subscriber::EnvFilter;
 use kvx::app_config::{AppConfig, RuntimeConfig, SinkConfig, SourceConfig};
 use kvx::backends::{
     CommonSinkConfig, CommonSourceConfig, ElasticsearchSinkConfig, ElasticsearchSourceConfig,
-    FileSinkConfig, FileSourceConfig, RallyTrack, S3RallySourceConfig,
+    FileSinkConfig, FileSourceConfig, RallyTrack, S3RallySourceConfig, ThrottleConfig,
 };
 use kvx::transforms::supported_flows;
 
@@ -486,6 +486,10 @@ fn build_sink_from_cli_args(sink_type: &SinkType, args: &RunArgs) -> Result<Sink
         max_request_size_bytes: args
             .sink_max_request_size_bytes
             .unwrap_or(CommonSinkConfig::default().max_request_size_bytes),
+        // 🧊 CLI doesn't expose PID knobs yet — Static throttle is the vibe.
+        // When someone asks for PID via CLI args, future-Daniel will add flags here.
+        // Present-Daniel is choosing peace. And backwards compatibility. 🦆
+        throttle: ThrottleConfig::default(),
     };
 
     match sink_type {

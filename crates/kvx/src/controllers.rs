@@ -1,67 +1,78 @@
 // ai
 //! 🎛️🔧🚀 Controllers — the feedback loop whisperers of the kravex pipeline.
 //!
-//! 🎬 COLD OPEN — INT. THERMOSTAT FACTORY — 2:17 AM
+//! 🎬 COLD OPEN — INT. CONTROL ROOM — 2:17 AM
 //!
-//! "What if," whispered the engineer, staring at the production dashboard,
-//! "we stopped guessing the batch size... and let the data TELL us?"
-//! The room went silent. The borrow checker nodded approvingly.
-//! And thus, the PID controller was born — not from brilliance,
-//! but from the quiet desperation of watching 429s at 3am.
+//! A lone engineer stares at a wall of blinking monitors. Each one shows a different
+//! bulk request, crawling across the wire at wildly different speeds. The throughput
+//! graph looks like an EKG during a horror movie. A single tear rolls down their cheek.
 //!
-//! This module implements the **Controller** trait and its dispatching enum
-//! `ControllerBackend`, following the exact same pattern as transforms.rs:
+//! "What if," they whisper, staring at the production dashboard, "we stopped guessing
+//! the batch size... and let the DATA tell us? And also let latency tell us? BOTH?"
+//!
+//! The room went silent. The borrow checker nodded. The PID gains converged. There
+//! was order in the universe, briefly, before the next 429.
+//!
+//! This module provides **two orthogonal controller abstractions**:
 //!
 //! ```text
-//!   transforms.rs pattern:             controllers.rs pattern:
-//!   ┌──────────────────────┐          ┌───────────────────────────┐
-//!   │ trait Transform       │          │ trait Controller            │
-//!   │   fn transform()     │          │   fn output() -> usize     │
-//!   └────────┬─────────────┘          │   fn measure(f64)          │
-//!            │                         └────────┬──────────────────┘
-//!   ┌────────┴─────────────┐                    │
-//!   │ RallyS3ToEs          │          ┌─────────┴──────────────────┐
-//!   │ Passthrough          │          │ ConfigController            │
-//!   └────────┬─────────────┘          │ PidBytesToDocCount          │
-//!            │                         └─────────┬──────────────────┘
-//!   ┌────────┴─────────────┐                     │
-//!   │ enum DocTransformer  │          ┌──────────┴──────────────────┐
-//!   │   impl Transform     │          │ enum ControllerBackend       │
-//!   │   match dispatch     │          │   impl Controller            │
-//!   └──────────────────────┘          │   match dispatch             │
-//!                                     └──────────────────────────────┘
+//!  SOURCE SIDE (doc count)          SINK SIDE (byte size)
+//!  ─────────────────────────        ──────────────────────────────
+//!  trait Controller                 trait ThrottleController
+//!    fn output() -> usize             fn output() -> usize (bytes)
+//!    fn measure(bytes: f64)           fn measure(ms: f64)
+//!         │                                │
+//!  ┌──────┴────────────┐          ┌────────┴───────────────────┐
+//!  │ ConfigController  │          │ StaticThrottleController    │
+//!  │ PidBytesToDocCount│          │ PidControllerBytesToMs      │
+//!  └──────┬────────────┘          └────────┬───────────────────┘
+//!         │                                │
+//!  ControllerBackend               ThrottleControllerBackend
+//!  (owned by SourceWorker)         (owned by SinkWorker)
 //! ```
 //!
 //! ## Knowledge Graph 🧠
-//! - Pattern: trait → concrete impls → enum dispatch (same as Source/Sink/Transform)
-//! - `Controller` trait: `output()` returns batch size hint, `measure()` feeds measurements
-//! - `ConfigController`: static — returns configured value, ignores measurements (thermostat unplugged)
-//! - `PidBytesToDocCount`: dynamic PID — measures response bytes, adjusts doc count output
-//! - `ControllerConfig`: serde-tagged enum for TOML deserialization
-//! - `ControllerBackend::from_config()`: resolver (like `DocumentTransformer::from_configs()`)
-//! - SourceWorker owns the controller: output → set_page_size_hint → next_page → measure → loop
+//! - `Controller` trait: source-side. `output()` = doc count hint. `measure()` = response bytes.
+//! - `ThrottleController` trait: sink-side. `output()` = byte budget. `measure()` = request ms.
+//! - `ControllerBackend`: enum dispatch for source controllers. Created from `ControllerConfig`.
+//! - `ThrottleControllerBackend`: enum dispatch for sink controllers. Created via `new_static()` / `new_pid()`.
+//! - `ControllerConfig`: serde-tagged enum for TOML `[controller]` section.
+//! - SourceWorker loop: `output()` → `set_page_size_hint()` → `next_page()` → `measure(page.len())`.
+//! - SinkWorker loop: `measure(duration_ms)` after each send → `output()` = next buffer byte cap.
+//! - Pattern: trait → concrete impls → enum dispatch — same as Source/Sink/Transform throughout.
 //!
 //! ⚠️ The singularity will have better PID gains than us. Until then, we iterate. Literally. 🦆
+//!
+//! "In a world where batch sizes must adapt... two controllers dared to control."
+//!   — Kravex: The Throttling (2026, rated PG-13 for mild derivative gain)
+//!
+//! Note: `pid_bytes_to_ms` is licensed under LICENSE-EE (BSL 1.1).
+//! The trait definitions and static controllers are MIT licensed.
 
 use serde::Deserialize;
 
 pub(crate) mod config_controller;
 pub(crate) mod pid_bytes_to_doc_count;
+pub(crate) mod pid_bytes_to_ms;
+pub(crate) mod static_throttle;
+
+pub(crate) use pid_bytes_to_ms::PidControllerBytesToMs;
+pub(crate) use static_throttle::StaticThrottleController;
 
 // ============================================================
 //  ╔═══════════════════════════════════════════════════════╗
 //  ║  🎛️ measure(bytes) ──▶ Controller ──▶ output(docs)  ║
-//  ║    (same pattern as Source/Sink/Transform. finally.) ║
+//  ║    SOURCE SIDE — adapts doc count per page fetch     ║
 //  ╚═══════════════════════════════════════════════════════╝
 // ============================================================
 
-/// 🎛️ Controller — the feedback loop trait for adaptive batch sizing.
+/// 🎛️ Controller — the feedback loop trait for adaptive source batch sizing.
 ///
-/// Think of it like cruise control for your data pipeline:
-/// - `output()` = "how fast should I go?" (batch size hint)
-/// - `measure()` = "the speedometer says THIS" (observed response metric)
+/// Think of it like cruise control for your data pipeline's source:
+/// - `output()` = "how many docs should I fetch?" (batch size hint in doc count)
+/// - `measure()` = "the last page weighed THIS many bytes" (observed response size)
 ///
-/// The controller adjusts future outputs based on past measurements.
+/// The controller adjusts future doc count outputs based on past byte measurements.
 /// For `ConfigController`, this is "set cruise control to 65 and never touch it."
 /// For `PidBytesToDocCount`, this is "the PID algorithm from a 1922 paper,
 /// reinvented by a C# developer, ported to Rust, running at 3am." 🔧
@@ -76,7 +87,7 @@ pub(crate) mod pid_bytes_to_doc_count;
 /// source.next_page() → measure(page.len()) — the eternal feedback loop.
 /// "He who measures not, optimizes in vain." — Ancient PID proverb 📜
 pub(crate) trait Controller: std::fmt::Debug {
-    /// 🎯 Get the current output value — the recommended batch size.
+    /// 🎯 Get the current output value — the recommended batch size in doc count.
     ///
     /// Returns a doc count hint. Sources use this to adjust how many
     /// documents they fetch per `next_page()` call. Think of it as
@@ -96,7 +107,7 @@ pub(crate) trait Controller: std::fmt::Debug {
 //  "He who configures the PID gains by hand, tunes until dawn."
 // ============================================================
 
-/// 🔧 Configuration enum for controller selection and parameters.
+/// 🔧 Configuration enum for source controller selection and parameters.
 ///
 /// Deserialized from the `[controller]` section of the TOML config.
 /// Uses serde's internally tagged representation (`type` field).
@@ -167,11 +178,11 @@ fn default_max_doc_count() -> usize {
 }
 
 // ============================================================
-//  🎭 ControllerBackend — the dispatching enum
+//  🎭 ControllerBackend — source-side dispatching enum
 //  Mirrors SourceBackend / SinkBackend / DocumentTransformer exactly.
 // ============================================================
 
-/// 🎭 The dispatching enum for controllers — polymorphism via match, not vtables.
+/// 🎭 The dispatching enum for source controllers — polymorphism via match, not vtables.
 ///
 /// Same pattern as `SourceBackend`, `SinkBackend`, `DocumentTransformer`:
 /// each variant wraps a concrete type that implements [`Controller`].
@@ -236,6 +247,104 @@ impl ControllerBackend {
                 ),
             ),
         }
+    }
+}
+
+// ============================================================
+//  📡 ThrottleController — sink-side trait
+//  🏗️ measure(ms) ──▶ ThrottleController ──▶ output(bytes)
+//  "What's the DEAL with latency? You measure it, and then it changes."
+// ============================================================
+
+/// 🎯 The universal interface for throttle controllers — the sink-side feedback loop.
+///
+/// 🧠 Knowledge graph:
+/// - Every throttle strategy (static, PID, future token-bucket, etc.) implements this trait.
+/// - SinkWorker owns a `ThrottleControllerBackend` and calls `measure()` + `output()` each cycle.
+/// - `measure(duration_ms)`: feed the latest observed request duration into the controller.
+///   For static controllers, this is a no-op. For PID, this drives the feedback loop.
+/// - `output()`: returns the recommended byte size for the next bulk request.
+///   The SinkWorker uses this as its dynamic `max_request_size_bytes`.
+///
+/// Contrast with `Controller` (source-side, measures bytes, outputs doc count).
+/// This one measures milliseconds and outputs byte budget. Two feedback loops, one pipeline. 🔄
+///
+/// The trait is intentionally minimal — measure in, bytes out.
+/// Like a vending machine, but for throughput decisions. 🚀
+pub(crate) trait ThrottleController: std::fmt::Debug + Send {
+    /// 📡 Feed a measured request duration (in milliseconds) into the controller.
+    ///
+    /// For static controllers: "cool story bro" (no-op).
+    /// For PID controllers: this is the *raison d'être* — the feedback signal
+    /// that drives proportional, integral, and derivative corrections. 🔄
+    fn measure(&mut self, duration_ms: f64);
+
+    /// 📏 Get the current recommended payload size in bytes.
+    ///
+    /// After each `measure()` call, this value may change (PID) or stay the same (static).
+    /// The SinkWorker reads this to decide when to flush its page buffer. 🎯
+    fn output(&self) -> usize;
+}
+
+// ============================================================
+//  🏗️ ThrottleControllerBackend — sink-side dispatching enum
+//  "He who dispatches via enum, avoids dyn Trait in production." — Ancient Rust proverb
+// ============================================================
+
+/// 📦 Enum dispatch for throttle controllers — the sink-side backend.
+///
+/// 🧠 Knowledge graph: follows the exact same pattern as `SinkBackend` and `SourceBackend`:
+/// concrete types wrapped in an enum, delegating via match. Constructed via `new_static()` /
+/// `new_pid()` builder methods. Handed to `SinkWorker::new()`.
+///
+/// Parallel structure to `ControllerBackend` but for an entirely different concern:
+/// - `ControllerBackend` → source side → doc count adaptation
+/// - `ThrottleControllerBackend` → sink side → byte size adaptation
+#[derive(Debug)]
+pub(crate) enum ThrottleControllerBackend {
+    /// 🧊 Fixed byte size. No feedback loop. The classic.
+    Static(StaticThrottleController),
+    /// 🧠 PID control: bytes out, milliseconds in. The future is now.
+    PidBytesToMs(PidControllerBytesToMs),
+}
+
+impl ThrottleController for ThrottleControllerBackend {
+    fn measure(&mut self, duration_ms: f64) {
+        match self {
+            ThrottleControllerBackend::Static(c) => c.measure(duration_ms),
+            ThrottleControllerBackend::PidBytesToMs(c) => c.measure(duration_ms),
+        }
+    }
+
+    fn output(&self) -> usize {
+        match self {
+            ThrottleControllerBackend::Static(c) => c.output(),
+            ThrottleControllerBackend::PidBytesToMs(c) => c.output(),
+        }
+    }
+}
+
+impl ThrottleControllerBackend {
+    /// 🧊 Build a static controller — the "I know what I'm doing" option.
+    /// No feedback. No math. Just vibes and a fixed byte size.
+    pub(crate) fn new_static(fixed_bytes: usize) -> Self {
+        ThrottleControllerBackend::Static(StaticThrottleController::new(fixed_bytes))
+    }
+
+    /// 🧠 Build a PID controller — the "let the math do the driving" option.
+    /// The derivative gain will save us. The derivative gain always saves us.
+    pub(crate) fn new_pid(
+        set_point_ms: f64,
+        initial_output_bytes: usize,
+        min_bytes: usize,
+        max_bytes: usize,
+    ) -> Self {
+        ThrottleControllerBackend::PidBytesToMs(PidControllerBytesToMs::new(
+            set_point_ms,
+            initial_output_bytes,
+            min_bytes,
+            max_bytes,
+        ))
     }
 }
 
@@ -358,4 +467,6 @@ mod tests {
     }
 
     // 🦆 The duck observes that these tests are more thorough than most production configs.
+    // 🦆 The duck also notes two controller abstractions coexist peacefully in this file.
+    // 🦆 The duck has opinions about PID gains. The duck keeps them to itself.
 }
