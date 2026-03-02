@@ -30,9 +30,11 @@
 use super::Worker;
 use crate::backends::{Sink, SinkBackend};
 use crate::composers::{Composer, ComposerBackend};
+use crate::controllers::{ThrottleController, ThrottleControllerBackend};
 use crate::transforms::DocumentTransformer;
 use anyhow::{Context, Result};
 use async_channel::Receiver;
+use std::time::Instant;
 use tokio::task::JoinHandle;
 use tracing::debug;
 
@@ -65,30 +67,33 @@ pub(crate) struct SinkWorker {
     transformer: DocumentTransformer,
     /// 🎼 Payload assembly — resolves from SinkConfig. Transforms + assembles in one shot.
     composer: ComposerBackend,
-    /// 📏 Max request size from sink config — flush when buffer approaches this.
-    max_request_size_bytes: usize,
+    /// 🧠 Throttle controller — decides the dynamic max request size.
+    /// Static: fixed bytes (the classic). PID: adapts based on measured latency (the secret sauce). 🔒
+    /// Each worker owns its controller exclusively — no shared state, no Mutex, no couples therapy.
+    throttle_controller: ThrottleControllerBackend,
 }
 
 impl SinkWorker {
-    /// 🏗️ Constructs a new SinkWorker with receiver, sink, transformer, composer, and size limit.
+    /// 🏗️ Constructs a new SinkWorker with receiver, sink, transformer, composer, and throttle controller.
     ///
     /// The transformer decides HOW to format each doc (Rally→ES bulk, passthrough)
     /// The composer decides HOW to assemble them (NDJSON newlines, JSON array brackets)
     /// The sink decides WHERE to send it (HTTP POST, file write, memory push)
+    /// The controller decides HOW MUCH — "this many bytes, based on science (or stubbornness)" 🧠
     /// The worker decides WHEN — "when the buffer is full enough, no cap." 🦆
     pub(crate) fn new(
         rx: Receiver<String>,
         sink: SinkBackend,
         transformer: DocumentTransformer,
         composer: ComposerBackend,
-        max_request_size_bytes: usize,
+        throttle_controller: ThrottleControllerBackend,
     ) -> Self {
         Self {
             rx,
             sink,
             transformer,
             composer,
-            max_request_size_bytes,
+            throttle_controller,
         }
     }
 }
@@ -96,12 +101,15 @@ impl SinkWorker {
 impl Worker for SinkWorker {
     fn start(mut self) -> JoinHandle<Result<()>> {
         tokio::spawn(async move {
-            debug!("📥 SinkWorker started — buffer → compose → sink, let's go");
+            debug!("📥 SinkWorker started — buffer → compose → sink → measure → adapt, let's go");
             // 📦 The page buffer — accumulates raw pages until byte threshold approached
             let mut buffer: Vec<String> = Vec::new();
             let mut buffer_bytes: usize = 0;
 
             loop {
+                // 🧠 Read the current target from the throttle controller.
+                // For Static: always the same. For PID: may change after each flush cycle.
+                let current_max_bytes = self.throttle_controller.output();
                 let receive_result = self.rx.recv().await;
                 match receive_result {
                     Ok(page) => {
@@ -111,20 +119,23 @@ impl Worker for SinkWorker {
                         buffer_bytes += page.len();
                         buffer.push(page);
 
-                        // 🧮 Flush if buffer + epsilon approaches max request size.
+                        // 🧮 Flush if buffer + epsilon approaches dynamic max request size.
                         // The epsilon accounts for transformation overhead (action lines, etc.)
-                        if buffer_bytes + BUFFER_EPSILON_BYTES >= self.max_request_size_bytes {
+                        if buffer_bytes + BUFFER_EPSILON_BYTES >= current_max_bytes {
                             debug!(
-                                "🚿 SinkWorker flushing {} pages ({} bytes) — approaching max request size",
+                                "🚿 SinkWorker flushing {} pages ({} bytes) — approaching max request size ({} bytes, via {:?})",
                                 buffer.len(),
-                                buffer_bytes
+                                buffer_bytes,
+                                current_max_bytes,
+                                self.throttle_controller,
                             );
-                            flush_buffer(
+                            flush_and_measure(
                                 &mut buffer,
                                 &mut buffer_bytes,
                                 &self.composer,
                                 &self.transformer,
                                 &mut self.sink,
+                                &mut self.throttle_controller,
                             )
                             .await?;
                         }
@@ -137,12 +148,13 @@ impl Worker for SinkWorker {
                                 buffer.len(),
                                 buffer_bytes
                             );
-                            flush_buffer(
+                            flush_and_measure(
                                 &mut buffer,
                                 &mut buffer_bytes,
                                 &self.composer,
                                 &self.transformer,
                                 &mut self.sink,
+                                &mut self.throttle_controller,
                             )
                             .await?;
                         }
@@ -159,19 +171,26 @@ impl Worker for SinkWorker {
     }
 }
 
-/// 🚿 Flush the page buffer: compose → send → clear.
+/// 🚿 Flush the page buffer: compose → send → measure → adapt.
+///
+/// The full feedback loop in one function:
+/// 1. Compose the payload (transform + assemble)
+/// 2. Time the sink.send() call — this is the measured process variable
+/// 3. Feed the duration to the throttle controller
+/// 4. Controller adjusts its output for the next cycle (PID) or does nothing (Static)
 ///
 /// Extracted as a function because the SinkWorker flushes from two places:
 /// 1. When the buffer is full enough (byte threshold)
 /// 2. When the channel closes (final flush)
 ///
 /// "He who duplicates flush logic, debugs it in two places at 3am." — Ancient proverb 💀
-async fn flush_buffer(
+async fn flush_and_measure(
     buffer: &mut Vec<String>,
     buffer_bytes: &mut usize,
     composer: &ComposerBackend,
     transformer: &DocumentTransformer,
     sink: &mut SinkBackend,
+    throttle_controller: &mut ThrottleControllerBackend,
 ) -> Result<()> {
     // 🎼 Compose: transform each page → collect items → assemble wire-format payload
     let payload = composer.compose(buffer, transformer).context(
@@ -181,11 +200,25 @@ async fn flush_buffer(
     )?;
 
     // 📡 Send the fully rendered payload to the sink. Pure I/O.
+    // ⏱️ Measure the send duration — this is the feedback signal for the PID controller.
+    // "Time is what we measure. Bytes are what we control. Wisdom is knowing the difference." 🧠
     if !payload.is_empty() && payload != "[]" {
+        let send_stopwatch = Instant::now();
         sink.send(payload).await.context(
             "💀 SinkWorker failed to send payload to sink — the I/O layer rejected our offering. \
              The payload was composed with care. The sink said no. Like my prom date.",
         )?;
+        let elapsed_ms = send_stopwatch.elapsed().as_secs_f64() * 1000.0;
+
+        // 🧠 Feed the measured duration into the throttle controller.
+        // For Static: this is a no-op (cool story bro).
+        // For PID: this drives the feedback loop — error → gain → adjustment → new output.
+        throttle_controller.measure(elapsed_ms);
+        debug!(
+            "⏱️ SinkWorker send took {:.1}ms — throttle controller output now: {} bytes",
+            elapsed_ms,
+            throttle_controller.output()
+        );
     }
 
     // 🧹 Reset buffer state
