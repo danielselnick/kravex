@@ -100,7 +100,7 @@ pub struct OpenSearchSourceConfig {
 /// - search_after is stateless on the server side (no server-side cursor to expire)
 ///
 /// "He who scrolls, holds resources on every shard. He who searches_after, travels light."
-pub(crate) struct OpenSearchSource {
+pub struct OpenSearchSource {
     client: reqwest::Client,
     config: OpenSearchSourceConfig,
     /// 🔖 Point-In-Time ID for consistent pagination snapshot.

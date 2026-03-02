@@ -115,16 +115,52 @@ pub fn supported_flows() -> Vec<FlowDescriptor> {
             description: "File passthrough — bytes in, bytes out, no drama 📂",
         },
         FlowDescriptor {
+            source_type: "file",
+            sink_type: "inmemory",
+            transform_name: "Passthrough",
+            description: "File → in-memory: real data, fake sink, test energy 🧪",
+        },
+        FlowDescriptor {
             source_type: "elasticsearch",
             sink_type: "file",
             transform_name: "Passthrough",
             description: "ES index dump → file (the great escape 📡→📂)",
         },
         FlowDescriptor {
+            source_type: "elasticsearch",
+            sink_type: "elasticsearch",
+            transform_name: "EsHitToBulk",
+            description: "ES reindex: search hits → bulk pairs (same engine, different cluster 🔄📡)",
+        },
+        FlowDescriptor {
             source_type: "s3-rally",
             sink_type: "file",
             transform_name: "Passthrough",
             description: "S3 Rally data → local file (cloud-to-ground paratrooper 🪂)",
+        },
+        FlowDescriptor {
+            source_type: "elasticsearch",
+            sink_type: "inmemory",
+            transform_name: "Passthrough",
+            description: "ES → in-memory: real cluster data, fake sink, test/debug vibes 🧪📡",
+        },
+        FlowDescriptor {
+            source_type: "s3-rally",
+            sink_type: "inmemory",
+            transform_name: "Passthrough",
+            description: "S3 Rally → in-memory: cloud benchmark data absorbed into the void 🧪🪣",
+        },
+        FlowDescriptor {
+            source_type: "inmemory",
+            sink_type: "file",
+            transform_name: "Passthrough",
+            description: "In-memory → file: synthetic data dumped to disk, for posterity 📂🧪",
+        },
+        FlowDescriptor {
+            source_type: "inmemory",
+            sink_type: "elasticsearch",
+            transform_name: "Passthrough",
+            description: "In-memory → ES: synthetic data indexed, the bravest test of all 📡🧪",
         },
     ]
 }
@@ -245,12 +281,19 @@ impl DocumentTransformer {
             }
 
             // -- 🚶 Passthrough pairs: same format, no conversion needed.
-            // -- File→File, InMemory→InMemory, ES→File, S3Rally→File, OS→File — just move the bytes.
+            // -- File→File, File→InMemory, InMemory→InMemory, ES→File, S3Rally→File, OS→File — just move the bytes.
+            // -- File→InMemory: used for testing pipelines where you want real file data
+            // -- flowing into an in-memory sink for inspection. No format change, just vibes. 🦆
             (SourceConfig::File(_), SinkConfig::File(_))
+            | (SourceConfig::File(_), SinkConfig::InMemory(_))
             | (SourceConfig::InMemory(_), SinkConfig::InMemory(_))
+            | (SourceConfig::InMemory(_), SinkConfig::File(_))
+            | (SourceConfig::InMemory(_), SinkConfig::Elasticsearch(_))
             | (SourceConfig::Elasticsearch(_), SinkConfig::File(_))
+            | (SourceConfig::Elasticsearch(_), SinkConfig::InMemory(_))
             | (SourceConfig::OpenSearch(_), SinkConfig::File(_))
-            | (SourceConfig::S3Rally(_), SinkConfig::File(_)) => {
+            | (SourceConfig::S3Rally(_), SinkConfig::File(_))
+            | (SourceConfig::S3Rally(_), SinkConfig::InMemory(_)) => {
                 Self::Passthrough(passthrough::Passthrough)
             }
 
@@ -330,6 +373,8 @@ mod tests {
                     username: None,
                     password: None,
                     api_key: None,
+                    index: None,
+                    query: None,
                     common_config: CommonSourceConfig::default(),
                 }),
                 "s3-rally" => SourceConfig::S3Rally(S3RallySourceConfig {

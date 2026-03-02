@@ -29,5 +29,5 @@
 mod opensearch_sink;
 mod opensearch_source;
 
-pub(crate) use opensearch_sink::{OpenSearchSink, OpenSearchSinkConfig};
-pub(crate) use opensearch_source::{OpenSearchSource, OpenSearchSourceConfig};
+pub use opensearch_sink::{OpenSearchSink, OpenSearchSinkConfig};
+pub use opensearch_source::{OpenSearchSource, OpenSearchSourceConfig};

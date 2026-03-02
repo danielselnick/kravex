@@ -92,7 +92,7 @@ pub struct OpenSearchSinkConfig {
 /// two identical restaurants across the street from each other. Same menu.
 /// Different logo. One takes Apache 2.0, the other takes SSPL." — Seinfeld, probably
 #[derive(Debug)]
-pub(crate) struct OpenSearchSink {
+pub struct OpenSearchSink {
     client: reqwest::Client,
     sink_config: OpenSearchSinkConfig,
 }
