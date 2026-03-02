@@ -15,6 +15,7 @@
 mod workers;
 use crate::app_config::AppConfig;
 use crate::composers::ComposerBackend;
+use crate::controllers::{ControllerBackend, ThrottleControllerBackend};
 use crate::supervisors::workers::Worker;
 use crate::transforms::DocumentTransformer;
 use anyhow::{Context, Result};
@@ -57,26 +58,30 @@ impl Supervisor {
         transformer: DocumentTransformer,
         composer: ComposerBackend,
         max_request_size_bytes: usize,
+        controller: ControllerBackend,
+        throttle_controllers: Vec<ThrottleControllerBackend>,
     ) -> Result<()> {
         // 📬 Channel carries String — raw pages from source to sink workers.
         let (tx, rx) = async_channel::bounded(self.app_config.runtime.queue_capacity);
 
         let mut worker_handles = Vec::with_capacity(sink_backends.len() + 1);
 
-        // 🗑️ Spawn N sink workers, each with its own transformer + composer clones.
-        for sink_backend in sink_backends {
+        // 🗑️ Spawn N sink workers, each with its own transformer + composer + throttle controller.
+        // 🧠 Each controller is owned by its worker — no shared state, no Mutex, no tears. 🔒
+        for (sink_backend, throttle_controller) in sink_backends.into_iter().zip(throttle_controllers) {
             let sink_worker = workers::SinkWorker::new(
                 rx.clone(),
                 sink_backend,
                 transformer.clone(),
                 composer.clone(),
-                max_request_size_bytes,
+                throttle_controller,
             );
             worker_handles.push(sink_worker.start());
         }
 
         // 🚰 Spawn the source worker — it pumps raw pages into the channel.
-        let source_worker = workers::SourceWorker::new(tx.clone(), source_backend);
+        // Now with a controller for adaptive batch sizing! The PID rides shotgun. 🎛️
+        let source_worker = workers::SourceWorker::new(tx.clone(), source_backend, controller);
         worker_handles.push(source_worker.start());
 
         let results = futures::future::join_all(worker_handles).await;

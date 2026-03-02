@@ -10,7 +10,8 @@ use anyhow::Context;
 use serde::Deserialize;
 // -- 🔧 To load the configuration, so I don't have to manually parse
 // -- environment variables or files. Bleh. Like doing taxes but for bytes.
-use crate::backends::{CommonSinkConfig, ElasticsearchSinkConfig, ElasticsearchSourceConfig, FileSinkConfig, FileSourceConfig, OpenSearchSinkConfig, OpenSearchSourceConfig, S3RallySourceConfig};
+use crate::backends::{CommonSinkConfig, CommonSourceConfig, ElasticsearchSinkConfig, ElasticsearchSourceConfig, FileSinkConfig, FileSourceConfig, OpenSearchSinkConfig, OpenSearchSourceConfig, S3RallySourceConfig, ThrottleConfig};
+use crate::controllers::ControllerConfig;
 use figment::{
     Figment,
     providers::{Env, Format, Toml},
@@ -89,6 +90,25 @@ pub enum SourceConfig {
     InMemory(()),
 }
 
+impl SourceConfig {
+    /// 📏 Extract `max_batch_size_docs` from whichever source config variant we are.
+    ///
+    /// Used by the controller resolver to determine the default page size
+    /// when `ControllerConfig::Static` is selected. Each source backend embeds
+    /// a `CommonSourceConfig` with this field. InMemory gets the default.
+    /// "He who queries the default, avoids the match in the hot path." — Ancient proverb 🎯
+    pub fn default_page_size(&self) -> usize {
+        match self {
+            SourceConfig::File(cfg) => cfg.common_config.max_batch_size_docs,
+            SourceConfig::Elasticsearch(cfg) => cfg.common_config.max_batch_size_docs,
+            SourceConfig::OpenSearch(cfg) => cfg.common_config.max_batch_size_docs,
+            SourceConfig::S3Rally(cfg) => cfg.common_config.max_batch_size_docs,
+            // 🧪 InMemory gets the default — it's testing, batch size is academic 🦆
+            SourceConfig::InMemory(_) => CommonSourceConfig::default().max_batch_size_docs,
+        }
+    }
+}
+
 /// 🗑️ SinkConfig: same vibe as SourceConfig but for the *receiving* end.
 /// Data goes IN. Data does not come back out. It is not a revolving door.
 /// It is a black hole of bytes, and we are at peace with that.
@@ -128,6 +148,24 @@ impl SinkConfig {
             SinkConfig::InMemory(_) => CommonSinkConfig::default().max_request_size_bytes,
         }
     }
+
+    /// 🧠 Extract the throttle configuration from whichever sink config variant we are.
+    ///
+    /// Returns the `ThrottleConfig` embedded in the backend's `CommonSinkConfig`.
+    /// InMemory gets the default (Static). Because test sinks don't need PID. They barely need love. 🦆
+    ///
+    /// 🧠 Knowledge graph: used in `lib.rs` to build a `ThrottleControllerBackend` which is
+    /// then passed to the Supervisor and ultimately to each SinkWorker.
+    pub fn throttle_config(&self) -> &ThrottleConfig {
+        match self {
+            SinkConfig::Elasticsearch(es) => &es.common_config.throttle,
+            SinkConfig::File(f) => &f.common_config.throttle,
+            SinkConfig::OpenSearch(os) => &os.common_config.throttle,
+            // 🧊 InMemory → Static (the default). Tests don't need adaptive throttling.
+            // Returning a reference to a temporary isn't possible, so we use a static default.
+            SinkConfig::InMemory(_) => &ThrottleConfig::STATIC_DEFAULT,
+        }
+    }
 }
 
 /// 📦 The AppConfig: one struct to rule them all, one struct to find them,
@@ -142,6 +180,11 @@ pub struct AppConfig {
     pub sink_config: SinkConfig,
     #[serde(default, alias = "supervisor_config")]
     pub runtime: RuntimeConfig,
+    /// 🎛️ Controller config — adaptive batch sizing for the source worker.
+    /// Defaults to `Static` (preserves existing behavior — no PID, no drama).
+    /// Set to `PidBytesToDocCount` to enable adaptive feedback-driven batch sizing.
+    #[serde(default)]
+    pub controller: ControllerConfig,
 }
 
 /// 🚀 Load the config — from a file, from env vars, or from the sheer power of hoping.

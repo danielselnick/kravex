@@ -9,18 +9,21 @@
 // -- 🗑️ TODO: clean up the dedz (dead code, not the grateful kind)
 #![allow(dead_code, unused_variables, unused_imports)]
 pub mod app_config;
-pub(crate) mod backends;
+pub mod backends;
 pub(crate) mod composers;
+pub(crate) mod controllers;
 pub(crate) mod progress;
 mod supervisors;
-pub(crate) mod transforms;
+pub mod transforms;
 use crate::app_config::AppConfig;
+use crate::backends::common_config::ThrottleConfig;
 use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSource};
 use crate::backends::file::{FileSink, FileSource};
 use crate::backends::in_mem::{InMemorySink, InMemorySource};
 use crate::backends::opensearch::{OpenSearchSink, OpenSearchSource};
 use crate::backends::s3_rally::S3RallySource;
 use crate::backends::{SinkBackend, SourceBackend};
+use crate::controllers::{ControllerBackend, ThrottleControllerBackend};
 use crate::supervisors::Supervisor;
 use crate::app_config::{RuntimeConfig, SinkConfig, SourceConfig};
 use crate::composers::ComposerBackend;
@@ -62,12 +65,57 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     // The Composer transforms raw pages AND assembles them into wire format. Two birds, one Cow. 🐄
     let composer = ComposerBackend::from_sink_config(&app_config.sink_config);
 
-    // 📏 Extract max request size from sink config for SinkWorker buffering.
+    // 🧠 Build throttle controllers for each sink worker.
+    // Each worker gets its own controller instance — no shared mutable state, no Mutex, no drama.
+    // 🧠 Knowledge graph: ThrottleConfig (from CommonSinkConfig) → ThrottleControllerBackend
+    //   Static → fixed bytes (the OG)
+    //   Pid → PidControllerBytesToMs (the secret sauce, LICENSE-EE) 🔒
     let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
+    let throttle_config = app_config.sink_config.throttle_config();
+    let mut throttle_controllers = Vec::with_capacity(sink_parallelism);
+    for _ in 0..sink_parallelism {
+        let controller = match throttle_config {
+            ThrottleConfig::Static => {
+                // 🧊 Fixed bytes — the tried and true "I know what I'm doing" approach.
+                ThrottleControllerBackend::new_static(max_request_size_bytes)
+            }
+            ThrottleConfig::Pid {
+                set_point_ms,
+                min_bytes,
+                max_bytes,
+                initial_output_bytes,
+            } => {
+                // 🧠 PID control — the "let the math drive" approach. Licensed under LICENSE-EE.
+                ThrottleControllerBackend::new_pid(
+                    *set_point_ms,
+                    *initial_output_bytes,
+                    *min_bytes,
+                    *max_bytes,
+                )
+            }
+        };
+        throttle_controllers.push(controller);
+    }
+
+    // 🎛️ Resolve the controller from config.
+    // Static = fixed batch size (default, preserves existing behavior).
+    // PidBytesToDocCount = adaptive feedback-driven batch sizing (the fancy one).
+    // 🧠 Knowledge graph: controller lives in SourceWorker, feeds output to source.set_page_size_hint().
+    let the_default_page_size = app_config.source_config.default_page_size();
+    let the_controller =
+        ControllerBackend::from_config(&app_config.controller, the_default_page_size);
 
     let supervisor = Supervisor::new(app_config.clone());
     supervisor
-        .start_workers(source_backend, sink_backends, transformer, composer, max_request_size_bytes)
+        .start_workers(
+            source_backend,
+            sink_backends,
+            transformer,
+            composer,
+            max_request_size_bytes,
+            the_controller,
+            throttle_controllers,
+        )
         .await?;
 
     info!(
@@ -178,6 +226,7 @@ mod tests {
             },
             source_config: SourceConfig::InMemory(()),
             sink_config: SinkConfig::InMemory(()),
+            controller: crate::controllers::ControllerConfig::default(),
         };
 
         let source = SourceBackend::InMemory(InMemorySource::new().await?);
@@ -193,12 +242,19 @@ mod tests {
         // 🎼 InMemory sink → JsonArrayComposer: [item,item,...]
         let composer = ComposerBackend::from_sink_config(&app_config.sink_config);
 
-        // 📏 Max request size from sink config
+        // 🧠 Build a static throttle controller for the test — InMemory doesn't need PID
         let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
+        let throttle_controllers = vec![ThrottleControllerBackend::new_static(max_request_size_bytes)];
+
+        // 🎛️ Static controller for testing — no PID, just the configured batch size
+        let the_controller = ControllerBackend::from_config(
+            &crate::controllers::ControllerConfig::default(),
+            1000,
+        );
 
         let supervisor = Supervisor::new(app_config);
         supervisor
-            .start_workers(source, vec![sink], transformer, composer, max_request_size_bytes)
+            .start_workers(source, vec![sink], transformer, composer, max_request_size_bytes, the_controller, throttle_controllers)
             .await?;
 
         // 📦 SinkWorker received 1 page (4 docs newline-delimited), passthrough composed into JSON array.
