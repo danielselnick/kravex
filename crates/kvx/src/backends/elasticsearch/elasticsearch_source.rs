@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use crate::backends::Source;
 use crate::progress::ProgressMetrics;
-use crate::supervisors::config::CommonSourceConfig;
+use crate::backends::CommonSourceConfig;
 
 // Moved here from supervisors/config.rs because configs should live near the thing they configure.
 //

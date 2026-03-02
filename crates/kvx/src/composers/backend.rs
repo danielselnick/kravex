@@ -17,7 +17,7 @@
 //!    We said "monomorphization." The duck left. It didn't want a lecture.
 
 use super::{Composer, JsonArrayComposer, NdjsonComposer};
-use crate::supervisors::config::SinkConfig;
+use crate::app_config::SinkConfig;
 use crate::transforms::DocumentTransformer;
 use anyhow::Result;
 

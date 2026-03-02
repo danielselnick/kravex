@@ -10,7 +10,7 @@ use anyhow::Context;
 use serde::Deserialize;
 // -- 🔧 To load the configuration, so I don't have to manually parse
 // -- environment variables or files. Bleh. Like doing taxes but for bytes.
-use crate::supervisors::config::{RuntimeConfig, SinkConfig, SourceConfig};
+use crate::backends::{CommonSinkConfig, ElasticsearchSinkConfig, ElasticsearchSourceConfig, FileSinkConfig, FileSourceConfig};
 use figment::{
     Figment,
     providers::{Env, Format, Toml},
@@ -19,6 +19,109 @@ use std::path::Path;
 // -- 🚀 tracing::info — because println! in production is a cry for help.
 // -- "I used to use println! for debugging... but then I got help." — anonymous dev, 2 kids, 1 wife, 1 mortgage
 use tracing::info;
+
+// ============================================================
+// 🔧 RuntimeConfig — the knobs we admit in public
+// ============================================================
+
+/// ⚙️ Runtime configuration — how fast do we go, how many workers do we spawn?
+///
+/// 🧠 Knowledge graph: former resident of `supervisors/config.rs`. Evicted to `app_config`
+/// because it's application-level config, not supervisor internals. The supervisor is a
+/// *consumer* of this config, not its *owner*. Separation of concerns, baby. 🏗️
+///
+/// 🎯 Defaults: queue capacity 10, sink parallelism 1 — conservative enough to not
+/// immediately explode on first run, ambitious enough to migrate actual data. 🦆
+#[derive(Debug, Deserialize, Clone)]
+pub struct RuntimeConfig {
+    /// 📬 Bounded channel capacity — how many raw pages buffer between source and sink workers
+    #[serde(default = "default_queue_capacity", alias = "channel_size")]
+    pub queue_capacity: usize,
+    /// 🧵 How many sink workers run in parallel — more lanes, more throughput, more debugging
+    #[serde(default = "default_sink_parallelism", alias = "num_sink_workers")]
+    pub sink_parallelism: usize,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            queue_capacity: default_queue_capacity(),
+            sink_parallelism: default_sink_parallelism(),
+        }
+    }
+}
+
+// 🔢 10: chosen by rolling a d20, getting a 10, and calling it "load tested".
+// -- The queue holds batches, not feelings, though both can become backpressure if ignored. 🦆
+fn default_queue_capacity() -> usize {
+    10
+}
+
+// 🧵 One sink lane by default: fewer moving parts, fewer ways to invent folklore during debugging.
+// -- Ancient proverb: he who spawns eight writers before breakfast, debugs until dinner.
+fn default_sink_parallelism() -> usize {
+    1
+}
+
+// ============================================================
+// 🎭 SourceConfig / SinkConfig — the velvet rope at the backend club
+// ============================================================
+
+/// 🎭 SourceConfig: the velvet rope at the backend club.
+/// You are either a File, an Elasticsearch, or an InMemory.
+/// There is no Other. There is no Unsupported. There is only the enum.
+/// (Until someone files a feature request. There is always a feature request.)
+///
+/// 🧠 Knowledge graph: moved from `supervisors/config.rs` to here — this is application-level
+/// config that the supervisor *uses* but doesn't *own*. The lib entrypoint resolves this into
+/// a `SourceBackend` for the worker pipeline. 🚰
+#[derive(Debug, Deserialize, Clone)]
+pub enum SourceConfig {
+    /// 📡 Read from an Elasticsearch index via scroll API
+    Elasticsearch(ElasticsearchSourceConfig),
+    /// 📂 Read from a local file (NDJSON or Rally JSON array)
+    File(FileSourceConfig),
+    /// 🧪 In-memory test source — 4 hardcoded docs, no I/O, no regrets
+    InMemory(()),
+}
+
+/// 🗑️ SinkConfig: same vibe as SourceConfig but for the *receiving* end.
+/// Data goes IN. Data does not come back out. It is not a revolving door.
+/// It is a black hole of bytes, and we are at peace with that.
+/// The InMemory(()) variant holds `()` which is the Rust way of saying "we have nothing to say here."
+///
+/// 🧠 Knowledge graph: moved from `supervisors/config.rs` to `app_config` — same rationale as
+/// SourceConfig. Resolved at startup into a `SinkBackend` by `lib.rs`. The SinkWorker
+/// reads `max_request_size_bytes()` to know when to flush its page buffer. 🚰
+#[derive(Debug, Deserialize, Clone)]
+pub enum SinkConfig {
+    /// 📡 Write to an Elasticsearch index via bulk API
+    Elasticsearch(ElasticsearchSinkConfig),
+    /// 📂 Write to a local file (NDJSON)
+    File(FileSinkConfig),
+    /// 🧪 In-memory test sink — captures payloads for assertion, no I/O
+    InMemory(()),
+}
+
+impl SinkConfig {
+    /// 📏 Extract `max_request_size_bytes` from whichever sink config variant we are.
+    ///
+    /// Each backend sink config embeds a `CommonSinkConfig` with this field.
+    /// InMemory has no config struct, so it gets the `CommonSinkConfig::default()` value.
+    /// "He who queries the config, avoids the match in the hot path." — Ancient proverb 📜
+    ///
+    /// 🧠 Knowledge graph: SinkWorker uses this to know when to flush its page buffer.
+    /// The buffer accumulates raw pages until their total byte size approaches this limit,
+    /// then the Composer transforms+assembles them into a single payload for the sink.
+    pub fn max_request_size_bytes(&self) -> usize {
+        match self {
+            SinkConfig::Elasticsearch(es) => es.common_config.max_request_size_bytes,
+            SinkConfig::File(f) => f.common_config.max_request_size_bytes,
+            // 🧠 InMemory gets the default — it's testing, we don't limit 🦆
+            SinkConfig::InMemory(_) => CommonSinkConfig::default().max_request_size_bytes,
+        }
+    }
+}
 
 /// 📦 The AppConfig: one struct to rule them all, one struct to find them,
 /// one struct to bring them all, and in the Figment bind them.

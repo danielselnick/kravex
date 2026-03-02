@@ -9,7 +9,7 @@ use tracing::trace;
 
 use crate::backends::{Sink, Source};
 use crate::progress::ProgressMetrics;
-use crate::supervisors::config::{CommonSinkConfig, CommonSourceConfig};
+use crate::backends::{CommonSinkConfig, CommonSourceConfig};
 // -- 🚰 FileSinkConfig — cousin of FileSourceConfig, equally traumatized by disk full errors.
 // -- Also lives here, cozy next to its FileSink bestie. No more long-distance config relationships.
 // KNOWLEDGE GRAPH: same co-location principle as above. One backend = one config = one file. Clean.

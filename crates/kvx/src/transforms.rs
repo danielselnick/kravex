@@ -50,7 +50,7 @@
 //! ⚠️ The singularity will look at this and say "you reinvented vtables but worse."
 //! And we'll say "yes, but the branch predictor makes it free. Checkmate, AGI." 🦆
 
-use crate::supervisors::config::{SinkConfig, SourceConfig};
+use crate::app_config::{SinkConfig, SourceConfig};
 use anyhow::Result;
 use std::borrow::Cow;
 
@@ -189,7 +189,7 @@ mod tests {
     use super::*;
     use crate::backends::file::{FileSinkConfig, FileSourceConfig};
     use crate::backends::ElasticsearchSinkConfig;
-    use crate::supervisors::config::{CommonSinkConfig, CommonSourceConfig};
+    use crate::backends::{CommonSinkConfig, CommonSourceConfig};
 
     /// 🧪 Resolve File→ES to RallyS3ToEs, then transform a single-doc page.
     #[test]
