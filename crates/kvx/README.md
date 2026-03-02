@@ -131,6 +131,17 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig, Controller
 | Transform | Per-page → `Vec<Cow<str>>` items (Borrowed=passthrough, Owned=conversion) |
 | Sink | Pure I/O: HTTP POST, file write, memory push |
 
+## Public API (for kvx-cli)
+
+Config types exposed via `pub mod backends` + `pub mod transforms`:
+- `kvx::backends::{FileSourceConfig, FileSinkConfig, ElasticsearchSourceConfig, ElasticsearchSinkConfig, S3RallySourceConfig, RallyTrack, CommonSourceConfig, CommonSinkConfig}`
+- `kvx::transforms::{FlowDescriptor, supported_flows()}`
+- `kvx::app_config::{AppConfig, RuntimeConfig, SourceConfig, SinkConfig}`
+
+Backend impls (`Source`, `Sink`, `SourceBackend`, `SinkBackend`) remain `pub(crate)`.
+
+`RallyTrack` implements `FromStr` for CLI arg parsing (mirrors `as_str()` in reverse).
+
 # Notes for future reference
 
 - POC/MVP stage — API surface is unstable
@@ -161,7 +172,8 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig, Controller
 - v10 raw pages + composers (current): Source returns `Option<String>` (raw page), Transform returns `Vec<Cow<str>>` (zero-copy), Composer replaces Collector (transform+assemble in one shot), SinkWorker buffers by byte size. 31 tests passing.
 - v11 config migration (complete): `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs`; `supervisors/config.rs` deleted; all callers updated. 31 tests passing.
 - v12 S3 Rally source: `S3RallySource` streams Rally benchmark track data from S3. `RallyTrack` enum validates track names. Config: track, bucket, region, optional key override, CommonSourceConfig. Transport: `GetObject` → `ByteStream::into_async_read()` → `BufReader` → `read_line()` (same loop as FileSource). Transform routing: S3Rally→File = Passthrough, S3Rally→ES = RallyS3ToEs. 44 tests passing.
-- v13 PID controller (current): Adaptive batch sizing via `Controller` trait. Two impls: `ConfigController` (static, default) and `PidBytesToDocCount` (PID feedback loop ported from C#). `Source` trait gains `set_page_size_hint()`. `SourceWorker` owns `ControllerBackend`, runs feedback loop: `output()` → `set_page_size_hint()` → `next_page()` → `measure()`. `ControllerConfig` in `AppConfig` (`[controller]` TOML section). PID gains auto-calculated. EMA smoothing on measurements (α=0.25) and adjustments (α=0.75). Anti-windup clamping. 66 tests passing.
+- v13 public API + FlowDescriptor: `backends` and `transforms` modules made `pub`. Config struct re-exports changed from `pub(crate)` to `pub`. `FlowDescriptor` + `supported_flows()` added to transforms.rs as CLI source of truth. `RallyTrack` gained `FromStr` impl. Drift-detection test ensures `supported_flows()` ↔ `from_configs()` sync. 45 tests passing.
+- v14 PID controller (current): Adaptive batch sizing via `Controller` trait. Two impls: `ConfigController` (static, default) and `PidBytesToDocCount` (PID feedback loop ported from C#). `Source` trait gains `set_page_size_hint()`. `SourceWorker` owns `ControllerBackend`, runs feedback loop: `output()` → `set_page_size_hint()` → `next_page()` → `measure()`. `ControllerConfig` in `AppConfig` (`[controller]` TOML section). PID gains auto-calculated. EMA smoothing on measurements (α=0.25) and adjustments (α=0.75). Anti-windup clamping. 66 tests passing.
 
 ## S3 Rally Source Configuration Example
 ```toml
