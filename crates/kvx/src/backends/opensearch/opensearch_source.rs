@@ -36,7 +36,6 @@ use serde_json::Value;
 use std::time::Duration;
 use tracing::{debug, info, trace};
 
-use crate::backends::CommonSourceConfig;
 use crate::backends::Source;
 use crate::progress::ProgressMetrics;
 
@@ -74,9 +73,6 @@ pub struct OpenSearchSourceConfig {
     /// If None, we read ALL documents. Every single one. No discrimination.
     #[serde(default)]
     pub query: Option<String>,
-    /// 📦 Common source settings — batch size in docs/bytes.
-    #[serde(default)]
-    pub common_config: CommonSourceConfig,
 }
 
 /// 🔍 The source side of the OpenSearch backend — PIT + search_after pagination.
@@ -144,7 +140,7 @@ impl Source for OpenSearchSource {
     ///
     /// ## EOF detection
     /// When the search returns zero hits, we're done. PIT gets deleted.
-    async fn next_page(&mut self) -> Result<Option<String>> {
+    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<String>> {
         // 🏁 Short-circuit if we already know we're done
         if self.exhausted {
             return Ok(None);
@@ -156,7 +152,7 @@ impl Source for OpenSearchSource {
         }
 
         // 📡 Execute search with PIT + search_after
-        let (hits, page_bytes) = self.execute_search().await?;
+        let (hits, page_bytes) = self.execute_search(doc_count_hint).await?;
 
         if hits.is_empty() {
             // 🏁 EOF — no more documents. Clean up the PIT. Wave goodbye.
@@ -284,7 +280,7 @@ impl OpenSearchSource {
     /// Each hit line: `{"_id":"abc","_index":"src-idx","_source":{...}}`
     /// The _id and _index are preserved so downstream transforms can build
     /// bulk action lines with proper document identity routing.
-    async fn execute_search(&mut self) -> Result<(Vec<String>, usize)> {
+    async fn execute_search(&mut self, batch_size: usize) -> Result<(Vec<String>, usize)> {
         let search_url = format!(
             "{}/_search",
             self.config.url.trim_end_matches('/')
@@ -299,7 +295,7 @@ impl OpenSearchSource {
         };
 
         let mut search_body = serde_json::json!({
-            "size": self.config.common_config.max_batch_size_docs,
+            "size": batch_size,
             "query": query,
             "sort": [{"_doc": "asc"}],
             "_source": true
@@ -468,7 +464,6 @@ mod tests {
             api_key: None,
             danger_accept_invalid_certs: true,
             query: Some(r#"{"term":{"status":"active"}}"#.to_string()),
-            common_config: CommonSourceConfig::default(),
         };
         assert_eq!(config.index, "my-index");
         assert!(config.danger_accept_invalid_certs);
@@ -493,21 +488,4 @@ mod tests {
         assert!(config.query.is_none(), "No query = match_all, the firehose approach");
     }
 
-    /// 🧪 Common source config defaults are applied.
-    #[test]
-    fn the_one_where_common_source_config_defaults_kick_in() {
-        let config = OpenSearchSourceConfig {
-            url: "https://localhost:9200".to_string(),
-            index: "test".to_string(),
-            username: None,
-            password: None,
-            api_key: None,
-            danger_accept_invalid_certs: false,
-            query: None,
-            common_config: CommonSourceConfig::default(),
-        };
-        // 🎯 Default trait gives 1000 docs / 1MB
-        assert_eq!(config.common_config.max_batch_size_docs, 1000);
-        assert_eq!(config.common_config.max_batch_size_bytes, 1024 * 1024);
-    }
 }

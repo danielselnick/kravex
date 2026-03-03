@@ -32,7 +32,6 @@ use serde_json::Value;
 use std::time::Duration;
 use tracing::{debug, info, trace};
 
-use crate::backends::CommonSourceConfig;
 use crate::backends::Source;
 use crate::progress::ProgressMetrics;
 
@@ -63,10 +62,6 @@ pub struct ElasticsearchSourceConfig {
     /// Pass a valid ES query DSL object, e.g., `{"term":{"status":"active"}}`.
     #[serde(default)]
     pub query: Option<String>,
-    /// 📦 Common source settings — the bureaucratic paperwork of data migration.
-    /// Max batch size, timeouts, etc. Not glamorous. Essential. Like the appendix.
-    #[serde(default)]
-    pub common_config: CommonSourceConfig,
 }
 
 /// 📡 The source side of the Elasticsearch backend — PIT + search_after pagination.
@@ -118,15 +113,17 @@ impl std::fmt::Debug for ElasticsearchSource {
 
 #[async_trait]
 impl Source for ElasticsearchSource {
-    /// 📡 Returns the next raw page from Elasticsearch.
+    /// 🚰 Pumps the next raw page from Elasticsearch.
     ///
-    /// No longer returns `None` immediately! The stub is dead! Long live the source!
-    /// Uses PIT + search_after for consistent deep pagination.
+    /// `doc_count_hint` controls the ES `size` parameter per search request,
+    /// allowing the throttle controller to dynamically adjust batch sizes.
+    /// Like a volume knob, but for documents. Turn it up, get more. Turn it down,
+    /// your cluster thanks you.
     ///
     /// Returns `Ok(Some(page))` where page is NDJSON: one JSON line per hit.
     /// Each line: `{"_id":"abc","_index":"src-idx","_source":{"field":"val"}}`
     /// Returns `Ok(None)` when all documents have been read.
-    async fn next_page(&mut self) -> Result<Option<String>> {
+    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<String>> {
         // 🏁 Short-circuit if we already know we're done
         if self.exhausted {
             return Ok(None);
@@ -138,7 +135,7 @@ impl Source for ElasticsearchSource {
         }
 
         // 📡 Execute search with PIT + search_after
-        let (hits, page_bytes) = self.execute_search().await?;
+        let (hits, page_bytes) = self.execute_search(doc_count_hint).await?;
 
         if hits.is_empty() {
             // 🏁 EOF — clean up PIT and signal done
@@ -259,7 +256,7 @@ impl ElasticsearchSource {
     /// 📡 Execute a search request with PIT + search_after pagination.
     ///
     /// Returns: (Vec<String>, usize) — (NDJSON lines per hit, total bytes)
-    async fn execute_search(&mut self) -> Result<(Vec<String>, usize)> {
+    async fn execute_search(&mut self, batch_size: usize) -> Result<(Vec<String>, usize)> {
         let search_url = format!(
             "{}/_search",
             self.config.url.trim_end_matches('/')
@@ -274,7 +271,7 @@ impl ElasticsearchSource {
         };
 
         let mut search_body = serde_json::json!({
-            "size": self.config.common_config.max_batch_size_docs,
+            "size": batch_size,
             "query": query,
             "sort": [{"_doc": "asc"}],
             "_source": true
