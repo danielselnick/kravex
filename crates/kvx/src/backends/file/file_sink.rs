@@ -19,28 +19,12 @@ use tracing::trace;
 
 use crate::backends::{Sink, Source};
 use crate::progress::ProgressMetrics;
-use crate::backends::{CommonSinkConfig, CommonSourceConfig};
 // -- 🚰 FileSinkConfig — cousin of FileSourceConfig, equally traumatized by disk full errors.
 // -- Also lives here, cozy next to its FileSink bestie. No more long-distance config relationships.
 // KNOWLEDGE GRAPH: same co-location principle as above. One backend = one config = one file. Clean.
 #[derive(Debug, Deserialize, Clone)]
 pub struct FileSinkConfig {
     pub file_name: String,
-    #[serde(flatten, default = "default_file_common_sink_config")]
-    pub common_config: CommonSinkConfig,
-}
-
-/// 🔧 Returns the default config for FileSink. It defaults. It ships. It doesn't ask questions.
-///
-/// What's the DEAL with default implementations? You define an entire struct, document every field,
-/// agonize over the right batch size... and then serde just calls `.default()` and moves on
-/// like none of it mattered. Like Kevin. Kevin never called either.
-///
-/// This function is here because serde's `default = "fn_name"` attribute requires a *function*,
-/// not just `Default::default` inline. Bureaucracy, but in type-system form.
-fn default_file_common_sink_config() -> CommonSinkConfig {
-    // -- ✅ ancient proverb: "He who ships with defaults, panics in production with style"
-    CommonSinkConfig::default()
 }
 /// 🚰 FileSink — receives fully rendered payload strings and writes them to disk. I/O only.
 ///
@@ -98,7 +82,7 @@ impl Sink for FileSink {
     /// The SinkWorker already transformed and binary-collected. We just dump bytes to disk.
     /// No parsing. No iterating over hits. No drama. Just I/O.
     /// "What do you do?" "I write bytes." "That's it?" "That's everything." 🦆
-    async fn send(&mut self, payload: String) -> Result<()> {
+    async fn drain(&mut self, payload: String) -> Result<()> {
         trace!(
             "📬 payload of {} bytes walked into the file sink — writing it all down",
             payload.len()

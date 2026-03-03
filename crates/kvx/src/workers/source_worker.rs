@@ -24,10 +24,11 @@
 
 use super::Worker;
 use crate::backends::{Source, SourceBackend};
-use crate::controllers::{Controller, ControllerBackend};
+use crate::throttlers::{Controller, ControllerBackend};
 use anyhow::{Context, Result};
 use async_channel::Sender;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 /// 🚰 The SourceWorker: reads raw pages from a backend, sends each `String` to the channel.
@@ -52,23 +53,28 @@ pub(crate) struct SourceWorker {
     /// 🎛️ The feedback controller — decides batch size, learns from measurements.
     /// ConfigController = fixed batch size (default). PidBytesToDocCount = adaptive.
     controller: ControllerBackend,
+    /// 🛑 The escape hatch — when cancelled, close channel and stop pumping.
+    /// Like a fire alarm, but for data. Everyone exits orderly. 🔥🦆
+    cancellation_token: CancellationToken,
 }
 
 impl SourceWorker {
     /// 🏗️ Constructs a new SourceWorker — the headwaters of the pipeline.
     ///
     /// Give it a sender (where the raw pages go), a source backend (where the data comes from),
-    /// and a controller (how many docs to fetch per page). The controller is the new kid.
-    /// It's eager. It has opinions. It adjusts batch sizes. We're cautiously optimistic. 🎛️
+    /// a controller (how many docs to fetch per page), and a cancellation token (the kill switch).
+    /// The controller is eager. The token is patient. Together, they manage throughput and graceful exits. 🎛️🛑
     pub(crate) fn new(
         tx: Sender<String>,
         source: SourceBackend,
         controller: ControllerBackend,
+        cancellation_token: CancellationToken,
     ) -> Self {
         Self {
             tx,
             source,
             controller,
+            cancellation_token,
         }
     }
 }
@@ -80,34 +86,41 @@ impl Worker for SourceWorker {
             loop {
                 // 🎛️ Step 1: Ask the controller for the optimal batch size
                 let the_batch_size_hint = self.controller.output();
-                // 🎯 Step 2: Tell the source how many docs we want
-                self.source.set_page_size_hint(the_batch_size_hint);
 
-                match self
-                    .source
-                    .next_page()
-                    .await
-                    .context("💀 SourceWorker failed to get next page — the well collapsed")?
-                {
-                    Some(page) => {
-                        let the_page_size_bytes = page.len();
-                        debug!(
-                            "📤 SourceWorker sending {} byte page to channel (batch_hint={})",
-                            the_page_size_bytes, the_batch_size_hint
-                        );
-                        // 📏 Step 3: Feed the measurement back to the controller BEFORE sending.
-                        // 🧠 TRIBAL KNOWLEDGE: measure happens BEFORE send in SourceWorker, but
-                        // AFTER send in SinkWorker. The asymmetry is intentional:
-                        //   - SourceWorker measures *response size* (bytes received) → controller
-                        //     adjusts doc count for the NEXT fetch. No timing needed, just size.
-                        //   - SinkWorker measures *send duration* (ms elapsed) → PID controller
-                        //     adjusts byte budget. Timing matters, so it measures AFTER the I/O.
-                        self.controller.measure(the_page_size_bytes as f64);
-                        // 📬 Step 4: Send the page downstream
-                        self.tx.send(page).await?;
+                // 🛑 Step 2: Race pump vs cancellation — whoever wins, we're done (or continuing)
+                // 🧠 tokio::select! picks the first future to complete. If cancellation wins,
+                // we close the channel and break. The sink workers will drain remaining pages.
+                tokio::select! {
+                    pump_result = self.source.pump(the_batch_size_hint) => {
+                        match pump_result
+                            .context("💀 SourceWorker failed to pump page — the well collapsed")?
+                        {
+                            Some(page) => {
+                                let the_page_size_bytes = page.len();
+                                debug!(
+                                    "📤 SourceWorker sending {} byte page to channel (batch_hint={})",
+                                    the_page_size_bytes, the_batch_size_hint
+                                );
+                                // 📏 Step 3: Feed the measurement back to the controller BEFORE sending.
+                                // 🧠 TRIBAL KNOWLEDGE: measure happens BEFORE send in SourceWorker, but
+                                // AFTER send in SinkWorker. The asymmetry is intentional:
+                                //   - SourceWorker measures *response size* (bytes received) → controller
+                                //     adjusts doc count for the NEXT fetch. No timing needed, just size.
+                                //   - SinkWorker measures *send duration* (ms elapsed) → PID controller
+                                //     adjusts byte budget. Timing matters, so it measures AFTER the I/O.
+                                self.controller.measure(the_page_size_bytes as f64);
+                                // 📬 Step 4: Send the page downstream
+                                self.tx.send(page).await?;
+                            }
+                            None => {
+                                debug!("🏁 SourceWorker: None = EOF. Closing channel. The well is dry.");
+                                self.tx.close();
+                                break;
+                            }
+                        }
                     }
-                    None => {
-                        debug!("🏁 SourceWorker: None = EOF. Closing channel. The well is dry.");
+                    _ = self.cancellation_token.cancelled() => {
+                        debug!("🛑 SourceWorker: cancellation received. Closing channel. The fire alarm was pulled. 🔥");
                         self.tx.close();
                         break;
                     }

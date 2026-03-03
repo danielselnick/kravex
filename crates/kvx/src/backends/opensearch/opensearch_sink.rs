@@ -31,7 +31,6 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use tracing::{debug, trace};
 
-use crate::backends::CommonSinkConfig;
 use crate::backends::Sink;
 
 // ⚠️ Per-doc index routing: each Hit can carry its own `_index` field, which overrides this config.
@@ -69,9 +68,8 @@ pub struct OpenSearchSinkConfig {
     // in the workspace (used by S3Rally). SigV4 signing would happen in
     // `apply_auth()` before each HTTP request.
     // Tracking: [future story — AWS SigV4 for managed OpenSearch Service]
-    /// 🔧 Common sink config: max batch size in bytes, and other life decisions.
-    #[serde(flatten, default)]
-    pub common_config: CommonSinkConfig,
+
+
 }
 
 /// 📡 The sink side of the OpenSearch backend — pure I/O, zero buffering.
@@ -104,9 +102,9 @@ impl Sink for OpenSearchSink {
     /// The SinkWorker upstream already transformed each doc and binary-collected them into
     /// a single NDJSON payload string. We just fire it into the OpenSearch void.
     /// "In a world where two search engines shared a bulk API... one sink dared to POST to both."
-    async fn send(&mut self, payload: String) -> Result<()> {
+    async fn drain(&mut self, payload: String) -> Result<()> {
         debug!(
-            "📡 Sending {} bytes to OpenSearch /_bulk — documents leaving the building, fork-style",
+            "🚰 Draining {} bytes to OpenSearch /_bulk — documents leaving the building, fork-style",
             payload.len()
         );
         self.submit_bulk_request(payload).await
@@ -302,7 +300,6 @@ mod tests {
             api_key: None,
             index: Some("my-index".to_string()),
             danger_accept_invalid_certs: true,
-            common_config: CommonSinkConfig::default(),
         };
         assert_eq!(config.url, "https://localhost:9200");
         assert!(config.danger_accept_invalid_certs);
@@ -331,19 +328,10 @@ mod tests {
             api_key: None,
             index: None,
             danger_accept_invalid_certs: false,
-            common_config: CommonSinkConfig::default(),
         };
         // 🦆 No auth at all. The cluster is an open door. In dev. We hope.
         assert!(config.username.is_none());
         assert!(config.api_key.is_none());
     }
 
-    /// 🧪 CommonSinkConfig defaults are embedded via serde flatten.
-    #[test]
-    fn the_one_where_common_config_flattens_gracefully() {
-        let json = r#"{"url": "https://localhost:9200", "max_request_size_bytes": 5242880}"#;
-        let config: OpenSearchSinkConfig = serde_json::from_str(json)
-            .expect("💀 Flattened common config should parse.");
-        assert_eq!(config.common_config.max_request_size_bytes, 5242880);
-    }
 }

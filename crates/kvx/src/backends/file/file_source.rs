@@ -19,7 +19,6 @@ use tracing::trace;
 
 use crate::backends::{Sink, Source};
 use crate::progress::ProgressMetrics;
-use crate::backends::{CommonSinkConfig, CommonSourceConfig};
 
 // -- 📂 FileSourceConfig — "It's just a file", said no sysadmin ever before the disk filled up.
 // -- Lives here now, close to the FileSource that actually uses it. Ethos pattern, baby. 🎯
@@ -29,20 +28,6 @@ use crate::backends::{CommonSinkConfig, CommonSourceConfig};
 #[derive(Debug, Deserialize, Clone)]
 pub struct FileSourceConfig {
     pub file_name: String,
-    #[serde(default = "default_file_common_source_config")]
-    pub common_config: CommonSourceConfig,
-}
-
-/// 🔧 Returns the default config for FileSource because sometimes you just want things to work
-/// without writing a 40-line TOML block.
-///
-/// Dad joke time: I used to hate default configs... but they grew on me.
-///
-/// This exists purely so serde can call it when `common_config` is absent from the TOML.
-/// The `#[serde(default = "...")]` attribute up top is the boss. This is just the errand boy.
-fn default_file_common_source_config() -> CommonSourceConfig {
-    // -- ✅ "It just works" — the three most dangerous words in software engineering
-    CommonSourceConfig::default()
 }
 /// 📂 FileSource — reads a file line by line, assembles raw `String` pages, and moves on.
 ///
@@ -60,6 +45,10 @@ fn default_file_common_source_config() -> CommonSourceConfig {
 pub(crate) struct FileSource {
     buf_reader: io::BufReader<File>,
     source_config: FileSourceConfig,
+    /// 📦 Max docs per batch page — updated by pump(doc_count_hint) each call
+    max_batch_size_docs: usize,
+    /// 📦 Max bytes per batch page — set at construction from throttle config
+    max_batch_size_bytes: usize,
     // -- 📊 progress tracker — because "it's running" is not a status update.
     // -- This feeds the fancy progress table in the supervisor. Without it, you'd be flying blind
     // -- in a storm with no instruments. With it, you're flying blind in a storm, but at least
@@ -90,7 +79,11 @@ impl FileSource {
     /// No cap: `File::open` is async here because we're in tokio-land. This is not your
     /// grandfather's `std::fs::File::open`. This is `std::fs::File::open`'s cooler younger sibling
     /// who got into the async runtime scene and never looked back.
-    pub(crate) async fn new(source_config: FileSourceConfig) -> Result<Self> {
+    pub(crate) async fn new(
+        source_config: FileSourceConfig,
+        max_batch_size_bytes: usize,
+        max_batch_size_docs: usize,
+    ) -> Result<Self> {
         // -- 💀 The door. It's locked. Or it doesn't exist. Or the filesystem lied to you.
         // -- In any case, the source file refused to open — like a very stubborn bouncer
         // -- at an exclusive club where the club is just a text file and we are very small data.
@@ -120,6 +113,8 @@ impl FileSource {
         Ok(Self {
             buf_reader,
             source_config,
+            max_batch_size_docs,
+            max_batch_size_bytes,
             progress,
         })
     }
@@ -127,14 +122,10 @@ impl FileSource {
 
 #[async_trait]
 impl Source for FileSource {
-    /// 🎛️ Update the batch size hint from the controller.
-    /// FileSource respects this by adjusting `max_batch_size_docs` — the doc count cap per page.
-    /// "He who listens to the controller, fetches the right amount." — Ancient batch proverb 📜
-    fn set_page_size_hint(&mut self, doc_count: usize) {
-        self.source_config.common_config.max_batch_size_docs = doc_count;
-    }
-
-    /// 📄 Read the next page of lines from the file. Returns `None` when EOF.
+    /// 🚰 Pump the next page of lines from the file. Returns `None` when EOF.
+    ///
+    /// `doc_count_hint` adjusts `max_batch_size_docs` before reading — the controller's
+    /// recommended batch size merges into the pump in a single call. No more two-step.
     ///
     /// 🧠 Knowledge graph: sources return `Option<String>` — one raw page of newline-delimited
     /// content, uninterpreted. The source accumulates lines up to byte/doc caps and returns
@@ -146,14 +137,16 @@ impl Source for FileSource {
     /// Both are checked on every iteration. Whichever fires first wins.
     ///
     /// "He who reads the entire file into one String, OOMs in production." — Ancient proverb 📜
-    async fn next_page(&mut self) -> Result<Option<String>> {
-        let mut page = String::with_capacity(self.source_config.common_config.max_batch_size_bytes);
+    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<String>> {
+        // 🎛️ Apply the controller's batch size hint — merged from the old set_page_size_hint()
+        self.max_batch_size_docs = doc_count_hint;
+        let mut page = String::with_capacity(self.max_batch_size_bytes);
         let mut total_bytes_read = 0usize;
         let mut line_count = 0usize;
         // ⚠️ 1MB initial capacity per line — because NDJSON documents can be chunky.
         let mut line = String::with_capacity(1024 * 1024);
 
-        for _ in 0..=self.source_config.common_config.max_batch_size_docs {
+        for _ in 0..=self.max_batch_size_docs {
             let bytes_read = self.buf_reader.read_line(&mut line).await?;
             if bytes_read == 0 {
                 break;
@@ -174,11 +167,11 @@ impl Source for FileSource {
             }
             line.clear();
 
-            if total_bytes_read > self.source_config.common_config.max_batch_size_bytes {
+            if total_bytes_read > self.max_batch_size_bytes {
                 break;
             }
 
-            if line_count >= self.source_config.common_config.max_batch_size_docs {
+            if line_count >= self.max_batch_size_docs {
                 break;
             }
         }

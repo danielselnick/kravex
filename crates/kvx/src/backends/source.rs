@@ -22,7 +22,9 @@ use crate::backends::{elasticsearch, file, in_mem, opensearch, s3_rally};
 /// Guaranteed to dispense only the finest organic, free-range, artisanal bytes.
 ///
 /// # Contract 📜
-/// - `next_page` returns `Option<String>` — one raw page of data, uninterpreted.
+/// - `pump(doc_count_hint)` returns `Option<String>` — one raw page of data, uninterpreted.
+/// - `doc_count_hint` tells the source how many docs are desired — sources that support it
+///   adjust their batch size accordingly. Those that don't, ignore it gracefully.
 /// - `None` = EOF. The well is dry. The golden retriever goes home. 🐕
 /// - The source does NOT parse, split, or understand its content. It's a faucet, not a chef.
 /// - The Composer downstream handles format understanding via the Transformer.
@@ -33,28 +35,17 @@ use crate::backends::{elasticsearch, file, in_mem, opensearch, s3_rally};
 /// - Source returns raw pages → channel(String) → SinkWorker buffers → Composer transforms+assembles
 /// - Source is a data faucet 🚿 — it pours, the pipeline catches
 /// - **Zero-copy enabled**: Source doesn't split docs, Composer borrows from buffered pages via Cow
+/// - `pump` replaces the old `next_page` + `set_page_size_hint` two-step — one call, one hint, one page.
 #[async_trait]
 pub trait Source: std::fmt::Debug {
-    /// 📄 Fetch the next raw page of data.
+    /// 🚰 Pump the next raw page of data, with a doc count hint for batch sizing.
     ///
+    /// `doc_count_hint` is the controller's recommended batch size (number of documents).
+    /// Sources that support dynamic sizing (File, S3Rally) use it. Others ignore it.
     /// Returns `Ok(Some(page))` while data flows — one page per call, content uninterpreted.
     /// Returns `Ok(None)` when the tap runs dry. EOF. Fin. The end. 🏁
     /// Returns `Err(...)` when something has gone sideways, sidelong, or fully upside-down.
-    async fn next_page(&mut self) -> Result<Option<String>>;
-
-    /// 🎛️ Hint the source about the desired page size (doc count) for the next fetch.
-    ///
-    /// Called by the SourceWorker before each `next_page()`, with the controller's
-    /// recommended batch size. Sources that support dynamic sizing should update their
-    /// internal `max_batch_size_docs` accordingly. Sources that don't care can ignore it.
-    ///
-    /// Default: no-op. Like sending a suggestion email — it arrives, it's read, nothing changes.
-    /// "He who hints but does not enforce, suggests in vain." — Ancient trait proverb 📜
-    fn set_page_size_hint(&mut self, _doc_count: usize) {
-        // 🧘 Default implementation: the hint is acknowledged and gently ignored.
-        // Sources that support dynamic batch sizing override this.
-        // InMemorySource and ElasticsearchSource (currently) use the default.
-    }
+    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<String>>;
 }
 
 /// 🎭 The many faces of a Source — a polymorphic casting call for data origins.
@@ -78,27 +69,14 @@ pub enum SourceBackend {
 
 #[async_trait]
 impl Source for SourceBackend {
-    async fn next_page(&mut self) -> Result<Option<String>> {
-        // -- 🎭 The enum match: five backends enter, one page leaves. Thunderdome rules.
+    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<String>> {
+        // -- 🚰 The enum match: five backends enter, one page leaves. Thunderdome rules.
         match self {
-            SourceBackend::InMemory(i) => i.next_page().await,
-            SourceBackend::File(f) => f.next_page().await,
-            SourceBackend::Elasticsearch(es) => es.next_page().await,
-            SourceBackend::OpenSearch(os) => os.next_page().await,
-            SourceBackend::S3Rally(s3) => s3.next_page().await,
-        }
-    }
-
-    /// 🎛️ Dispatch set_page_size_hint to the wrapped source.
-    /// Each backend decides what to do with it. Some listen. Some don't. Like children.
-    fn set_page_size_hint(&mut self, doc_count: usize) {
-        // -- 🎛️ "I'd like doc_count documents please" — said the controller to the void
-        match self {
-            SourceBackend::InMemory(i) => i.set_page_size_hint(doc_count),
-            SourceBackend::File(f) => f.set_page_size_hint(doc_count),
-            SourceBackend::Elasticsearch(es) => es.set_page_size_hint(doc_count),
-            SourceBackend::OpenSearch(os) => os.set_page_size_hint(doc_count),
-            SourceBackend::S3Rally(s3) => s3.set_page_size_hint(doc_count),
+            SourceBackend::InMemory(i) => i.pump(doc_count_hint).await,
+            SourceBackend::File(f) => f.pump(doc_count_hint).await,
+            SourceBackend::Elasticsearch(es) => es.pump(doc_count_hint).await,
+            SourceBackend::OpenSearch(os) => os.pump(doc_count_hint).await,
+            SourceBackend::S3Rally(s3) => s3.pump(doc_count_hint).await,
         }
     }
 }

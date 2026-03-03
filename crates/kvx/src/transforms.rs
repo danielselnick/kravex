@@ -335,7 +335,7 @@ mod tests {
     use crate::backends::ElasticsearchSinkConfig;
     use crate::backends::ElasticsearchSourceConfig;
     use crate::backends::S3RallySourceConfig;
-    use crate::backends::{CommonSinkConfig, CommonSourceConfig};
+
 
     /// 🧪 DRIFT DETECTION — the smoke detector for code drift. 🔥
     ///
@@ -367,7 +367,6 @@ mod tests {
             match source_type {
                 "file" => SourceConfig::File(FileSourceConfig {
                     file_name: "dummy.json".to_string(),
-                    common_config: CommonSourceConfig::default(),
                 }),
                 "elasticsearch" => SourceConfig::Elasticsearch(ElasticsearchSourceConfig {
                     url: "http://localhost:9200".to_string(),
@@ -376,14 +375,12 @@ mod tests {
                     api_key: None,
                     index: None,
                     query: None,
-                    common_config: CommonSourceConfig::default(),
                 }),
                 "s3-rally" => SourceConfig::S3Rally(S3RallySourceConfig {
                     track: crate::backends::s3_rally::RallyTrack::Geonames,
                     bucket: "dummy".to_string(),
                     region: "us-east-1".to_string(),
                     key: None,
-                    common_config: CommonSourceConfig::default(),
                 }),
                 "inmemory" => SourceConfig::InMemory(()),
                 other_dimension => panic!("💀 Unknown source type in drift test: {}", other_dimension),
@@ -395,7 +392,6 @@ mod tests {
             match sink_type {
                 "file" => SinkConfig::File(FileSinkConfig {
                     file_name: "dummy.json".to_string(),
-                    common_config: CommonSinkConfig::default(),
                 }),
                 "elasticsearch" => SinkConfig::Elasticsearch(ElasticsearchSinkConfig {
                     url: "http://localhost:9200".to_string(),
@@ -403,7 +399,6 @@ mod tests {
                     password: None,
                     api_key: None,
                     index: Some("dummy".to_string()),
-                    common_config: CommonSinkConfig::default(),
                 }),
                 "inmemory" => SinkConfig::InMemory(()),
                 other_dimension => panic!("💀 Unknown sink type in drift test: {}", other_dimension),
@@ -462,7 +457,6 @@ mod tests {
         // 🔧 Build source/sink configs like the real pipeline does
         let source = SourceConfig::File(FileSourceConfig {
             file_name: "rally_export.json".to_string(),
-            common_config: CommonSourceConfig::default(),
         });
         let sink = SinkConfig::Elasticsearch(ElasticsearchSinkConfig {
             url: "http://localhost:9200".to_string(),
@@ -470,7 +464,6 @@ mod tests {
             password: None,
             api_key: None,
             index: Some("rally".to_string()),
-            common_config: CommonSinkConfig::default(),
         });
 
         // 🎯 Resolve — should give us RallyS3ToEs
@@ -505,11 +498,9 @@ mod tests {
     fn the_one_where_file_to_file_resolves_to_passthrough() -> Result<()> {
         let source = SourceConfig::File(FileSourceConfig {
             file_name: "input.json".to_string(),
-            common_config: CommonSourceConfig::default(),
         });
         let sink = SinkConfig::File(FileSinkConfig {
             file_name: "output.json".to_string(),
-            common_config: CommonSinkConfig::default(),
         });
 
         let the_transformer = DocumentTransformer::from_configs(&source, &sink);
@@ -540,7 +531,6 @@ mod tests {
     fn the_one_where_rally_json_flies_direct_to_es_bulk_via_config_resolution() -> Result<()> {
         let source = SourceConfig::File(FileSourceConfig {
             file_name: "data.json".to_string(),
-            common_config: CommonSourceConfig::default(),
         });
         let sink = SinkConfig::Elasticsearch(ElasticsearchSinkConfig {
             url: "http://localhost:9200".to_string(),
@@ -548,7 +538,6 @@ mod tests {
             password: None,
             api_key: None,
             index: Some("rally-artifacts".to_string()),
-            common_config: CommonSinkConfig::default(),
         });
 
         let the_transformer = DocumentTransformer::from_configs(&source, &sink);
@@ -602,11 +591,9 @@ mod tests {
             bucket: "test-bucket".to_string(),
             region: "us-east-1".to_string(),
             key: None,
-            common_config: CommonSourceConfig::default(),
         });
         let sink = SinkConfig::File(FileSinkConfig {
             file_name: "output.json".to_string(),
-            common_config: CommonSinkConfig::default(),
         });
 
         let the_transformer = DocumentTransformer::from_configs(&source, &sink);
@@ -626,7 +613,6 @@ mod tests {
             bucket: "rally-data".to_string(),
             region: "eu-west-1".to_string(),
             key: Some("custom/pmc.json".to_string()),
-            common_config: CommonSourceConfig::default(),
         });
         let sink = SinkConfig::Elasticsearch(ElasticsearchSinkConfig {
             url: "http://localhost:9200".to_string(),
@@ -634,7 +620,6 @@ mod tests {
             password: None,
             api_key: None,
             index: Some("pmc-data".to_string()),
-            common_config: CommonSinkConfig::default(),
         });
 
         let the_transformer = DocumentTransformer::from_configs(&source, &sink);
@@ -659,7 +644,6 @@ mod tests {
             api_key: None,
             index: Some("target-idx".to_string()),
             danger_accept_invalid_certs: true,
-            common_config: CommonSinkConfig::default(),
         })
     }
 
@@ -674,7 +658,6 @@ mod tests {
             api_key: None,
             danger_accept_invalid_certs: true,
             query: None,
-            common_config: CommonSourceConfig::default(),
         })
     }
 
@@ -684,7 +667,6 @@ mod tests {
     fn the_one_where_file_to_opensearch_resolves_to_rally_transform() {
         let source = SourceConfig::File(FileSourceConfig {
             file_name: "rally_export.json".to_string(),
-            common_config: CommonSourceConfig::default(),
         });
         let the_transformer = DocumentTransformer::from_configs(&source, &opensearch_sink_config());
         assert!(
@@ -703,7 +685,6 @@ mod tests {
             bucket: "benchmark-bucket".to_string(),
             region: "us-west-2".to_string(),
             key: None,
-            common_config: CommonSourceConfig::default(),
         });
         let the_transformer = DocumentTransformer::from_configs(&source, &opensearch_sink_config());
         assert!(
@@ -725,7 +706,6 @@ mod tests {
             password: None,
             api_key: None,
             query: None,
-            common_config: CommonSourceConfig::default(),
         });
         let the_transformer = DocumentTransformer::from_configs(&source, &opensearch_sink_config());
         assert!(
@@ -756,7 +736,6 @@ mod tests {
             password: None,
             api_key: None,
             index: Some("repatriated-data".to_string()),
-            common_config: CommonSinkConfig::default(),
         });
         let the_transformer = DocumentTransformer::from_configs(&opensearch_source_config(), &sink);
         assert!(
@@ -771,7 +750,6 @@ mod tests {
     fn the_one_where_opensearch_to_file_resolves_to_passthrough() {
         let sink = SinkConfig::File(FileSinkConfig {
             file_name: "os-dump.json".to_string(),
-            common_config: CommonSinkConfig::default(),
         });
         let the_transformer = DocumentTransformer::from_configs(&opensearch_source_config(), &sink);
         assert!(
@@ -792,7 +770,6 @@ mod tests {
             password: None,
             api_key: None,
             query: None,
-            common_config: CommonSourceConfig::default(),
         });
         let sink = SinkConfig::Elasticsearch(ElasticsearchSinkConfig {
             url: "http://new-cluster:9200".to_string(),
@@ -800,7 +777,6 @@ mod tests {
             password: None,
             api_key: None,
             index: Some("modern-data".to_string()),
-            common_config: CommonSinkConfig::default(),
         });
         let the_transformer = DocumentTransformer::from_configs(&source, &sink);
         assert!(

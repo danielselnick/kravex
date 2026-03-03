@@ -26,7 +26,6 @@ use serde::Deserialize;
 use tracing::{debug, trace};
 
 use crate::backends::Sink;
-use crate::backends::CommonSinkConfig;
 
 // ⚠️ Per-doc index routing: each document's `_index` field in the NDJSON action line overrides this config.
 // This means a single sink can write to multiple indices if your source data is spicy enough.
@@ -47,9 +46,6 @@ pub struct ElasticsearchSinkConfig {
     /// If both are None, `transform_into_bulk` will bail with an existential error message.
     /// You've been warned. The existential error message is very existential.
     pub index: Option<String>,
-    /// 🔧 Common sink config: max batch size in bytes, and other life decisions.
-    #[serde(flatten, default)]
-    pub common_config: CommonSinkConfig,
 }
 
 /// 📡 The sink side of the Elasticsearch backend — pure I/O, zero buffering.
@@ -82,9 +78,9 @@ impl Sink for ElasticsearchSink {
     /// The SinkWorker upstream already transformed each doc and binary-collected them into
     /// a single NDJSON payload string. We just fire it into the elastic void.
     /// "In a world where sinks had too many responsibilities... one refactor dared to simplify."
-    async fn send(&mut self, payload: String) -> Result<()> {
+    async fn drain(&mut self, payload: String) -> Result<()> {
         debug!(
-            "📡 Sending {} bytes to /_bulk — the payload has left the building, Elvis-style",
+            "🚰 Draining {} bytes to /_bulk — the payload has left the building, Elvis-style",
             payload.len()
         );
         self.submit_bulk_request(payload).await

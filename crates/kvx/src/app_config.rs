@@ -7,12 +7,20 @@
 //! 🏗️ Powered by Figment, because manually parsing env vars is a form of
 //! self-harm that even the borrow checker wouldn't approve of.
 
+pub mod source_config;
+pub mod sink_config;
+
+// 🔌 Re-export SourceConfig and SinkConfig so callers do `app_config::SourceConfig`
+// instead of `app_config::source_config::SourceConfig`. Convenience is a feature. 🦆
+pub use source_config::SourceConfig;
+pub use sink_config::SinkConfig;
+
 use anyhow::Context;
 use serde::Deserialize;
-// -- 🔧 To load the configuration, so I don't have to manually parse
-// -- environment variables or files. Bleh. Like doing taxes but for bytes.
-use crate::backends::{CommonSinkConfig, CommonSourceConfig, ElasticsearchSinkConfig, ElasticsearchSourceConfig, FileSinkConfig, FileSourceConfig, OpenSearchSinkConfig, OpenSearchSourceConfig, S3RallySourceConfig, ThrottleConfig};
-use crate::controllers::ControllerConfig;
+// 🔌 Re-export throttle config types so kvx-cli can access them cross-crate.
+// The throttlers module is pub(crate), but these types live in AppConfig's pub fields.
+// Without re-export, the CLI would be like a tourist with a map in a language they can't read. 🗺️🦆
+pub use crate::throttlers::{ThrottleAppConfig, SourceThrottleConfig, SinkThrottleConfig};
 use figment::{
     Figment,
     providers::{Env, Format, Toml},
@@ -65,109 +73,9 @@ fn default_sink_parallelism() -> usize {
     1
 }
 
-// ============================================================
-// 🎭 SourceConfig / SinkConfig — the velvet rope at the backend club
-// ============================================================
-
-/// 🎭 SourceConfig: the velvet rope at the backend club.
-/// You are either a File, an Elasticsearch, or an InMemory.
-/// There is no Other. There is no Unsupported. There is only the enum.
-/// (Until someone files a feature request. There is always a feature request.)
-///
-/// 🧠 Knowledge graph: moved from `supervisors/config.rs` to here — this is application-level
-/// config that the supervisor *uses* but doesn't *own*. The lib entrypoint resolves this into
-/// a `SourceBackend` for the worker pipeline. 🚰
-#[derive(Debug, Deserialize, Clone)]
-pub enum SourceConfig {
-    /// 📡 Read from an Elasticsearch index via scroll API
-    Elasticsearch(ElasticsearchSourceConfig),
-    /// 📂 Read from a local file (NDJSON or Rally JSON array)
-    File(FileSourceConfig),
-    /// 🔍 Read from an OpenSearch index via PIT + search_after — the fork that reads
-    OpenSearch(OpenSearchSourceConfig),
-    /// 🪣 Stream Rally benchmark data from an S3 bucket — geonames, pmc, nyc_taxis, etc.
-    S3Rally(S3RallySourceConfig),
-    /// 🧪 In-memory test source — 4 hardcoded docs, no I/O, no regrets
-    InMemory(()),
-}
-
-impl SourceConfig {
-    /// 📏 Extract `max_batch_size_docs` from whichever source config variant we are.
-    ///
-    /// Used by the controller resolver to determine the default page size
-    /// when `ControllerConfig::Static` is selected. Each source backend embeds
-    /// a `CommonSourceConfig` with this field. InMemory gets the default.
-    /// "He who queries the default, avoids the match in the hot path." — Ancient proverb 🎯
-    pub fn default_page_size(&self) -> usize {
-        match self {
-            SourceConfig::File(cfg) => cfg.common_config.max_batch_size_docs,
-            SourceConfig::Elasticsearch(cfg) => cfg.common_config.max_batch_size_docs,
-            SourceConfig::OpenSearch(cfg) => cfg.common_config.max_batch_size_docs,
-            SourceConfig::S3Rally(cfg) => cfg.common_config.max_batch_size_docs,
-            // 🧪 InMemory gets the default — it's testing, batch size is academic 🦆
-            SourceConfig::InMemory(_) => CommonSourceConfig::default().max_batch_size_docs,
-        }
-    }
-}
-
-/// 🗑️ SinkConfig: same vibe as SourceConfig but for the *receiving* end.
-/// Data goes IN. Data does not come back out. It is not a revolving door.
-/// It is a black hole of bytes, and we are at peace with that.
-/// The InMemory(()) variant holds `()` which is the Rust way of saying "we have nothing to say here."
-///
-/// 🧠 Knowledge graph: moved from `supervisors/config.rs` to `app_config` — same rationale as
-/// SourceConfig. Resolved at startup into a `SinkBackend` by `lib.rs`. The SinkWorker
-/// reads `max_request_size_bytes()` to know when to flush its page buffer. 🚰
-#[derive(Debug, Deserialize, Clone)]
-pub enum SinkConfig {
-    /// 📡 Write to an Elasticsearch index via bulk API
-    Elasticsearch(ElasticsearchSinkConfig),
-    /// 📂 Write to a local file (NDJSON)
-    File(FileSinkConfig),
-    /// 🔍 Write to an OpenSearch index via bulk API — the ES fork's favorite endpoint
-    OpenSearch(OpenSearchSinkConfig),
-    /// 🧪 In-memory test sink — captures payloads for assertion, no I/O
-    InMemory(()),
-}
-
-impl SinkConfig {
-    /// 📏 Extract `max_request_size_bytes` from whichever sink config variant we are.
-    ///
-    /// Each backend sink config embeds a `CommonSinkConfig` with this field.
-    /// InMemory has no config struct, so it gets the `CommonSinkConfig::default()` value.
-    /// "He who queries the config, avoids the match in the hot path." — Ancient proverb 📜
-    ///
-    /// 🧠 Knowledge graph: SinkWorker uses this to know when to flush its page buffer.
-    /// The buffer accumulates raw pages until their total byte size approaches this limit,
-    /// then the Composer transforms+assembles them into a single payload for the sink.
-    pub fn max_request_size_bytes(&self) -> usize {
-        match self {
-            SinkConfig::Elasticsearch(es) => es.common_config.max_request_size_bytes,
-            SinkConfig::File(f) => f.common_config.max_request_size_bytes,
-            SinkConfig::OpenSearch(os) => os.common_config.max_request_size_bytes,
-            // 🧠 InMemory gets the default — it's testing, we don't limit 🦆
-            SinkConfig::InMemory(_) => CommonSinkConfig::default().max_request_size_bytes,
-        }
-    }
-
-    /// 🧠 Extract the throttle configuration from whichever sink config variant we are.
-    ///
-    /// Returns the `ThrottleConfig` embedded in the backend's `CommonSinkConfig`.
-    /// InMemory gets the default (Static). Because test sinks don't need PID. They barely need love. 🦆
-    ///
-    /// 🧠 Knowledge graph: used in `lib.rs` to build a `ThrottleControllerBackend` which is
-    /// then passed to the Supervisor and ultimately to each SinkWorker.
-    pub fn throttle_config(&self) -> &ThrottleConfig {
-        match self {
-            SinkConfig::Elasticsearch(es) => &es.common_config.throttle,
-            SinkConfig::File(f) => &f.common_config.throttle,
-            SinkConfig::OpenSearch(os) => &os.common_config.throttle,
-            // 🧊 InMemory → Static (the default). Tests don't need adaptive throttling.
-            // Returning a reference to a temporary isn't possible, so we use a static default.
-            SinkConfig::InMemory(_) => &ThrottleConfig::STATIC_DEFAULT,
-        }
-    }
-}
+// 🧠 SourceConfig and SinkConfig now live in their own submodules:
+// app_config/source_config.rs and app_config/sink_config.rs.
+// Re-exported above so `use crate::app_config::SourceConfig` still works. 🔌🦆
 
 /// 📦 The AppConfig: one struct to rule them all, one struct to find them,
 /// one struct to bring them all, and in the Figment bind them.
@@ -176,16 +84,20 @@ impl SinkConfig {
 /// which is more self-awareness than most apps achieve in their lifetime.
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
-    /// 📡 How shall the source workers behave? Configurable, unlike my children.
-    pub source_config: SourceConfig,
-    pub sink_config: SinkConfig,
+    /// 📡 Source backend config — which backend, connection details, nothing else. 🔌
+    #[serde(alias = "source_config")]
+    pub source: SourceConfig,
+    /// 🚰 Sink backend config — which backend, connection details, nothing else. 🔌
+    #[serde(alias = "sink_config")]
+    pub sink: SinkConfig,
+    /// ⚙️ Runtime config — queue capacity, sink parallelism
     #[serde(default, alias = "supervisor_config")]
     pub runtime: RuntimeConfig,
-    /// 🎛️ Controller config — adaptive batch sizing for the source worker.
-    /// Defaults to `Static` (preserves existing behavior — no PID, no drama).
-    /// Set to `PidBytesToDocCount` to enable adaptive feedback-driven batch sizing.
+    /// 🎛️ Throttle config — batch sizing, request sizing, controller mode.
+    /// Centralizes batch sizing, request sizing, and controller mode config.
+    /// They've all moved in together. The commune is working. For now. 🦆
     #[serde(default)]
-    pub controller: ControllerConfig,
+    pub throttle: ThrottleAppConfig,
 }
 
 /// 🚀 Load the config — from a file, from env vars, or from the sheer power of hoping.
@@ -269,11 +181,13 @@ mod tests {
             queue_capacity = 8
             sink_parallelism = 3
 
-            [source_config.File]
+            [source.File]
             file_name = "input.json"
 
-            [sink_config.File]
+            [sink.File]
             file_name = "output.json"
+
+            [throttle.sink]
             max_request_size_bytes = 123456
             "#,
         );
@@ -284,15 +198,12 @@ mod tests {
 
         assert_eq!(app_config.runtime.queue_capacity, 8);
         assert_eq!(app_config.runtime.sink_parallelism, 3);
-        match app_config.sink_config {
-            SinkConfig::File(file_config) => {
-                assert_eq!(file_config.common_config.max_request_size_bytes, 123456);
-            }
-            honestly_who_knows => panic!(
-                "💀 Expected File sink config in the test, but serde took us to {:?}. Plot twist energy.",
-                honestly_who_knows
-            ),
-        }
+        // 🧠 max_request_size_bytes now lives in throttle.sink, not in the backend config.
+        // Backends are pure connection config now. The commune is working. 🏠
+        assert!(matches!(app_config.sink, SinkConfig::File(_)),
+            "💀 Expected File sink config, but serde detoured us. Plot twist energy.");
+        assert_eq!(app_config.throttle.sink.max_request_size_bytes, 123456,
+            "💀 max_request_size_bytes should be 123456 — chosen by dice roll and vibes");
 
         fs::remove_file(config_path)
             .expect("💀 Failed to remove test config. Even the trash has trust issues.");
@@ -302,10 +213,10 @@ mod tests {
     fn the_one_where_runtime_defaults_show_up_uninvited_but_helpful() {
         let config_path = write_test_config(
             r#"
-            [source_config.File]
+            [source.File]
             file_name = "input.json"
 
-            [sink_config.File]
+            [sink.File]
             file_name = "output.json"
             "#,
         );
@@ -330,10 +241,10 @@ mod tests {
             channel_size = 12
             num_sink_workers = 4
 
-            [source_config.File]
+            [source.File]
             file_name = "input.json"
 
-            [sink_config.File]
+            [sink.File]
             file_name = "output.json"
             "#,
         );
@@ -354,12 +265,12 @@ mod tests {
     fn the_one_where_s3_rally_config_materializes_from_toml() {
         let config_path = write_test_config(
             r#"
-            [source_config.S3Rally]
+            [source.S3Rally]
             track = "geonames"
             bucket = "my-rally-bucket"
             region = "us-west-2"
 
-            [sink_config.File]
+            [sink.File]
             file_name = "output.json"
             "#,
         );
@@ -367,7 +278,7 @@ mod tests {
         let app_config = load_config(Some(config_path.as_path()))
             .expect("💀 S3Rally config should parse. The TOML was handcrafted with love.");
 
-        match &app_config.source_config {
+        match &app_config.source {
             SourceConfig::S3Rally(s3_cfg) => {
                 assert_eq!(
                     s3_cfg.track,
@@ -392,12 +303,12 @@ mod tests {
     fn the_one_where_s3_rally_key_override_survives_toml_parsing() {
         let config_path = write_test_config(
             r#"
-            [source_config.S3Rally]
+            [source.S3Rally]
             track = "pmc"
             bucket = "custom-bucket"
             key = "custom/path/data.json"
 
-            [sink_config.File]
+            [sink.File]
             file_name = "output.json"
             "#,
         );
@@ -405,7 +316,7 @@ mod tests {
         let app_config = load_config(Some(config_path.as_path()))
             .expect("💀 S3Rally config with key override should parse. Serde had one job.");
 
-        match &app_config.source_config {
+        match &app_config.source {
             SourceConfig::S3Rally(s3_cfg) => {
                 assert_eq!(s3_cfg.key, Some("custom/path/data.json".to_string()));
                 assert_eq!(s3_cfg.region, "us-east-1", "Region should default to us-east-1");

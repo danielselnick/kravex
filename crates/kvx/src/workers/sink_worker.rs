@@ -30,12 +30,13 @@
 use super::Worker;
 use crate::backends::{Sink, SinkBackend};
 use crate::composers::{Composer, ComposerBackend};
-use crate::controllers::{ThrottleController, ThrottleControllerBackend};
+use crate::throttlers::{ThrottleController, ThrottleControllerBackend};
 use crate::transforms::DocumentTransformer;
 use anyhow::{Context, Result};
 use async_channel::Receiver;
 use std::time::Instant;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 /// 🧮 Epsilon buffer — headroom to avoid going over the max request size.
@@ -71,22 +72,28 @@ pub(crate) struct SinkWorker {
     /// Static: fixed bytes (the classic). PID: adapts based on measured latency (the secret sauce). 🔒
     /// Each worker owns its controller exclusively — no shared state, no Mutex, no couples therapy.
     throttle_controller: ThrottleControllerBackend,
+    /// 🛑 The escape hatch — when cancelled, flush remaining buffer and close the sink.
+    /// Like last call at a bar: finish your drink, grab your coat, exit with dignity. 🍻🦆
+    cancellation_token: CancellationToken,
 }
 
 impl SinkWorker {
-    /// 🏗️ Constructs a new SinkWorker with receiver, sink, transformer, composer, and throttle controller.
+    /// 🏗️ Constructs a new SinkWorker with receiver, sink, transformer, composer, throttle controller,
+    /// and cancellation token.
     ///
     /// The transformer decides HOW to format each doc (Rally→ES bulk, passthrough)
     /// The composer decides HOW to assemble them (NDJSON newlines, JSON array brackets)
     /// The sink decides WHERE to send it (HTTP POST, file write, memory push)
     /// The controller decides HOW MUCH — "this many bytes, based on science (or stubbornness)" 🧠
-    /// The worker decides WHEN — "when the buffer is full enough, no cap." 🦆
+    /// The worker decides WHEN — "when the buffer is full enough, no cap."
+    /// The token decides IF — "keep going or gracefully exit." 🛑🦆
     pub(crate) fn new(
         rx: Receiver<String>,
         sink: SinkBackend,
         transformer: DocumentTransformer,
         composer: ComposerBackend,
         throttle_controller: ThrottleControllerBackend,
+        cancellation_token: CancellationToken,
     ) -> Self {
         Self {
             rx,
@@ -94,6 +101,7 @@ impl SinkWorker {
             transformer,
             composer,
             throttle_controller,
+            cancellation_token,
         }
     }
 }
@@ -110,43 +118,73 @@ impl Worker for SinkWorker {
                 // 🧠 Read the current target from the throttle controller.
                 // For Static: always the same. For PID: may change after each flush cycle.
                 let current_max_bytes = self.throttle_controller.output();
-                let receive_result = self.rx.recv().await;
-                match receive_result {
-                    Ok(page) => {
-                        debug!("📄 SinkWorker received {} byte page from channel", page.len());
 
-                        // 📏 Accumulate page into the buffer
-                        buffer_bytes += page.len();
-                        buffer.push(page);
+                // 🛑 Race recv vs cancellation — graceful shutdown or keep buffering
+                tokio::select! {
+                    receive_result = self.rx.recv() => {
+                        match receive_result {
+                            Ok(page) => {
+                                debug!("📄 SinkWorker received {} byte page from channel", page.len());
 
-                        // 🧮 Flush if buffer + epsilon approaches dynamic max request size.
-                        // The epsilon accounts for transformation overhead (action lines, etc.)
-                        if buffer_bytes + BUFFER_EPSILON_BYTES >= current_max_bytes {
-                            debug!(
-                                "🚿 SinkWorker flushing {} pages ({} bytes) — approaching max request size ({} bytes, via {:?})",
-                                buffer.len(),
-                                buffer_bytes,
-                                current_max_bytes,
-                                self.throttle_controller,
-                            );
-                            flush_and_measure(
-                                &mut buffer,
-                                &mut buffer_bytes,
-                                &self.composer,
-                                &self.transformer,
-                                &mut self.sink,
-                                &mut self.throttle_controller,
-                            )
-                            .await?;
+                                // 📏 Accumulate page into the buffer
+                                buffer_bytes += page.len();
+                                buffer.push(page);
+
+                                // 🧮 Flush if buffer + epsilon approaches dynamic max request size.
+                                // The epsilon accounts for transformation overhead (action lines, etc.)
+                                if buffer_bytes + BUFFER_EPSILON_BYTES >= current_max_bytes {
+                                    debug!(
+                                        "🚿 SinkWorker flushing {} pages ({} bytes) — approaching max request size ({} bytes, via {:?})",
+                                        buffer.len(),
+                                        buffer_bytes,
+                                        current_max_bytes,
+                                        self.throttle_controller,
+                                    );
+                                    flush_and_measure(
+                                        &mut buffer,
+                                        &mut buffer_bytes,
+                                        &self.composer,
+                                        &self.transformer,
+                                        &mut self.sink,
+                                        &mut self.throttle_controller,
+                                    )
+                                    .await?;
+                                }
+                            }
+                            Err(_) => {
+                                // 🏁 Channel closed — flush remaining buffer, then close sink
+                                if !buffer.is_empty() {
+                                    debug!(
+                                        "🚿 SinkWorker final flush: {} pages ({} bytes) — channel closed, sending last payload",
+                                        buffer.len(),
+                                        buffer_bytes
+                                    );
+                                    flush_and_measure(
+                                        &mut buffer,
+                                        &mut buffer_bytes,
+                                        &self.composer,
+                                        &self.transformer,
+                                        &mut self.sink,
+                                        &mut self.throttle_controller,
+                                    )
+                                    .await?;
+                                }
+                                debug!("🏁 SinkWorker: Channel closed. Closing sink. Goodnight. 💤");
+                                self.sink
+                                    .close()
+                                    .await
+                                    .context("💀 SinkWorker failed to close sink — the farewell was awkward")?;
+                                return Ok(());
+                            }
                         }
                     }
-                    Err(_) => {
-                        // 🏁 Channel closed — flush remaining buffer, then close sink
+                    _ = self.cancellation_token.cancelled() => {
+                        // 🛑 Cancellation received — flush what we have, close the sink, exit stage left
+                        debug!("🛑 SinkWorker: cancellation received. Flushing remaining buffer and closing sink.");
                         if !buffer.is_empty() {
                             debug!(
-                                "🚿 SinkWorker final flush: {} pages ({} bytes) — channel closed, sending last payload",
-                                buffer.len(),
-                                buffer_bytes
+                                "🚿 SinkWorker cancellation flush: {} pages ({} bytes)",
+                                buffer.len(), buffer_bytes
                             );
                             flush_and_measure(
                                 &mut buffer,
@@ -158,11 +196,10 @@ impl Worker for SinkWorker {
                             )
                             .await?;
                         }
-                        debug!("🏁 SinkWorker: Channel closed. Closing sink. Goodnight. 💤");
                         self.sink
                             .close()
                             .await
-                            .context("💀 SinkWorker failed to close sink — the farewell was awkward")?;
+                            .context("💀 SinkWorker failed to close sink during cancellation — awkward even in emergencies")?;
                         return Ok(());
                     }
                 }
@@ -209,8 +246,8 @@ async fn flush_and_measure(
     // so the is_empty() check catches that case. Both paths converge here: skip empty payloads.
     if !payload.is_empty() && payload != "[]" {
         let send_stopwatch = Instant::now();
-        sink.send(payload).await.context(
-            "💀 SinkWorker failed to send payload to sink — the I/O layer rejected our offering. \
+        sink.drain(payload).await.context(
+            "💀 SinkWorker failed to drain payload to sink — the I/O layer rejected our offering. \
              The payload was composed with care. The sink said no. Like my prom date.",
         )?;
         let elapsed_ms = send_stopwatch.elapsed().as_secs_f64() * 1000.0;

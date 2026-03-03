@@ -7,16 +7,16 @@
 queue_capacity = 8
 sink_parallelism = 8
 
-[source_config]
+[source.File]
+file_name = "input.json"
+
+[sink.Elasticsearch]
+url = "http://localhost:9200"
+index = "test-123"
+
+[throttle.source]
 max_batch_size_bytes = 131072
 max_batch_size_docs = 10000
 
-[source_config.File]
-file_name = "input.json"
-
-[sink_config]
+[throttle.sink]
 max_request_size_bytes = 131072
-
-[sink_config.Elasticsearch]
-url = "http://localhost:9200"
-index = "test-123"

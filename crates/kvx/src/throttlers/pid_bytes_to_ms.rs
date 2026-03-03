@@ -41,7 +41,7 @@ use super::ThrottleController;
 /// Generates an output of recommended bytes, based on measured time spans.
 /// The feedback loop: measure duration → compute error → adjust output → repeat.
 ///
-/// 🧠 Gain derivation rationale (tribal knowledge from the C# predecessor):
+/// 🧠 Gain derivation rationale 
 /// - `proportional_gain`: ratio of output to set_point (or vice versa, whichever is larger).
 ///   This scales correction proportionally to the initial "gap" between our guess and target.
 ///   A 10MB initial output with an 8s set point gives K_p ≈ 1.25 — gentle corrections.
@@ -55,7 +55,7 @@ use super::ThrottleController;
 /// to the PID loop, preventing knee-jerk overcorrections. 🔄
 ///
 /// Licensed under LICENSE-EE. This is the Krabby Patty formula of kravex. 🔒
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct PidControllerBytesToMs {
     // 📐 PID output — the recommended byte size for the next request.
     // Stored as f64 for precision during intermediate calculations,
@@ -154,7 +154,6 @@ impl PidControllerBytesToMs {
         // (set_point - near_zero = "hey we're super fast, send ALL the bytes!")
         // and the output rockets to ceiling before any real data arrives.
         // Starting at set_point means: "assume we're on target until proven otherwise."
-        // This eliminates the cold-start transient that plagued the C# ancestor. 🐛
         Self {
             cruise_control_output: initial_output,
             goldilocks_duration_ms: set_point_ms,

@@ -7,7 +7,6 @@
 //! "we could correct the rudder based on the error, the accumulated error, AND the
 //! rate of change of the error?" His colleagues blinked. "That's three things," one said.
 //! "Proportional, Integral, Derivative," Minorsky whispered. "PID."
-//! A hundred years later, a Rust developer ports it from C# to control batch sizes.
 //! Minorsky would be... confused, but not disappointed.
 //!
 //! ## What This Does 🧠
@@ -34,7 +33,6 @@
 //! ```
 //!
 //! ## Knowledge Graph 🧠
-//! - Ported faithfully from C# `PidControllerBytesToDocCount`
 //! - Gains auto-calculated from `desired_response_size_bytes` and `max_doc_count`
 //! - EMA smoothing on both measurements (α=0.25) and doc count adjustments (α=0.75)
 //! - Anti-windup: integral error accumulation clamped to `[-desired, +desired]`
@@ -71,10 +69,6 @@ use tracing::trace;
 /// Two exponential moving averages prevent the controller from overreacting:
 /// - Response size EMA (α=0.25): smooths wild measurement fluctuations
 /// - Doc count adjustment EMA (α=0.75): ensures gradual, stable output changes
-///
-/// 🧠 Knowledge graph: faithfully ported from C# `PidControllerBytesToDocCount`.
-/// The C# version ran in production for years. This Rust version will too,
-/// assuming the borrow checker doesn't have other plans for our evening.
 #[derive(Debug)]
 pub(crate) struct PidBytesToDocCount {
     // 🎯 The set-point: "I want responses THIS big."
@@ -137,10 +131,6 @@ impl PidBytesToDocCount {
     /// - Kp = max(max_docs, desired) / min(max_docs, desired)
     /// - Ki = Kp / 50
     /// - Kd = sqrt(Kp × Ki)
-    ///
-    /// These ratios were empirically tuned in the C# implementation and survived
-    /// years of production usage. We port them faithfully, because "if it ain't broke,
-    /// don't refactor it into a trait hierarchy." — Ancient Rust proverb 📜
     ///
     /// 💀 Panics: never. But returns nonsensical results if you pass 0 for desired_response_size_bytes.
     /// Don't do that. Please. I'm begging you.
@@ -216,7 +206,7 @@ impl Controller for PidBytesToDocCount {
     /// Always returns at least 1 (you can't fetch zero documents and call it progress).
     #[inline]
     fn output(&self) -> usize {
-        // 🧮 Round away from zero, matching C# Math.Round(MidpointRounding.AwayFromZero)
+        // 🧮 Round away from zero
         let the_rounded = self.the_output_doc_count.round() as usize;
         // 🛡️ Safety: ensure we never return 0, even if the PID math goes haywire
         the_rounded.max(1)
@@ -224,7 +214,6 @@ impl Controller for PidBytesToDocCount {
 
     /// 📏 Feed a measured response size (in bytes) into the PID controller.
     ///
-    /// This is the core PID update cycle, faithfully ported from the C# implementation:
     ///
     /// 1. EMA-smooth the measurement
     /// 2. Calculate error = desired - smoothed_measurement
@@ -235,9 +224,7 @@ impl Controller for PidBytesToDocCount {
     /// 7. EMA-smooth the doc count adjustment
     /// 8. Clamp final output to [min_doc_count, max_doc_count]
     ///
-    /// 🧠 Each step mirrors the C# `Measure()` method exactly. The variable names
-    /// changed, the language changed, but the math is the same math that's been
-    /// running in production since before this Rust port was a gleam in `cargo init`'s eye.
+
     fn measure(&mut self, measured_response_size_bytes: f64) {
         // 📏 Record the raw measurement for observability
         self.the_last_measured_value = measured_response_size_bytes;
@@ -533,7 +520,6 @@ mod tests {
         //   - EMA smoothing (α=0.25) takes ~16 iterations to forget old values
         //   - Doc count adjustment is clamped to [-100, +100] per step
         //   - Doc count EMA (α=0.75) further dampens the recovery
-        // This is BY DESIGN — the C# implementation has the same slow recovery.
         for _ in 0..100 {
             the_pid.measure(THE_DESIRED_BYTES * 0.5);
         }
@@ -574,7 +560,6 @@ mod tests {
     }
 
     /// 🧪 Verify gains are calculated correctly from constructor params.
-    /// The gains follow specific formulas from the C# implementation.
     #[test]
     fn the_one_where_gains_follow_the_sacred_formulas() {
         let the_pid = PidBytesToDocCount::new(1_000_000.0, 500, 10, 5000);
