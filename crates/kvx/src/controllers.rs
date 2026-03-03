@@ -202,6 +202,7 @@ pub(crate) enum ControllerBackend {
 impl Controller for ControllerBackend {
     #[inline]
     fn output(&self) -> usize {
+        // -- 🎛️ "How many docs should I fetch?" — the source worker, every iteration, like clockwork
         match self {
             ControllerBackend::Config(c) => c.output(),
             ControllerBackend::BytesToDocCount(pid) => pid.output(),
@@ -210,6 +211,7 @@ impl Controller for ControllerBackend {
 
     #[inline]
     fn measure(&mut self, measurement: f64) {
+        // -- 📏 Feed the beast. The PID hungers for measurements. The Config shrugs and ignores them.
         match self {
             ControllerBackend::Config(c) => c.measure(measurement),
             ControllerBackend::BytesToDocCount(pid) => pid.measure(measurement),
@@ -310,6 +312,7 @@ pub(crate) enum ThrottleControllerBackend {
 
 impl ThrottleController for ThrottleControllerBackend {
     fn measure(&mut self, duration_ms: f64) {
+        // -- ⏱️ "How long did that take?" — the PID, obsessively. The Static, never.
         match self {
             ThrottleControllerBackend::Static(c) => c.measure(duration_ms),
             ThrottleControllerBackend::PidBytesToMs(c) => c.measure(duration_ms),
@@ -317,6 +320,7 @@ impl ThrottleController for ThrottleControllerBackend {
     }
 
     fn output(&self) -> usize {
+        // -- 📐 "How many bytes should I send next?" — the sink worker, trusting the math
         match self {
             ThrottleControllerBackend::Static(c) => c.output(),
             ThrottleControllerBackend::PidBytesToMs(c) => c.output(),

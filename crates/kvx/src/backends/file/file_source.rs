@@ -1,3 +1,13 @@
+// ai
+//! 📂📖🚰 FileSource — the BufReader whisperer, the line-by-line champion.
+//!
+//! 🎬 COLD OPEN — INT. A FILESYSTEM — THE FILE IS 47GB
+//!
+//! *The process opened the file. The file was large. Very large. "How large?" asked the intern.
+//! "Large enough that loading it into memory would crash the pod and page the on-call,"
+//! said the senior. The intern nodded. They both stared at the BufReader. It stared back.*
+//!
+//! *"One line at a time," it said. And it was.* 🦆
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -34,7 +44,7 @@ fn default_file_common_source_config() -> CommonSourceConfig {
     // -- ✅ "It just works" — the three most dangerous words in software engineering
     CommonSourceConfig::default()
 }
-/// 📂 FileSource — reads a file line by line, converts lines into `HitBatch`es, and moves on.
+/// 📂 FileSource — reads a file line by line, assembles raw `String` pages, and moves on.
 ///
 /// Think of it like a very diligent intern who reads a massive CSV, never complains,
 /// and only stops when (a) the file ends, (b) the batch is full by doc count,
@@ -72,7 +82,7 @@ impl std::fmt::Debug for FileSource {
 
 impl FileSource {
     /// 🚀 Opens the source file, grabs its size for the progress bar, wraps it in a BufReader,
-    /// and returns a fully initialized `FileSource` ready to vend `HitBatch`es.
+    /// and returns a fully initialized `FileSource` ready to vend raw `String` pages.
     ///
     /// If the file doesn't exist: 💀 anyhow will tell you with *theatrical flair*.
     /// If metadata fails: we assume 0 bytes, progress bar shows unknown. Shrug emoji as a service.

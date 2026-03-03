@@ -1,3 +1,13 @@
+// ai
+//! 📂🚰✍️ FileSink — the BufWriter's best friend, the disk's worst nightmare.
+//!
+//! 🎬 COLD OPEN — INT. A FILESYSTEM — THE OUTPUT FILE DOESN'T EXIST YET
+//!
+//! *"Create it," said the migration. "But what if it already exists?" asked the filesystem.
+//! "Truncate it," said File::create, without a trace of remorse. The previous contents
+//! vanished like a Snapchat message. Gone. No undo. No ctrl-z. Just bytes, meeting void.*
+//!
+//! *The BufWriter hummed quietly, buffering syscalls like a responsible adult.* 🦆
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::Deserialize;

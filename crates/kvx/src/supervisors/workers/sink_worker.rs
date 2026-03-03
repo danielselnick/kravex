@@ -202,6 +202,11 @@ async fn flush_and_measure(
     // 📡 Send the fully rendered payload to the sink. Pure I/O.
     // ⏱️ Measure the send duration — this is the feedback signal for the PID controller.
     // "Time is what we measure. Bytes are what we control. Wisdom is knowing the difference." 🧠
+    // 🧠 TRIBAL KNOWLEDGE: "[]" is the empty payload sentinel from JsonArrayComposer.
+    // When InMemory sink + JsonArrayComposer composes zero items, it produces "[]" — a valid
+    // but empty JSON array. We skip sending it because POSTing an empty array to a bulk API
+    // is pointless (and some backends might reject it). NdjsonComposer returns "" for empty,
+    // so the is_empty() check catches that case. Both paths converge here: skip empty payloads.
     if !payload.is_empty() && payload != "[]" {
         let send_stopwatch = Instant::now();
         sink.send(payload).await.context(

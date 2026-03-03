@@ -1,3 +1,13 @@
+// ai
+//! 🚰🕳️💀 The Sink trait — the final destination. The end of the line. The last stop.
+//!
+//! 🎬 COLD OPEN — INT. ELASTICSEARCH CLUSTER — 3:47 AM
+//!
+//! *The payload arrived at the bulk endpoint. It was 12MB of NDJSON, carefully composed,
+//! lovingly buffered, artisanally transformed. The sink looked at it. Looked at the cluster.
+//! Looked back at the payload. "I just do I/O," it whispered. And POST'd.*
+//!
+//! *The cluster returned 200. The sink said nothing. It never does.* 🦆
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -35,7 +45,7 @@ pub trait Sink: std::fmt::Debug {
 /// Mirrors `SourceBackend` on the other end of the pipeline. Whoever designed this
 /// was clearly a fan of symmetry. Or they ran out of ideas. Hard to tell.
 ///
-/// The enum dispatches `receive` and `close` to the inner concrete type,
+/// The enum dispatches `send` and `close` to the inner concrete type,
 /// keeping the supervisor blissfully ignorant of where data actually lands.
 /// Ignorance is a feature. It's called "abstraction." We put it in AGENTS.md.
 #[derive(Debug)]
@@ -50,6 +60,7 @@ pub enum SinkBackend {
 #[async_trait]
 impl Sink for SinkBackend {
     async fn send(&mut self, payload: String) -> Result<()> {
+        // -- 📬 Four doors, one payload. The enum knows which door. The payload doesn't care.
         match self {
             SinkBackend::InMemory(sink) => sink.send(payload).await,
             SinkBackend::File(sink) => sink.send(payload).await,
@@ -59,6 +70,7 @@ impl Sink for SinkBackend {
     }
 
     async fn close(&mut self) -> Result<()> {
+        // -- 🎬 "That's a wrap!" — the director, at the end of every pipeline run
         match self {
             SinkBackend::InMemory(sink) => sink.close().await,
             SinkBackend::File(sink) => sink.close().await,

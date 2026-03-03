@@ -72,7 +72,9 @@ impl Transform for RallyS3ToEs {
     /// 💀 Returns error if any line in the page is not valid JSON.
     #[inline]
     fn transform<'a>(&self, raw_source_page: &'a str) -> Result<Vec<Cow<'a, str>>> {
-        // 📄 Split page by newlines, transform each non-empty line
+        // -- 📄 Split page by newlines, transform each non-empty line.
+        // -- Like a conveyor belt at a sushi restaurant, except every plate is JSON
+        // -- and the chef (transform_single_rally_doc) rewrites the menu on each one. 🍣
         raw_source_page
             .split('\n')
             .filter(|line| !line.trim().is_empty())
@@ -136,11 +138,13 @@ fn transform_single_rally_doc(raw: &str) -> Result<String> {
 /// trivial structure. Micro-optimization that matters at millions of docs.
 #[inline]
 fn build_es_action_line(the_document_id: Option<&str>) -> String {
+    // -- 🏗️ The action line: ES bulk API's opening act. Like a cover letter, but for JSON.
     match the_document_id {
         Some(id) => {
             format!(r#"{{"index":{{"_id":"{}"}}}}"#, escape_json_string(id))
         }
         None => {
+            // -- 🎲 No ID? ES will auto-generate one. Living dangerously.
             r#"{"index":{}}"#.to_string()
         }
     }

@@ -103,8 +103,11 @@ pub(crate) struct ElasticsearchSource {
 
 impl std::fmt::Debug for ElasticsearchSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // 🔧 Custom Debug because ProgressBar doesn't implement Debug.
-        // Same workaround as before. The more things change, the more Debug stays custom.
+        // 🔧 Custom Debug impl because ProgressMetrics contains indicatif::ProgressBar,
+        // which doesn't implement Debug. We exclude it and show only the fields that matter
+        // for debugging. The progress bar is alive and rendering elsewhere — it doesn't need
+        // to show up in a debug print too. It's not that desperate for attention.
+        // -- 🎭 "To Debug or not to Debug — that is the #[derive]" — Hamlet, if he wrote Rust
         f.debug_struct("ElasticsearchSource")
             .field("config", &self.config)
             .field("pit_id", &self.pit_id.as_ref().map(|_| "<active>"))
@@ -401,15 +404,21 @@ impl ElasticsearchSource {
 }
 
 /// 🔒 Apply auth to a reqwest::RequestBuilder. API key > basic auth.
+/// -- 🎭 The auth bouncer: checks ID at the door. API key is the VIP pass,
+/// -- basic auth is showing your driver's license, and no auth is just
+/// -- walking in like you own the place. Bold. Risky. Occasionally works.
 fn apply_auth(
     request: reqwest::RequestBuilder,
     config: &ElasticsearchSourceConfig,
 ) -> reqwest::RequestBuilder {
     if let Some(ref api_key) = config.api_key {
+        // -- 🔑 VIP entrance — API key gets the velvet rope treatment
         request.header("Authorization", format!("ApiKey {}", api_key))
     } else if let Some(ref username) = config.username {
+        // -- 🪪 Regular entrance — basic auth, the "I brought my ID" option
         request.basic_auth(username, config.password.as_ref())
     } else {
+        // -- 🚶 No auth? Walking into an ES cluster with no credentials is a power move.
         request
     }
 }

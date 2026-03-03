@@ -10,9 +10,8 @@
 //! through the search_after API, through a Point-In-Time snapshot, through the
 //! network, and into whatever sink awaits them on the other side.
 //!
-//! This is the first real search-source implementation in kravex. The
-//! Elasticsearch source was a stub. This one actually reads documents.
-//! Using PIT (Point-In-Time) + `search_after` for consistent, efficient
+//! This was the first search-source implementation in kravex (Elasticsearch
+//! followed the same pattern). Uses PIT (Point-In-Time) + `search_after` for consistent, efficient
 //! deep pagination. No scroll API. No server-side cursors. Just stateless
 //! requests and a sort field that remembers where we left off.
 //!

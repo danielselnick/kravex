@@ -11,7 +11,7 @@
 //!
 //! 🧠 Knowledge graph:
 //! - Channel carries `String` (raw pages). SinkWorker buffers and flushes via Composer.
-//! - **NEW**: SourceWorker owns a `ControllerBackend` for adaptive batch sizing.
+//! - SourceWorker owns a `ControllerBackend` for adaptive batch sizing.
 //! - The feedback loop: `controller.output()` → `source.set_page_size_hint()` →
 //!   `source.next_page()` → `controller.measure(page.len())` → repeat.
 //! - For `ConfigController` (default): no-op loop, same behavior as before.
@@ -95,7 +95,13 @@ impl Worker for SourceWorker {
                             "📤 SourceWorker sending {} byte page to channel (batch_hint={})",
                             the_page_size_bytes, the_batch_size_hint
                         );
-                        // 📏 Step 3: Feed the measurement back to the controller
+                        // 📏 Step 3: Feed the measurement back to the controller BEFORE sending.
+                        // 🧠 TRIBAL KNOWLEDGE: measure happens BEFORE send in SourceWorker, but
+                        // AFTER send in SinkWorker. The asymmetry is intentional:
+                        //   - SourceWorker measures *response size* (bytes received) → controller
+                        //     adjusts doc count for the NEXT fetch. No timing needed, just size.
+                        //   - SinkWorker measures *send duration* (ms elapsed) → PID controller
+                        //     adjusts byte budget. Timing matters, so it measures AFTER the I/O.
                         self.controller.measure(the_page_size_bytes as f64);
                         // 📬 Step 4: Send the page downstream
                         self.tx.send(page).await?;

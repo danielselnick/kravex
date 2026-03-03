@@ -1,7 +1,15 @@
-//! # 📡 THE ELASTICSEARCH BACKEND
+// ai
+//! # 📡 THE ELASTICSEARCH BACKEND 🔍🚀
 //!
-//! This module re-exports the split source and sink modules so the public
-//! backend API stays stable.
+//! 🎬 COLD OPEN — INT. MODULE REGISTRY — THE RE-EXPORTS ASSEMBLE
+//!
+//! *The source module and the sink module had never met. They lived in separate files,
+//! spoke in separate traits, dreamed in separate async runtimes. But one module dared
+//! to bring them together. One `pub use` to rule them all.*
+//!
+//! This module re-exports the split source and sink implementations so the public
+//! backend API stays clean. Named file entry point (not mod.rs — mod.rs is banned,
+//! exiled, persona non grata in these parts).
 //!
 //! 🦆 mandatory duck, as decreed by repository law.
 

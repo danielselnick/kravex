@@ -1,3 +1,13 @@
+// ai
+//! 📦🔒🧪 InMemorySink — the Vec that remembers everything. Unlike Kevin.
+//!
+//! 🎬 COLD OPEN — INT. THE HEAP — AN ARC<MUTEX<VEC>> AWAITS ITS DESTINY
+//!
+//! *The Vec was empty. Fresh. Full of promise. "One day," it whispered to the Mutex,
+//! "I will hold payloads." The Mutex said nothing. The Mutex never says anything.
+//! It just locks. And unlocks. And locks again. A simple life. An honest life.*
+//!
+//! *The Arc watched from above, counting references. Always counting.* 🦆
 use anyhow::Result;
 use async_trait::async_trait;
 

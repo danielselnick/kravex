@@ -14,7 +14,7 @@
 //! sink file with a BufWriter so we're not doing a syscall per hit like some kind
 //! of 1995 CGI script.
 //!
-//! 🚰 Source → BufReader → Vec<String> → SinkWorker(transform+collect) → Sink → BufWriter
+//! 🚰 Source → BufReader → String (raw page) → SinkWorker → Composer → Sink → BufWriter
 //! 💀 Disk full → your problem now
 //! 🦆 (mandatory, no notes)
 //!

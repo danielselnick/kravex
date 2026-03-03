@@ -1,3 +1,13 @@
+// ai
+//! 📦🧠🎭 InMemorySource — four documents and a dream.
+//!
+//! 🎬 COLD OPEN — INT. THE HEAP — FOUR DOCUMENTS HUDDLE IN THE DARK
+//!
+//! *"Are we... data?" asked doc:1. "We are whatever they need us to be," said doc:4,
+//! the eldest and wisest. "Today, we are test fixtures. Tomorrow? Who knows.
+//! Maybe production data. Maybe deleted. Maybe garbage collected."*
+//!
+//! *doc:2 wept. doc:3 was already yielded.* 🦆
 use anyhow::Result;
 use async_trait::async_trait;
 

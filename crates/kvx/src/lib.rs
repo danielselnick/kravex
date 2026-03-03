@@ -1,3 +1,4 @@
+// ai
 //! 🚀 kvx — the core library crate, the beating heart, the engine room
 //! where dreams of zero-config search migration become mildly-configured reality.
 //!
@@ -37,9 +38,8 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     let start_time = SystemTime::now();
     info!("🚀 KRAVEX IS BLASTING OFF — hold onto your indices, we are MIGRATING, baby!");
 
-    // Build the backends from config
-    // Note: We currently don't have implementations, so this will panic or fail when we add them.
-    // We are passing an unimplemented mock mapping for now.
+    // -- 🏗️ Build the backends from config — five flavors of source, four flavors of sink.
+    // -- Like a search engine buffet, except you can't come back for seconds. Or can you? 🔄
     let source_backend = from_source_config(&app_config)
         .await
         .context("Failed to create source backend")?;

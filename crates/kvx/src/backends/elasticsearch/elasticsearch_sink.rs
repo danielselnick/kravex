@@ -1,3 +1,23 @@
+// ai
+//! 🔥📡💀 The Elasticsearch Sink — where NDJSON payloads go to become indexed documents.
+//!
+//! *The cluster was quiet. Too quiet. Then the bulk request arrived — 50MB of NDJSON,
+//! screaming through the wire like a freight train of JSON objects. The shards trembled.
+//! The mapping creaked. And somewhere, deep in the JVM, a garbage collector whispered:
+//! "Not today."*
+//!
+//! # What This Module Does 🚰
+//! Pure I/O sink for Elasticsearch's `_bulk` API. Receives fully rendered NDJSON payloads
+//! from the SinkWorker and POSTs them. No buffering. No transformation. Just HTTP.
+//!
+//! # Knowledge Graph 🧠
+//! - SinkWorker → transform → buffer by bytes → Composer renders NDJSON → this sink POSTs it
+//! - Auth priority: API key > basic auth (consistent across index check + bulk POST)
+//! - ⚠️ Connectivity ping currently uses basic auth only — API key not applied there (known gap)
+//! - Content-Type: `application/x-ndjson` — not `application/json`. Elasticsearch cares. A lot.
+//!
+//! 🦆 The duck is here because even sinks need emotional support.
+
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -8,8 +28,7 @@ use tracing::{debug, trace};
 use crate::backends::Sink;
 use crate::backends::CommonSinkConfig;
 
-//
-// ⚠️ Per-doc index routing: each Hit can carry its own `_index` field, which overrides this config.
+// ⚠️ Per-doc index routing: each document's `_index` field in the NDJSON action line overrides this config.
 // This means a single sink can write to multiple indices if your source data is spicy enough.
 #[derive(Debug, Deserialize, Clone)]
 pub struct ElasticsearchSinkConfig {

@@ -57,7 +57,7 @@ use super::ThrottleController;
 /// Licensed under LICENSE-EE. This is the Krabby Patty formula of kravex. 🔒
 #[derive(Debug)]
 pub(crate) struct PidControllerBytesToMs {
-    // PID output — the recommended byte size for the next request.
+    // 📐 PID output — the recommended byte size for the next request.
     // Stored as f64 for precision during intermediate calculations,
     // rounded to usize on output. Like a Swiss watch, but for bytes.
     cruise_control_output: f64,

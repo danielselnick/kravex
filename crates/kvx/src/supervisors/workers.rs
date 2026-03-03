@@ -1,3 +1,4 @@
+// ai
 //! 🧵 Workers: the backbone of kravex, the unsung heroes, the ones who actually
 //! do the work while the Supervisor takes all the credit in the sprint retro.
 //!
@@ -22,8 +23,10 @@ pub(crate) use sink_worker::SinkWorker;
 mod source_worker;
 pub(crate) use source_worker::SourceWorker;
 
-/// 🏗️ A background worker, that does work. duh.
+/// 🏗️ A background worker — the async task that actually moves data while the Supervisor
+/// takes credit in the sprint retro. Implement this trait to join the labor force.
 pub(crate) trait Worker {
-    /// 🚀 Start the worker.
+    /// 🚀 Consume self and spawn a tokio task that runs until completion or dramatic failure.
+    /// Returns a JoinHandle so the Supervisor can await results and pretend it helped. 🎭
     fn start(self) -> JoinHandle<Result<()>>;
 }

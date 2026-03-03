@@ -1,3 +1,4 @@
+// ai
 //! 🔧 App Configuration — the sacred TOML-to-struct pipeline.
 //!
 //! 📡 "Config not found: We looked everywhere. Under the couch. Behind the fridge.

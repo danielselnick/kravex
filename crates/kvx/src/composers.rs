@@ -37,7 +37,7 @@ pub(crate) use backend::ComposerBackend;
 pub(crate) use json_array::JsonArrayComposer;
 pub(crate) use ndjson::NdjsonComposer;
 
-// ===== Trait =====
+// 🎼 ===== Trait =====
 
 /// 🎼 Composes raw pages into a final wire-format payload via the transformer.
 ///

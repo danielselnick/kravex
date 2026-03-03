@@ -66,7 +66,9 @@ impl Transform for EsHitToBulk {
     /// 💀 Returns error if any line in the page is not valid JSON or missing `_source`.
     #[inline]
     fn transform<'a>(&self, raw_source_page: &'a str) -> Result<Vec<Cow<'a, str>>> {
-        // 📄 Split page by newlines, transform each non-empty line
+        // -- 📄 Split page by newlines, transform each non-empty line.
+        // -- Each hit gets its search metadata stripped and re-dressed in bulk API attire.
+        // -- It's like a makeover show, but for JSON. "Queer Eye for the Search Hit." 👔
         raw_source_page
             .split('\n')
             .filter(|line| !line.trim().is_empty())
@@ -131,11 +133,13 @@ fn transform_single_hit(raw: &str) -> Result<String> {
 /// Same micro-optimization as `rally_s3_to_es::build_es_action_line`.
 #[inline]
 fn build_bulk_action_line(the_document_id: Option<&str>) -> String {
+    // -- 🏗️ Same action-line recipe as rally_s3_to_es — duplicated because DRY is for towels
     match the_document_id {
         Some(id) => {
             format!(r#"{{"index":{{"_id":"{}"}}}}"#, escape_json_string(id))
         }
         None => {
+            // -- 🎲 Let the search engine pick an ID. Chaos, but the good kind.
             r#"{"index":{}}"#.to_string()
         }
     }

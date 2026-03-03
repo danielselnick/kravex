@@ -1,3 +1,16 @@
+// ai
+//! 🚰📄🔄 The Source trait — where every data migration begins its journey.
+//!
+//! 🎬 COLD OPEN — INT. A VAST INDEX — DOCUMENTS STRETCH TO THE HORIZON
+//!
+//! *Billions of documents sat in storage. They'd been there for years. Nobody visited.
+//! Nobody queried. Then one day, a `next_page()` call came. And one by one, page by page,
+//! the documents marched out — through the trait, through the channel, into the unknown.*
+//!
+//! *"Where are we going?" asked document 47,391.*
+//! *"Somewhere better," said the SourceWorker. "Probably."*
+//!
+//! 🦆 The duck was the first document to volunteer. It had nothing to lose.
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -66,6 +79,7 @@ pub enum SourceBackend {
 #[async_trait]
 impl Source for SourceBackend {
     async fn next_page(&mut self) -> Result<Option<String>> {
+        // -- 🎭 The enum match: five backends enter, one page leaves. Thunderdome rules.
         match self {
             SourceBackend::InMemory(i) => i.next_page().await,
             SourceBackend::File(f) => f.next_page().await,
@@ -78,6 +92,7 @@ impl Source for SourceBackend {
     /// 🎛️ Dispatch set_page_size_hint to the wrapped source.
     /// Each backend decides what to do with it. Some listen. Some don't. Like children.
     fn set_page_size_hint(&mut self, doc_count: usize) {
+        // -- 🎛️ "I'd like doc_count documents please" — said the controller to the void
         match self {
             SourceBackend::InMemory(i) => i.set_page_size_hint(doc_count),
             SourceBackend::File(f) => f.set_page_size_hint(doc_count),

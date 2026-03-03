@@ -319,6 +319,7 @@ impl DocumentTransformer {
 impl Transform for DocumentTransformer {
     #[inline]
     fn transform<'a>(&self, raw_source_page: &'a str) -> Result<Vec<Cow<'a, str>>> {
+        // -- 🎭 Three transforms enter the match. Only one runs. The others wait for their episode.
         match self {
             Self::RallyS3ToEs(t) => t.transform(raw_source_page),
             Self::EsHitToBulk(t) => t.transform(raw_source_page),

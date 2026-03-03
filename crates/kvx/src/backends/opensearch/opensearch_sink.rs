@@ -266,8 +266,14 @@ fn apply_auth(
 
 /// 🔒 Apply auth to a raw RequestBuilder (post-body variant). Same logic as `apply_auth`.
 ///
-/// Separate function because reqwest::RequestBuilder moves on method calls,
-/// so we can't share the same builder between body() and auth().
+/// 🧠 TRIBAL KNOWLEDGE: Why two identical-looking auth functions?
+/// `reqwest::RequestBuilder` has move semantics — every method call (`.body()`, `.header()`,
+/// `.basic_auth()`) consumes `self` and returns a new builder. You can't call `.body()` and
+/// then pass the same builder to a shared `apply_auth()` because the original was moved.
+/// The caller of `apply_auth` builds the request UP TO the auth step, then this function
+/// finishes it. `apply_auth_raw` exists for call sites where `.body()` was already called
+/// on a different builder chain. They look identical but serve different call-site ergonomics.
+/// Merging them would require the caller to restructure its builder chain. Not worth it.
 /// The borrow checker has opinions. Strong ones.
 fn apply_auth_raw(
     request: reqwest::RequestBuilder,

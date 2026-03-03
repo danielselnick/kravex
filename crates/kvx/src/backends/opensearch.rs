@@ -17,7 +17,7 @@
 //!   4. The module system has opinions and we respect them
 //!
 //! ## Knowledge Graph 🧠
-//! - Pattern: same as `elasticsearch/` — mod.rs re-exports, split source/sink files
+//! - Pattern: same as `elasticsearch/` — named entry file re-exports, split source/sink files
 //! - Sink: POST to `/_bulk` with NDJSON (identical wire format to ES)
 //! - Source: PIT + `search_after` pagination (identical API to ES 7.10+)
 //! - Auth: basic auth + API key now; AWS SigV4 stubbed for future story

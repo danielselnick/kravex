@@ -389,9 +389,11 @@ async fn run_migration(args: RunArgs) -> Result<()> {
 ///
 /// "He who provides neither source nor config, migrates nothing." — Ancient proverb 📜🦆
 fn build_source_config(args: &RunArgs, base: Option<&AppConfig>) -> Result<SourceConfig> {
+    // -- 🔍 Resolution priority: CLI args > TOML config > existential crisis
     match &args.source {
         Some(source_type) => build_source_from_cli_args(source_type, args),
         None => match base {
+            // -- 📜 TOML fallback — the config file has spoken, and we shall obey
             Some(base_config) => Ok(base_config.source_config.clone()),
             None => bail!(
                 "💀 No source specified. Use --source <type> or --config <file>. \
@@ -404,9 +406,11 @@ fn build_source_config(args: &RunArgs, base: Option<&AppConfig>) -> Result<Sourc
 /// 🚰 Build SinkConfig from CLI args, falling back to TOML base if present.
 /// Same pattern as build_source_config. Because consistency is a feature. 🔄🦆
 fn build_sink_config(args: &RunArgs, base: Option<&AppConfig>) -> Result<SinkConfig> {
+    // -- 🚰 Same resolution dance as source — CLI wins, TOML is backup vocals
     match &args.sink {
         Some(sink_type) => build_sink_from_cli_args(sink_type, args),
         None => match base {
+            // -- 📜 TOML says where the data goes. We trust it. Mostly.
             Some(base_config) => Ok(base_config.sink_config.clone()),
             None => bail!(
                 "💀 No sink specified. Use --sink <type> or --config <file>. \
@@ -421,6 +425,8 @@ fn build_sink_config(args: &RunArgs, base: Option<&AppConfig>) -> Result<SinkCon
 /// 🧠 Each source type has required and optional args. Missing required args
 /// produce error messages that read like micro-fiction, not stack traces. 📖
 fn build_source_from_cli_args(source_type: &SourceType, args: &RunArgs) -> Result<SourceConfig> {
+    // -- 📦 Assemble the common config from CLI flags, falling back to defaults for the unspecified
+    // -- It's like building furniture — some parts from the box, some improvised from the garage
     let the_common_source_config = CommonSourceConfig {
         max_batch_size_docs: args
             .source_max_batch_size_docs
