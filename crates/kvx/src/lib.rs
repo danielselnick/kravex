@@ -12,35 +12,42 @@
 pub mod app_config;
 pub mod backends;
 pub(crate) mod composers;
-pub(crate) mod controllers;
+pub(crate) mod throttlers;
 pub(crate) mod progress;
 mod supervisors;
 pub mod transforms;
+pub(crate) mod workers;
 use crate::app_config::AppConfig;
-use crate::backends::common_config::ThrottleConfig;
-use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSource};
-use crate::backends::file::{FileSink, FileSource};
-use crate::backends::in_mem::{InMemorySink, InMemorySource};
-use crate::backends::opensearch::{OpenSearchSink, OpenSearchSource};
-use crate::backends::s3_rally::S3RallySource;
-use crate::backends::{SinkBackend, SourceBackend};
-use crate::controllers::{ControllerBackend, ThrottleControllerBackend};
+use crate::throttlers::{ControllerBackend, ThrottleControllerBackend};
 use crate::supervisors::Supervisor;
-use crate::app_config::{RuntimeConfig, SinkConfig, SourceConfig};
 use crate::composers::ComposerBackend;
 use crate::transforms::DocumentTransformer;
 use anyhow::{Context, Result};
+use std::sync::OnceLock;
 use std::time::SystemTime;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
+
+// 🛑 The global escape hatch — a CancellationToken that lives for the lifetime of a run().
+// OnceLock ensures thread-safe, one-time initialization. Calling stop() cancels the token,
+// which propagates to all workers via their clones. Like pulling the fire alarm, but for data. 🔥
+// 🧠 Knowledge graph: run() creates → Supervisor receives → workers clone → stop() cancels.
+static THE_ESCAPE_HATCH: OnceLock<CancellationToken> = OnceLock::new();
 
 /// 🚀 The grand entry point. The big kahuna. The main event.
 pub async fn run(app_config: AppConfig) -> Result<()> {
     let start_time = SystemTime::now();
     info!("🚀 KRAVEX IS BLASTING OFF — hold onto your indices, we are MIGRATING, baby!");
 
+    // 🛑 Create the cancellation token for this run. Workers get clones.
+    // OnceLock::set returns Err if already set (e.g., second run in same process) — we just use a fresh one.
+    let the_cancellation_token = CancellationToken::new();
+    let _ = THE_ESCAPE_HATCH.set(the_cancellation_token.clone());
+
     // -- 🏗️ Build the backends from config — five flavors of source, four flavors of sink.
     // -- Like a search engine buffet, except you can't come back for seconds. Or can you? 🔄
-    let source_backend = from_source_config(&app_config)
+    let source_backend = app_config.source
+        .build_backend(&app_config.throttle.source)
         .await
         .context("Failed to create source backend")?;
 
@@ -48,7 +55,8 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     let mut sink_backends = Vec::with_capacity(sink_parallelism);
     for _ in 0..sink_parallelism {
         sink_backends.push(
-            from_sink_config(&app_config)
+            app_config.sink
+                .build_backend()
                 .await
                 .context("Failed to create sink backend")?,
         );
@@ -58,52 +66,30 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     // 🧠 Knowledge graph: DocumentTransformer::from_configs() matches (source, sink) → transform.
     // File→ES = RallyS3ToEs, File→File = Passthrough, InMemory→InMemory = Passthrough, etc.
     let transformer =
-        DocumentTransformer::from_configs(&app_config.source_config, &app_config.sink_config);
+        DocumentTransformer::from_configs(&app_config.source, &app_config.sink);
 
     // 🎼 Resolve the composer from sink config.
     // 🧠 ES/File → NdjsonComposer, InMemory → JsonArrayComposer.
     // The Composer transforms raw pages AND assembles them into wire format. Two birds, one Cow. 🐄
-    let composer = ComposerBackend::from_sink_config(&app_config.sink_config);
+    let composer = ComposerBackend::from_sink_config(&app_config.sink);
 
-    // 🧠 Build throttle controllers for each sink worker.
-    // Each worker gets its own controller instance — no shared mutable state, no Mutex, no drama.
-    // 🧠 Knowledge graph: ThrottleConfig (from CommonSinkConfig) → ThrottleControllerBackend
-    //   Static → fixed bytes (the OG)
-    //   Pid → PidControllerBytesToMs (the secret sauce, LICENSE-EE) 🔒
-    let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
-    let throttle_config = app_config.sink_config.throttle_config();
-    let mut throttle_controllers = Vec::with_capacity(sink_parallelism);
-    for _ in 0..sink_parallelism {
-        let controller = match throttle_config {
-            ThrottleConfig::Static => {
-                // 🧊 Fixed bytes — the tried and true "I know what I'm doing" approach.
-                ThrottleControllerBackend::new_static(max_request_size_bytes)
-            }
-            ThrottleConfig::Pid {
-                set_point_ms,
-                min_bytes,
-                max_bytes,
-                initial_output_bytes,
-            } => {
-                // 🧠 PID control — the "let the math drive" approach. Licensed under LICENSE-EE.
-                ThrottleControllerBackend::new_pid(
-                    *set_point_ms,
-                    *initial_output_bytes,
-                    *min_bytes,
-                    *max_bytes,
-                )
-            }
-        };
-        throttle_controllers.push(controller);
-    }
+    // 🧠 Build throttle controllers for each sink worker via from_config() + clone().
+    // One factory call, N clones — no shared mutable state, no Mutex, no drama.
+    // 🧠 Knowledge graph: SinkThrottleConfig → ThrottleControllerBackend::from_config()
+    //   Static → fixed bytes (the OG). Pid → PidControllerBytesToMs (the secret sauce, LICENSE-EE) 🔒
+    let max_request_size_bytes = app_config.throttle.sink.max_request_size_bytes;
+    let the_prototype_controller = ThrottleControllerBackend::from_config(&app_config.throttle.sink);
+    let throttle_controllers: Vec<_> = (0..sink_parallelism)
+        .map(|_| the_prototype_controller.clone())
+        .collect();
 
-    // 🎛️ Resolve the controller from config.
+    // 🎛️ Resolve the controller from throttle config.
     // Static = fixed batch size (default, preserves existing behavior).
     // PidBytesToDocCount = adaptive feedback-driven batch sizing (the fancy one).
-    // 🧠 Knowledge graph: controller lives in SourceWorker, feeds output to source.set_page_size_hint().
-    let the_default_page_size = app_config.source_config.default_page_size();
+    // 🧠 Knowledge graph: controller lives in SourceWorker, feeds output to source.pump(hint).
+    let the_default_page_size = app_config.throttle.source.max_batch_size_docs;
     let the_controller =
-        ControllerBackend::from_config(&app_config.controller, the_default_page_size);
+        ControllerBackend::from_config(&app_config.throttle.source.controller, the_default_page_size);
 
     let supervisor = Supervisor::new(app_config.clone());
     supervisor
@@ -115,6 +101,7 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
             max_request_size_bytes,
             the_controller,
             throttle_controllers,
+            the_cancellation_token,
         )
         .await?;
 
@@ -125,82 +112,27 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     Ok(())
 }
 
-async fn from_source_config(config: &AppConfig) -> Result<SourceBackend> {
-    match &config.source_config {
-        // -- 📂 The File arm: ancient, reliable, and smells faintly of 2003.
-        // -- Like a filing cabinet that somehow learned async/await.
-        SourceConfig::File(file_cfg) => {
-            let src = FileSource::new(file_cfg.clone()).await?;
-            Ok(SourceBackend::File(src))
-        }
-        // -- 🧠 The InMemory arm: blazing fast, lives and dies with the process.
-        // -- No persistence. No regrets. No disk. Very YOLO.
-        SourceConfig::InMemory(_) => {
-            let src = InMemorySource::new().await?;
-            Ok(SourceBackend::InMemory(src))
-        }
-        // -- 📡 The Elasticsearch arm: HTTP calls, JSON parsing, and the constant
-        // -- fear of a 429 response that ruins your Thursday afternoon.
-        SourceConfig::Elasticsearch(es_cfg) => {
-            let src = ElasticsearchSource::new(es_cfg.clone()).await?;
-            Ok(SourceBackend::Elasticsearch(src))
-        }
-        // -- 🔍 The OpenSearch arm: same API, different logo. The fork that launched
-        // -- a thousand clusters. PIT + search_after for consistent pagination.
-        SourceConfig::OpenSearch(os_cfg) => {
-            let src = OpenSearchSource::new(os_cfg.clone()).await?;
-            Ok(SourceBackend::OpenSearch(src))
-        }
-        // -- 🪣 The S3 Rally arm: cloud data, benchmark vibes, IAM permissions that
-        // -- may or may not exist. The cloud giveth and the cloud taketh away.
-        SourceConfig::S3Rally(s3_cfg) => {
-            let src = S3RallySource::new(s3_cfg.clone()).await?;
-            Ok(SourceBackend::S3Rally(src))
-        }
-    }
-}
+// 🧠 from_source_config() and from_sink_config() have been promoted to methods:
+// SourceConfig::build_backend() in app_config/source_config.rs
+// SinkConfig::build_backend() in app_config/sink_config.rs
+// Config knows best how to instantiate its own backends. The waiter delivers, the menu decides. 🍽️🦆
 
-async fn from_sink_config(config: &AppConfig) -> Result<SinkBackend> {
-    match &config.sink_config {
-        // -- 📂 File sink: data goes in, data stays in. It's basically a digital shoebox
-        // -- under the bed. Hope you labeled it.
-        SinkConfig::File(file_cfg) => {
-            let sink = FileSink::new(file_cfg.clone()).await?;
-            Ok(SinkBackend::File(sink))
-        }
-        // -- 🧠 InMemory sink: it holds all your data, beautifully, until the process
-        // -- ends and takes everything with it like a sandcastle at high tide. 🌊
-        SinkConfig::InMemory(_) => {
-            let sink = InMemorySink::new().await?;
-            Ok(SinkBackend::InMemory(sink))
-        }
-        // -- 📡 Elasticsearch sink: data goes in at the speed of HTTP, which is to say,
-        // -- "fast enough until it isn't." May your bulk indexing be ever green. 🌿
-        SinkConfig::Elasticsearch(es_cfg) => {
-            let sink = ElasticsearchSink::new(es_cfg.clone()).await?;
-            Ok(SinkBackend::Elasticsearch(sink))
-        }
-        // -- 🔍 OpenSearch sink: the fork's bulk API endpoint. Same NDJSON, same game,
-        // -- different badge. Now with optional self-signed cert support for dev clusters
-        // -- that haven't gotten around to proper TLS yet. We've all been there.
-        SinkConfig::OpenSearch(os_cfg) => {
-            let sink = OpenSearchSink::new(os_cfg.clone()).await?;
-            Ok(SinkBackend::OpenSearch(sink))
-        }
+/// 🛑 Stops the migration — gracefully.
+///
+/// Triggers the CancellationToken, which propagates to all workers:
+/// - SourceWorker: closes the channel, stops pumping
+/// - SinkWorkers: flush remaining buffer, close their sinks, exit
+///
+/// "Today IS that day. The function does something. Character development arc complete." 🎬
+///
+/// 🧠 Knowledge graph: THE_ESCAPE_HATCH (OnceLock<CancellationToken>) is set by run(),
+/// read by stop(). Workers hold clones. cancel() is idempotent — calling it twice is fine.
+/// Like double-tapping the elevator button. It doesn't go faster, but it feels right. 🦆
+pub async fn stop() -> Result<()> {
+    if let Some(token) = THE_ESCAPE_HATCH.get() {
+        info!("🛑 Cancellation requested — workers will drain and exit gracefully. Hold tight.");
+        token.cancel();
     }
-}
-
-/// 🛑 Stops the migration.
-///
-/// No really. That's it. `Ok(())`. That's the whole function.
-///
-/// You might ask: "doesn't this do nothing?" and you would be correct.
-/// This function is a philosophical statement. A meditation on impermanence.
-/// Someday it will gracefully shut down workers, drain channels, flush buffers,
-/// and file its taxes. Today is not that day.
-///
-/// "The wisest thing I ever wrote was `Ok(())`." — this function, probably.
-pub(crate) async fn stop() -> Result<()> {
     Ok(())
 }
 
@@ -208,6 +140,9 @@ pub(crate) async fn stop() -> Result<()> {
 mod tests {
     use super::*;
     use crate::app_config::{RuntimeConfig, SinkConfig, SourceConfig};
+    use crate::backends::in_mem::{InMemorySink, InMemorySource};
+    use crate::backends::{SinkBackend, SourceBackend};
+    use tokio_util::sync::CancellationToken;
 
     /// 🧪 Full pipeline integration: InMemory→Passthrough→InMemory.
     /// Four raw docs in (as one newline-delimited page), one JSON array payload out.
@@ -224,9 +159,9 @@ mod tests {
                 queue_capacity: 10,
                 sink_parallelism: 1,
             },
-            source_config: SourceConfig::InMemory(()),
-            sink_config: SinkConfig::InMemory(()),
-            controller: crate::controllers::ControllerConfig::default(),
+            source: SourceConfig::InMemory(()),
+            sink: SinkConfig::InMemory(()),
+            throttle: Default::default(),
         };
 
         let source = SourceBackend::InMemory(InMemorySource::new().await?);
@@ -235,26 +170,27 @@ mod tests {
 
         // 🔄 InMemory→InMemory resolves to Passthrough transform
         let transformer = DocumentTransformer::from_configs(
-            &app_config.source_config,
-            &app_config.sink_config,
+            &app_config.source,
+            &app_config.sink,
         );
 
         // 🎼 InMemory sink → JsonArrayComposer: [item,item,...]
-        let composer = ComposerBackend::from_sink_config(&app_config.sink_config);
+        let composer = ComposerBackend::from_sink_config(&app_config.sink);
 
         // 🧠 Build a static throttle controller for the test — InMemory doesn't need PID
-        let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
+        let max_request_size_bytes = app_config.throttle.sink.max_request_size_bytes;
         let throttle_controllers = vec![ThrottleControllerBackend::new_static(max_request_size_bytes)];
 
         // 🎛️ Static controller for testing — no PID, just the configured batch size
         let the_controller = ControllerBackend::from_config(
-            &crate::controllers::ControllerConfig::default(),
-            1000,
+            &app_config.throttle.source.controller,
+            app_config.throttle.source.max_batch_size_docs,
         );
 
+        let the_cancellation_token = CancellationToken::new();
         let supervisor = Supervisor::new(app_config);
         supervisor
-            .start_workers(source, vec![sink], transformer, composer, max_request_size_bytes, the_controller, throttle_controllers)
+            .start_workers(source, vec![sink], transformer, composer, max_request_size_bytes, the_controller, throttle_controllers, the_cancellation_token)
             .await?;
 
         // 📦 SinkWorker received 1 page (4 docs newline-delimited), passthrough composed into JSON array.

@@ -13,13 +13,13 @@
 //! 💀 WORKERS ARE SUPERVISORS PRIVATE LITTLE MINIONS WHOM THE WORLD FORGOT ABOUT
 //! 🔒 Like Fight Club, but for async tasks. First rule: you don't pub the workers.
 
-mod workers;
 use crate::app_config::AppConfig;
 use crate::composers::ComposerBackend;
-use crate::controllers::{ControllerBackend, ThrottleControllerBackend};
-use crate::supervisors::workers::Worker;
+use crate::throttlers::{ControllerBackend, ThrottleControllerBackend};
 use crate::transforms::DocumentTransformer;
+use crate::workers::Worker;
 use anyhow::{Context, Result};
+use tokio_util::sync::CancellationToken;
 
 /// 📦 The Supervisor: because even async tasks need someone hovering over them
 /// asking "is it done yet?" every 5 milliseconds.
@@ -47,7 +47,7 @@ impl Supervisor {
     ///
     /// 🧠 Knowledge graph: the pipeline flow is now:
     /// ```text
-    /// Source.next_page() → channel(String) → SinkWorker(buffer pages → composer.compose → sink.send) → Sink(I/O)
+    /// Source.pump() → channel(String) → SinkWorker(buffer pages → composer.compose → sink.drain) → Sink(I/O)
     /// ```
     /// Each SinkWorker gets its own clone of the `DocumentTransformer` and `ComposerBackend`.
     /// Since transforms and composers are zero-sized structs, cloning is free.
@@ -61,28 +61,35 @@ impl Supervisor {
         max_request_size_bytes: usize,
         controller: ControllerBackend,
         throttle_controllers: Vec<ThrottleControllerBackend>,
+        cancellation_token: CancellationToken,
     ) -> Result<()> {
         // 📬 Channel carries String — raw pages from source to sink workers.
         let (tx, rx) = async_channel::bounded(self.app_config.runtime.queue_capacity);
 
         let mut worker_handles = Vec::with_capacity(sink_backends.len() + 1);
 
-        // 🗑️ Spawn N sink workers, each with its own transformer + composer + throttle controller.
+        // 🗑️ Spawn N sink workers, each with its own transformer + composer + throttle controller + cancel token.
         // 🧠 Each controller is owned by its worker — no shared state, no Mutex, no tears. 🔒
         for (sink_backend, throttle_controller) in sink_backends.into_iter().zip(throttle_controllers) {
-            let sink_worker = workers::SinkWorker::new(
+            let sink_worker = crate::workers::SinkWorker::new(
                 rx.clone(),
                 sink_backend,
                 transformer.clone(),
                 composer.clone(),
                 throttle_controller,
+                cancellation_token.clone(),
             );
             worker_handles.push(sink_worker.start());
         }
 
         // 🚰 Spawn the source worker — it pumps raw pages into the channel.
-        // Now with a controller for adaptive batch sizing! The PID rides shotgun. 🎛️
-        let source_worker = workers::SourceWorker::new(tx.clone(), source_backend, controller);
+        // Now with a controller for adaptive batch sizing AND graceful cancellation! 🎛️🛑
+        let source_worker = crate::workers::SourceWorker::new(
+            tx.clone(),
+            source_backend,
+            controller,
+            cancellation_token,
+        );
         worker_handles.push(source_worker.start());
 
         let results = futures::future::join_all(worker_handles).await;

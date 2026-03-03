@@ -13,7 +13,7 @@
 //! it streams the object line-by-line using `BufReader` over the SDK's async reader.
 //!
 //! 🧠 Knowledge graph:
-//! - `S3RallySourceConfig`: track name, bucket, region, optional key override, CommonSourceConfig
+//! - `S3RallySourceConfig`: track name, bucket, region, optional key override
 //! - `RallyTrack`: enum of all known benchmark tracks (validated at deserialization)
 //! - `S3RallySource`: wraps `BufReader<Box<dyn AsyncRead + Send + Unpin>>` — same read pattern as FileSource
 //! - Transport: `GetObject` → `ByteStream::into_async_read()` → `BufReader` → `read_line()`
@@ -26,7 +26,6 @@ use serde::Deserialize;
 use tokio::io::{self, AsyncBufReadExt, AsyncRead};
 use tracing::trace;
 
-use crate::backends::common_config::CommonSourceConfig;
 use crate::backends::Source;
 use crate::progress::ProgressMetrics;
 
@@ -207,9 +206,6 @@ pub struct S3RallySourceConfig {
     /// 🗝️ Optional S3 key override — if None, defaults to `{track}/documents.json`
     #[serde(default)]
     pub key: Option<String>,
-    /// 📦 Batch configuration — shared with all source backends
-    #[serde(default = "default_s3_rally_common_source_config")]
-    pub common_config: CommonSourceConfig,
 }
 
 impl S3RallySourceConfig {
@@ -231,14 +227,8 @@ fn default_s3_region() -> String {
     "us-east-1".to_string()
 }
 
-/// 🔧 Default batch config for S3 sources — same defaults as CommonSourceConfig::default().
-///
-/// This exists purely so serde can call it when `common_config` is absent from TOML.
-/// The `#[serde(default = "...")]` attribute demands a named function. We oblige.
-fn default_s3_rally_common_source_config() -> CommonSourceConfig {
-    // -- ✅ "It just works" — said the developer who had not yet tested it in production. 🤞
-    CommonSourceConfig::default()
-}
+// 🧠 Batch sizes live in ThrottleAppConfig.source — backends are pure connection config.
+// Free like a bird. Free like open-source (except the EE bits). 🦆
 
 // ============================================================
 //  🪣 S3RallySource — the streaming reader
@@ -277,6 +267,10 @@ pub(crate) struct S3RallySource {
     // to S3 laughs at this cost.
     buf_reader: io::BufReader<S3AsyncReader>,
     source_config: S3RallySourceConfig,
+    /// 📦 Max docs per batch page — updated by pump(doc_count_hint) each call
+    max_batch_size_docs: usize,
+    /// 📦 Max bytes per batch page — set at construction from throttle config
+    max_batch_size_bytes: usize,
     // 📊 Progress tracker — feeds the TUI progress table.
     // Without it, you're downloading blind. With it, you're downloading blind
     // but at least there's a pretty bar to watch.
@@ -309,7 +303,11 @@ impl S3RallySource {
     ///
     /// "Config not found: We looked everywhere. Under the couch. Behind the fridge.
     /// In the junk drawer. Nothing. But the S3 bucket? That we found."
-    pub(crate) async fn new(source_config: S3RallySourceConfig) -> Result<Self> {
+    pub(crate) async fn new(
+        source_config: S3RallySourceConfig,
+        max_batch_size_bytes: usize,
+        max_batch_size_docs: usize,
+    ) -> Result<Self> {
         let the_resolved_key = source_config.resolved_key();
 
         // 🔧 Build AWS config from the environment — credentials, region, the works.
@@ -383,6 +381,8 @@ impl S3RallySource {
         Ok(Self {
             buf_reader: the_buf_reader,
             source_config,
+            max_batch_size_docs,
+            max_batch_size_bytes,
             progress: the_progress,
         })
     }
@@ -390,16 +390,12 @@ impl S3RallySource {
 
 #[async_trait]
 impl Source for S3RallySource {
-    /// 🎛️ Update the batch size hint from the controller.
-    /// S3RallySource respects this by adjusting `max_batch_size_docs` — the doc count cap per page.
-    /// The PID controller whispers a number. We listen. We adjust. We fetch. We measure. We loop.
-    fn set_page_size_hint(&mut self, doc_count: usize) {
-        self.source_config.common_config.max_batch_size_docs = doc_count;
-    }
-
-    /// 📄 Read the next page of lines from the S3 byte stream. Returns `None` when exhausted.
+    /// 🚰 Pump the next page of lines from the S3 byte stream. Returns `None` when exhausted.
     ///
-    /// 🧠 Knowledge graph: identical loop to `FileSource::next_page()` — same exit conditions:
+    /// `doc_count_hint` adjusts `max_batch_size_docs` before reading — the controller's
+    /// recommended batch size merges into the pump in a single call.
+    ///
+    /// 🧠 Knowledge graph: identical loop to `FileSource::pump()` — same exit conditions:
     ///   1. `max_batch_size_docs`: line count cap. Don't build a page the size of Ohio.
     ///   2. `max_batch_size_bytes`: byte cap. Memory is finite, even on EC2 instances that cost
     ///      more per hour than a lawyer.
@@ -409,9 +405,11 @@ impl Source for S3RallySource {
     /// Composer handles transform + assembly. We just pump bytes.
     ///
     /// 📜 "He who reads the entire S3 object into one String, pays the OOM tax in production."
-    async fn next_page(&mut self) -> Result<Option<String>> {
+    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<String>> {
+        // 🎛️ Apply the controller's batch size hint — merged from the old set_page_size_hint()
+        self.max_batch_size_docs = doc_count_hint;
         let mut page = String::with_capacity(
-            self.source_config.common_config.max_batch_size_bytes,
+            self.max_batch_size_bytes,
         );
         let mut total_bytes_read = 0usize;
         let mut line_count = 0usize;
@@ -419,7 +417,7 @@ impl Source for S3RallySource {
         // -- Like, "is that a document or a novella?" levels of chonky.
         let mut line = String::with_capacity(1024 * 1024);
 
-        for _ in 0..=self.source_config.common_config.max_batch_size_docs {
+        for _ in 0..=self.max_batch_size_docs {
             let bytes_read = self.buf_reader.read_line(&mut line).await?;
             if bytes_read == 0 {
                 break;
@@ -439,11 +437,11 @@ impl Source for S3RallySource {
             }
             line.clear();
 
-            if total_bytes_read > self.source_config.common_config.max_batch_size_bytes {
+            if total_bytes_read > self.max_batch_size_bytes {
                 break;
             }
 
-            if line_count >= self.source_config.common_config.max_batch_size_docs {
+            if line_count >= self.max_batch_size_docs {
                 break;
             }
         }
@@ -584,7 +582,6 @@ mod tests {
             bucket: "my-bucket".to_string(),
             region: "us-west-2".to_string(),
             key: Some("custom/path/to/data.json".to_string()),
-            common_config: CommonSourceConfig::default(),
         };
 
         assert_eq!(
@@ -601,7 +598,6 @@ mod tests {
             bucket: "rally-data".to_string(),
             region: "eu-west-1".to_string(),
             key: None,
-            common_config: CommonSourceConfig::default(),
         };
 
         assert_eq!(
@@ -626,8 +622,6 @@ mod tests {
         assert_eq!(the_config.bucket, "my-rally-bucket");
         assert_eq!(the_config.region, "us-west-2");
         assert!(the_config.key.is_none());
-        // 📦 common_config should have defaults
-        assert!(the_config.common_config.max_batch_size_docs > 0);
     }
 
     /// 🧪 Verify the default region is us-east-1 when not specified.

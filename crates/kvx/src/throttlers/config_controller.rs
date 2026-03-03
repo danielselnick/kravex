@@ -31,7 +31,7 @@ use super::Controller;
 /// the temperature is set, the dial is decorative, and your feedback is noted but not actioned.
 ///
 /// 🧠 Knowledge graph:
-/// - Constructed with `page_size` from `CommonSourceConfig.max_batch_size_docs`
+/// - Constructed with `page_size` from `SourceThrottleConfig.max_batch_size_docs`
 /// - `output()` always returns `page_size` — consistent as a metronome, exciting as a spreadsheet
 /// - `measure()` accepts the measurement gracefully, then throws it into the void
 /// - This is the default controller when no `[controller]` config section exists

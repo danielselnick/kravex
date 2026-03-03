@@ -99,7 +99,6 @@ mod tests {
             password: None,
             api_key: None,
             index: None,
-            common_config: Default::default(),
         });
         let composer = ComposerBackend::from_sink_config(&config);
         assert!(matches!(composer, ComposerBackend::Ndjson(_)));
@@ -117,7 +116,6 @@ mod tests {
         use crate::backends::file::FileSinkConfig;
         let config = SinkConfig::File(FileSinkConfig {
             file_name: "output.json".into(),
-            common_config: Default::default(),
         });
         let composer = ComposerBackend::from_sink_config(&config);
         assert!(matches!(composer, ComposerBackend::Ndjson(_)));
@@ -141,7 +139,6 @@ mod tests {
     #[test]
     fn backend_the_one_where_opensearch_resolves_to_ndjson() {
         use crate::backends::opensearch::OpenSearchSinkConfig;
-        use crate::backends::CommonSinkConfig;
         let config = SinkConfig::OpenSearch(OpenSearchSinkConfig {
             url: "https://localhost:9200".into(),
             username: None,
@@ -149,7 +146,6 @@ mod tests {
             api_key: None,
             index: Some("test-idx".into()),
             danger_accept_invalid_certs: true,
-            common_config: CommonSinkConfig::default(),
         });
         let composer = ComposerBackend::from_sink_config(&config);
         assert!(

@@ -62,7 +62,7 @@ impl Source for InMemorySource {
     /// 🧠 Knowledge graph: the source joins its 4 docs with `\n` into one raw page.
     /// The Composer+Transformer downstream will split and process them.
     /// Source is ignorant. Source is bliss. Source is a faucet. 🚰
-    async fn next_page(&mut self) -> Result<Option<String>> {
+    async fn pump(&mut self, _doc_count_hint: usize) -> Result<Option<String>> {
         if self.has_yielded {
             return Ok(None);
         }

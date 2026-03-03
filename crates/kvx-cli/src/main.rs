@@ -21,8 +21,8 @@ use tracing_subscriber::EnvFilter;
 
 use kvx::app_config::{AppConfig, RuntimeConfig, SinkConfig, SourceConfig};
 use kvx::backends::{
-    CommonSinkConfig, CommonSourceConfig, ElasticsearchSinkConfig, ElasticsearchSourceConfig,
-    FileSinkConfig, FileSourceConfig, RallyTrack, S3RallySourceConfig, ThrottleConfig,
+    ElasticsearchSinkConfig, ElasticsearchSourceConfig,
+    FileSinkConfig, FileSourceConfig, RallyTrack, S3RallySourceConfig,
 };
 use kvx::transforms::supported_flows;
 
@@ -326,18 +326,30 @@ async fn run_migration(args: RunArgs) -> Result<()> {
         sink_parallelism: args.sink_parallelism,
     };
 
+    // 🏗️ Phase 5: Build throttle config — TOML base + CLI overrides
+    // 🧠 The throttle commune: source batch sizing + sink request sizing + controller mode.
+    // CLI args override TOML values. If neither provided, defaults kick in. Like gravity. 🦆
+    let mut the_throttle_config = the_base_config.as_ref()
+        .map(|c| c.throttle.clone())
+        .unwrap_or_default();
+    if let Some(the_docs) = args.source_max_batch_size_docs {
+        the_throttle_config.source.max_batch_size_docs = the_docs;
+    }
+    if let Some(the_bytes) = args.source_max_batch_size_bytes {
+        the_throttle_config.source.max_batch_size_bytes = the_bytes;
+    }
+    if let Some(the_sink_bytes) = args.sink_max_request_size_bytes {
+        the_throttle_config.sink.max_request_size_bytes = the_sink_bytes;
+    }
+
     let the_grand_config = AppConfig {
-        source_config: the_source_config,
-        sink_config: the_sink_config,
+        source: the_source_config,
+        sink: the_sink_config,
         runtime: the_runtime_config,
-        // 🎛️ Default to Static controller — no PID drama, preserves existing CLI behavior.
-        // 🦆 The duck has nothing to say about PID controllers. It just quacks.
-        // Knowledge graph: ControllerConfig::Static is the zero-config default; PidBytesToDocCount
-        // requires explicit TOML config. CLI does not expose PID knobs as flags yet —
-        // users who want adaptive batch sizing must supply a config file.
-        // Using Default::default() here because ControllerConfig is pub(crate) in kvx — it is
-        // not re-exported, so we lean on type inference + the Default impl to fill this slot.
-        controller: Default::default(),
+        // 🎛️ Throttle config: TOML base → CLI overrides → defaults.
+        // PID knobs not exposed as CLI flags yet — future-Daniel's problem.
+        // Present-Daniel is choosing peace. And backwards compatibility. 🦆
+        throttle: the_throttle_config,
     };
 
     // 🚀 SEND IT. No take-backs. This is not a drill.
@@ -394,7 +406,7 @@ fn build_source_config(args: &RunArgs, base: Option<&AppConfig>) -> Result<Sourc
         Some(source_type) => build_source_from_cli_args(source_type, args),
         None => match base {
             // -- 📜 TOML fallback — the config file has spoken, and we shall obey
-            Some(base_config) => Ok(base_config.source_config.clone()),
+            Some(base_config) => Ok(base_config.source.clone()),
             None => bail!(
                 "💀 No source specified. Use --source <type> or --config <file>. \
                  We can't migrate data from the void. The void called, it has nothing for us."
@@ -411,7 +423,7 @@ fn build_sink_config(args: &RunArgs, base: Option<&AppConfig>) -> Result<SinkCon
         Some(sink_type) => build_sink_from_cli_args(sink_type, args),
         None => match base {
             // -- 📜 TOML says where the data goes. We trust it. Mostly.
-            Some(base_config) => Ok(base_config.sink_config.clone()),
+            Some(base_config) => Ok(base_config.sink.clone()),
             None => bail!(
                 "💀 No sink specified. Use --sink <type> or --config <file>. \
                  Data needs somewhere to go. It can't just... float."
@@ -425,17 +437,8 @@ fn build_sink_config(args: &RunArgs, base: Option<&AppConfig>) -> Result<SinkCon
 /// 🧠 Each source type has required and optional args. Missing required args
 /// produce error messages that read like micro-fiction, not stack traces. 📖
 fn build_source_from_cli_args(source_type: &SourceType, args: &RunArgs) -> Result<SourceConfig> {
-    // -- 📦 Assemble the common config from CLI flags, falling back to defaults for the unspecified
-    // -- It's like building furniture — some parts from the box, some improvised from the garage
-    let the_common_source_config = CommonSourceConfig {
-        max_batch_size_docs: args
-            .source_max_batch_size_docs
-            .unwrap_or(CommonSourceConfig::default().max_batch_size_docs),
-        max_batch_size_bytes: args
-            .source_max_batch_size_bytes
-            .unwrap_or(CommonSourceConfig::default().max_batch_size_bytes),
-    };
-
+    // 🧠 Source configs are pure connection config now — batch sizing lives in [throttle.source].
+    // 🎓🦆
     match source_type {
         SourceType::File => {
             let the_file_name = args.source_file_name.clone().context(
@@ -444,7 +447,6 @@ fn build_source_from_cli_args(source_type: &SourceType, args: &RunArgs) -> Resul
             )?;
             Ok(SourceConfig::File(FileSourceConfig {
                 file_name: the_file_name,
-                common_config: the_common_source_config,
             }))
         }
         SourceType::Elasticsearch => {
@@ -459,7 +461,6 @@ fn build_source_from_cli_args(source_type: &SourceType, args: &RunArgs) -> Resul
                 api_key: args.source_api_key.clone(),
                 index: None,
                 query: None,
-                common_config: the_common_source_config,
             }))
         }
         SourceType::S3Rally => {
@@ -479,7 +480,6 @@ fn build_source_from_cli_args(source_type: &SourceType, args: &RunArgs) -> Resul
                 bucket: the_bucket,
                 region: args.source_region.clone().unwrap_or_else(|| "us-east-1".to_string()),
                 key: args.source_key.clone(),
-                common_config: the_common_source_config,
             }))
         }
         SourceType::Inmemory => Ok(SourceConfig::InMemory(())),
@@ -490,16 +490,8 @@ fn build_source_from_cli_args(source_type: &SourceType, args: &RunArgs) -> Resul
 /// Same pattern as build_source_from_cli_args. Mirror mirror on the wall,
 /// who's the most consistent codebase of them all? 🪞🦆
 fn build_sink_from_cli_args(sink_type: &SinkType, args: &RunArgs) -> Result<SinkConfig> {
-    let the_common_sink_config = CommonSinkConfig {
-        max_request_size_bytes: args
-            .sink_max_request_size_bytes
-            .unwrap_or(CommonSinkConfig::default().max_request_size_bytes),
-        // 🧊 CLI doesn't expose PID knobs yet — Static throttle is the vibe.
-        // When someone asks for PID via CLI args, future-Daniel will add flags here.
-        // Present-Daniel is choosing peace. And backwards compatibility. 🦆
-        throttle: ThrottleConfig::default(),
-    };
-
+    // 🧠 Sink configs are pure connection config now — request sizing lives in [throttle.sink].
+    // 🗽🦆
     match sink_type {
         SinkType::File => {
             let the_file_name = args.sink_file_name.clone().context(
@@ -509,7 +501,6 @@ fn build_sink_from_cli_args(sink_type: &SinkType, args: &RunArgs) -> Result<Sink
             )?;
             Ok(SinkConfig::File(FileSinkConfig {
                 file_name: the_file_name,
-                common_config: the_common_sink_config,
             }))
         }
         SinkType::Elasticsearch => {
@@ -524,7 +515,6 @@ fn build_sink_from_cli_args(sink_type: &SinkType, args: &RunArgs) -> Result<Sink
                 password: args.sink_password.clone(),
                 api_key: args.sink_api_key.clone(),
                 index: args.sink_index.clone(),
-                common_config: the_common_sink_config,
             }))
         }
         SinkType::Inmemory => Ok(SinkConfig::InMemory(())),

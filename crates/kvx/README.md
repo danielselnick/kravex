@@ -1,127 +1,127 @@
 # Summary
 
-Core library for kravex — the data migration engine. Raw pages, Cow-powered zero-copy, Composer-based payload assembly, and a clean config ownership model.
+Core library for kravex — the zero-config search migration engine. Raw pages, Cow-powered zero-copy, Composer-based payload assembly, adaptive throttling, graceful cancellation. The borrow checker approved this message (after 47 rejections).
 
 # Description
 
-`kvx` provides the foundational primitives for search migration: throttling, cutover logic, retry/recovery, and adaptive throughput. This crate is consumed by `kvx-cli` and any future integrations.
+`kvx` provides the foundational primitives for search migration: throttling, cutover logic, retry/recovery, and adaptive throughput. Consumed by `kvx-cli` and future integrations. Now with 6 phases of refactoring and a fresh coat of existential dread.
 
 # Knowledge Graph
 
 - **Workspace member**: `crates/kvx`
 - **Dependents**: `kvx-cli`
-- **Dependencies**: anyhow, async-channel, figment, reqwest, serde, serde_json, tokio, tracing, async-trait, futures, indicatif, comfy-table, aws-sdk-s3, aws-config
+- **Dependencies**: anyhow, async-channel, figment, reqwest, serde, serde_json, tokio, tokio-util, tracing, async-trait, futures, indicatif, comfy-table, aws-sdk-s3, aws-config
 - **Edition**: 2024
+- **Test count**: 101 (kvx crate)
 - **Modules**:
-  - `app_config` — `AppConfig`, `RuntimeConfig`, `SourceConfig`, `SinkConfig`, `ControllerConfig` (Figment-based config loading; owns all top-level config enums)
-  - `backends` — backend wiring + re-exports; includes `CommonSinkConfig`, `CommonSourceConfig` (backend-shared config primitives)
-  - `backends/common_config` — `CommonSinkConfig`, `CommonSourceConfig`, `ThrottleConfig` (live here to avoid circular dep with `app_config`)
-  - `backends/{source,sink}` — `Source`/`Sink` traits + `SourceBackend`/`SinkBackend` enums. Source now includes `set_page_size_hint()`.
-  - `controllers` — `Controller` trait + `ControllerConfig` + `ControllerBackend` enum (adaptive batch sizing) + `ThrottleController` trait + `ThrottleControllerBackend` enum + `StaticThrottleController` + `PidControllerBytesToMs` (adaptive throttling; PID controller is LICENSE-EE/BSL)
-  - `backends/elasticsearch/{elasticsearch_source,elasticsearch_sink}` — ES backend impls (source: PIT + search_after pagination)
-  - `backends/opensearch/{opensearch_source,opensearch_sink}` — OpenSearch 2.x/3.x backend (PIT + search_after, danger_accept_invalid_certs, SigV4 stubbed)
-  - `backends/file/{file_source,file_sink}` — file backend impls
-  - `backends/in_mem/{in_mem_source,in_mem_sink}` — in-memory test backend
-  - `backends/s3_rally/s3_rally_source` — S3 Rally benchmark source (streams track data from S3 via AWS SDK)
-  - `controllers` — `Controller` trait + `ControllerConfig` + `ControllerBackend` enum (adaptive batch sizing)
-  - `controllers/config_controller` — `ConfigController` (static — returns configured batch size, ignores measurements)
-  - `controllers/pid_bytes_to_doc_count` — `PidBytesToDocCount` (PID feedback loop: measures response bytes, outputs doc count)
-  - `composers` — `Composer` trait + `NdjsonComposer`/`JsonArrayComposer` + `ComposerBackend` dispatcher
-  - `collectors` — `PayloadCollector` trait + `NdjsonCollector`/`JsonArrayCollector` + `CollectorBackend` dispatcher (legacy; superseded by composers)
-  - `transforms` — `Transform` trait + `DocumentTransformer` enum (Cow-based); includes `RallyS3ToEs`, `EsHitToBulk`, `Passthrough`
-  - `supervisors` — pipeline orchestration (Supervisor + workers); no config submodule — config lives in `app_config`
-  - `common` — `Hit`/`HitBatch` (legacy dead code)
+  - `app_config` — `AppConfig`, `RuntimeConfig`, `ControllerConfig` + module subdir (`source_config.rs`, `sink_config.rs`); `build_backend()` factory on enums; re-exports `ThrottleAppConfig`, `SourceThrottleConfig`, `SinkThrottleConfig`
+  - `app_config/source_config` — `SourceConfig` enum + `build_backend()` factory
+  - `app_config/sink_config` — `SinkConfig` enum + `build_backend()` factory
+  - `backends` — backend wiring + re-exports; `Source`/`Sink` traits + `SourceBackend`/`SinkBackend` enums
+  - `backends/{elasticsearch,opensearch,file,in_mem,s3_rally}` — per-backend dirs with `{type}_source.rs` / `{type}_sink.rs`
+  - `throttlers` — ALL throttle/controller logic consolidated here: `ThrottleAppConfig` (TOML `[throttle]`), `SourceThrottleConfig` (`[throttle.source]`), `SinkThrottleConfig` (`[throttle.sink]`), `ControllerConfig`, `ThrottleControllerBackend`, `ThrottleController` trait, `StaticThrottleController`, `PidControllerBytesToMs` (LICENSE-EE/BSL), `Controller` trait, `ControllerBackend`, `ConfigController`, `PidBytesToDocCount`
+  - `throttlers/config_controller` — `ConfigController` (static batch sizing)
+  - `throttlers/pid_bytes_to_doc_count` — `PidBytesToDocCount` (PID batch sizing)
+  - `throttlers/pid_bytes_to_ms` — `PidControllerBytesToMs` (PID sink throttle)
+  - `throttlers/static_throttle` — `StaticThrottleController`
+  - `workers` — flattened from `supervisors/workers/`; `SourceWorker` + `SinkWorker` (both own `CancellationToken`, use `tokio::select!`)
+  - `workers/source_worker` — `SourceWorker` (owns `ControllerBackend`, calls `source.pump(hint)`)
+  - `workers/sink_worker` — `SinkWorker` (buffers raw pages, calls `sink.drain(payload)`, owns `ThrottleControllerBackend`)
+  - `supervisors` — `Supervisor` orchestration (spawns workers, passes `CancellationToken`)
+  - `composers` — `Composer` trait + `NdjsonComposer`/`JsonArrayComposer` + `ComposerBackend`
+  - `transforms` — `Transform` trait + `DocumentTransformer` enum (Cow-based); `RallyS3ToEs`, `EsHitToBulk`, `Passthrough`
   - `progress` — TUI metrics
+  - `common` — `Hit`/`HitBatch` (legacy dead code, not in pipeline)
 
-## Pipeline Architecture (current — Raw Pages + Composer + Controller + Throttle Controller)
+## Pipeline Architecture (v17 — Phase 1-6 refactor complete)
 ```
-Controller.output() → batch_size_hint
-  → Source.set_page_size_hint(hint)
-  → Source.next_page() → Option<String> (raw page)
-  → Controller.measure(page.len())
+ThrottleControllerBackend.output() → dynamic byte target
+ControllerBackend.output() → doc_count_hint
+  → Source.pump(doc_count_hint) → Option<String> (raw page)
+  → ControllerBackend.measure(page.len())
   → channel(String)
-  → SinkWorker buffers Vec<String> (by dynamic byte size from ThrottleController)
+  → SinkWorker buffers Vec<String> (by byte target)
   → Composer.compose(&buffer, &transformer) → final payload String
-  → Sink.send(payload) → measure duration → ThrottleController.measure(ms)
-  → ThrottleController.output() → next cycle's byte target
+  → Sink.drain(payload) → measure duration → ThrottleControllerBackend.measure(ms)
+  → ThrottleControllerBackend.output() → next cycle's byte target
+  ↑ tokio::select! on CancellationToken at every loop iteration (workers)
 ```
 
 ## Module Dependency Graph
 ```
-lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig, ControllerConfig)
+lib.rs ──► app_config (AppConfig, RuntimeConfig, ControllerConfig)
+  │              │
+  │         app_config/source_config (SourceConfig, build_backend())
+  │         app_config/sink_config   (SinkConfig,   build_backend())
   │              │
   │              ▼
-  │         backends ──► backends/common_config (CommonSinkConfig, CommonSourceConfig, ThrottleConfig)
-  │              │              ↑ (imported by backend-specific configs to embed)
-  │              ▼
-  │         supervisors ──► workers (SourceWorker w/ ControllerBackend, SinkWorker)
-  │              │                │
-  ├──► controllers ◄──────────────┤ (SinkWorker owns ThrottleControllerBackend)
-  ├──► transforms ◄───────────────┘ (called by Composer)
-  ├──► composers  ◄── SinkWorker (holds ComposerBackend + DocumentTransformer)
-  └──► controllers ◄── SourceWorker (holds ControllerBackend, feeds output to Source)
-
+  │         backends ──► {elasticsearch,opensearch,file,in_mem,s3_rally}
+  │              │
+  ├──► throttlers ◄── app_config (ThrottleAppConfig re-exported)
+  │         ◄── workers/source_worker (ControllerBackend)
+  │         ◄── workers/sink_worker   (ThrottleControllerBackend)
+  ├──► workers ──► supervisors (spawned with CancellationToken)
+  ├──► transforms ◄── Composer (called during compose)
+  └──► composers  ◄── SinkWorker (holds ComposerBackend + DocumentTransformer)
 ```
 
 # Key Concepts
 
-- **Sources return `Option<String>`**: one raw page per call, content uninterpreted. `None` = EOF. Source is maximally ignorant — it's a faucet, not a chef.
-- **Sinks are I/O-only**: accept a fully rendered payload `String`, send it (HTTP POST, file write, memory push)
-- **SinkWorker buffers raw pages** by byte size, flushes via Composer when buffer approaches dynamic target from `ThrottleController.output()`
-- **ThrottleController** (`ThrottleControllerBackend`): adaptive flush threshold:
-  - `StaticThrottleController` → fixed bytes (the OG — backwards compatible default)
-  - `PidControllerBytesToMs` → PID feedback loop: measures sink latency, adjusts byte output (LICENSE-EE/BSL)
-  - Config-driven via `ThrottleConfig` in `CommonSinkConfig` (Static or Pid)
-- **Transform** (`DocumentTransformer`): per-page format conversion. Returns `Vec<Cow<str>>` items:
-  - `Cow::Borrowed` = zero-copy passthrough (no allocation!)
-  - `Cow::Owned` = format conversion (Rally→ES bulk, etc.)
-- **Composer** (`ComposerBackend`): transform + assemble in one shot:
-  - ES/File → `NdjsonComposer`: items joined with `\n`, trailing `\n`
-  - InMemory → `JsonArrayComposer`: `[item,item,item]`, zero serde
-- **All abstractions follow the same pattern**: trait → concrete impls → enum dispatcher → from_config resolver
-- **Zero-copy passthrough**: NDJSON→NDJSON scenarios (file-to-file) — Cow borrows from buffered pages, no per-doc allocation
+- **`source.pump(doc_count_hint)`**: replaces `set_page_size_hint()` + `next_page()`. One call, hint included. Returns `Option<String>` (None = EOF).
+- **`sink.drain(payload)`**: replaces `sink.send()`. Semantically: drain the buffer into the sink.
+- **`ThrottleAppConfig`**: top-level `[throttle]` TOML section. Contains `source: SourceThrottleConfig` and `sink: SinkThrottleConfig`. No longer embedded in backend configs.
+- **`SourceThrottleConfig`** (`[throttle.source]`): `max_batch_size_bytes`, `max_batch_size_docs`, `ControllerConfig`.
+- **`SinkThrottleConfig`** (`[throttle.sink]`): `max_request_size_bytes`, `ThrottleConfig` (Static or Pid).
+- **`build_backend()`**: factory method on `SourceConfig`/`SinkConfig` enums. Replaces ad-hoc resolver functions. Config owns its own instantiation.
+- **`ThrottleControllerBackend::from_config()`**: factory from `SinkThrottleConfig`. Added `Clone`.
+- **`CancellationToken`** (tokio-util): passed to every worker. Workers use `tokio::select!` to exit cleanly on `kvx::stop()`.
+- **`throttlers` module**: consolidated from `controllers/`. Owns ALL throttle + controller logic.
+- **`workers` module**: flattened from `supervisors/workers/`. `SourceWorker` + `SinkWorker` are top-level.
+- **`AppConfig` fields**: `source`, `sink`, `runtime`, `throttle` (renamed from `source_config`/`sink_config`).
+- **Zero-copy passthrough**: NDJSON→NDJSON via `Cow::Borrowed`. No per-doc alloc.
+- **All abstractions**: trait → concrete impls → enum dispatcher → `from_config()` factory.
+- **Transforms/composers are Clone+Copy** (zero-sized structs). Each SinkWorker gets its own copy.
 
-## Architecture Pattern (used by backends, transforms, composers, controllers)
+## Architecture Pattern
 ```
-┌──────────────────┐ ┌──────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
-│ trait Source      │ │ trait Transform       │ │ trait Composer      │ │ trait Controller     │
-│   fn next_page() │ │   fn transform(&str)  │ │   fn compose(pages) │ │   fn output() → usize│
-│   → Option<Str>  │ │   → Vec<Cow<str>>     │ │   → String          │ │   fn measure(f64)    │
-└────────┬─────────┘ └────────┬─────────────┘ └────────┬────────────┘ └────────┬────────────┘
-         │                    │                         │                       │
-┌────────┴─────────┐ ┌────────┴─────────────┐ ┌────────┴────────────┐ ┌────────┴────────────┐
-│ FileSource       │ │ RallyS3ToEs          │ │ NdjsonComposer      │ │ ConfigController     │
-│ InMemorySource   │ │ EsHitToBulk          │ │ JsonArrayComposer   │ │ PidBytesToDocCount   │
-│ ElasticsearchSrc │ │ Passthrough          │ │                     │ │                      │
-│ OpenSearchSource │ │                      │ │                     │ │                      │
-│ S3RallySource    │ │                      │ │                     │ │                      │
-└────────┬─────────┘ └────────┬─────────────┘ └────────┬────────────┘ └────────┬────────────┘
-         │                    │                         │                       │
-┌────────┴─────────┐ ┌────────┴─────────────┐ ┌────────┴────────────┐ ┌────────┴────────────┐
-│ enum SourceBknd  │ │ enum DocTransformer   │ │ enum ComposerBknd   │ │ enum ControllerBknd  │
-│   match dispatch │ │   match dispatch      │ │   match dispatch    │ │   match dispatch     │
-└──────────────────┘ └──────────────────────┘ └─────────────────────┘ └──────────────────────┘
+┌─────────────────┐  ┌────────────────────┐  ┌─────────────────────┐  ┌──────────────────────┐
+│ trait Source     │  │ trait Transform     │  │ trait Composer       │  │ trait Controller      │
+│   pump(hint)     │  │   transform(&str)   │  │   compose(pages)     │  │   output() → usize   │
+│   → Option<Str>  │  │   → Vec<Cow<str>>   │  │   → String           │  │   measure(f64)       │
+└────────┬────────┘  └────────┬────────────┘  └────────┬────────────┘  └────────┬─────────────┘
+         │                    │                         │                        │
+┌────────┴────────┐  ┌────────┴────────────┐  ┌────────┴────────────┐  ┌────────┴─────────────┐
+│ FileSource       │  │ RallyS3ToEs         │  │ NdjsonComposer       │  │ ConfigController      │
+│ InMemorySource   │  │ EsHitToBulk         │  │ JsonArrayComposer    │  │ PidBytesToDocCount    │
+│ ElasticsearchSrc │  │ Passthrough         │  │                      │  │                       │
+│ OpenSearchSource │  │                     │  │                      │  │                       │
+│ S3RallySource    │  │                     │  │                      │  │                       │
+└────────┬────────┘  └────────┬────────────┘  └────────┬────────────┘  └────────┬─────────────┘
+         │                    │                         │                        │
+┌────────┴────────┐  ┌────────┴────────────┐  ┌────────┴────────────┐  ┌────────┴─────────────┐
+│ SourceBackend    │  │ DocumentTransformer  │  │ ComposerBackend      │  │ ControllerBackend     │
+│  (enum dispatch) │  │  (enum dispatch)     │  │  (enum dispatch)     │  │  (enum dispatch)      │
+└─────────────────┘  └────────────────────┘  └─────────────────────┘  └──────────────────────┘
 ```
 
 ## Resolution Tables
 
-### Transform Resolution (from SourceConfig × SinkConfig)
+### Transform Resolution (SourceConfig × SinkConfig)
 | SourceConfig | SinkConfig | Resolves to |
 |---|---|---|
-| File | Elasticsearch | `RallyS3ToEs` — splits page by `\n`, transforms each doc |
-| S3Rally | Elasticsearch | `RallyS3ToEs` — same as File→ES |
-| File | OpenSearch | `RallyS3ToEs` — bulk format identical across ES/OS |
-| S3Rally | OpenSearch | `RallyS3ToEs` — bulk format identical across ES/OS |
-| Elasticsearch | OpenSearch | `EsHitToBulk` — search hit → bulk action pairs |
-| OpenSearch | Elasticsearch | `EsHitToBulk` — reverse migration |
-| OpenSearch | OpenSearch | `EsHitToBulk` — cluster-to-cluster reindex |
-| Elasticsearch | Elasticsearch | `EsHitToBulk` — same-engine reindex |
-| File | File | `Passthrough` — returns entire page as `Cow::Borrowed` |
-| S3Rally | File | `Passthrough` — download data as-is |
+| File | Elasticsearch | `RallyS3ToEs` |
+| S3Rally | Elasticsearch | `RallyS3ToEs` |
+| File | OpenSearch | `RallyS3ToEs` |
+| S3Rally | OpenSearch | `RallyS3ToEs` |
+| Elasticsearch | OpenSearch | `EsHitToBulk` |
+| OpenSearch | Elasticsearch | `EsHitToBulk` |
+| OpenSearch | OpenSearch | `EsHitToBulk` |
+| Elasticsearch | Elasticsearch | `EsHitToBulk` |
+| File | File | `Passthrough` |
+| S3Rally | File | `Passthrough` |
 | Elasticsearch | File | `Passthrough` |
-| OpenSearch | File | `Passthrough` — raw hit dump |
+| OpenSearch | File | `Passthrough` |
 | InMemory | InMemory | `Passthrough` |
-| other | other | `panic!` at resolve time |
 
 ### Composer Resolution (from SinkConfig)
 | SinkConfig | Composer | Wire Format |
@@ -131,172 +131,99 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig, Controller
 | File | `NdjsonComposer` | `item\nitem\n` |
 | InMemory | `JsonArrayComposer` | `[item,item]` |
 
-### Controller Resolution (from `[controller]` config section)
+### Controller Resolution (from `[throttle.source]` → `controller` field)
 | Config type | Controller | Behavior |
 |---|---|---|
 | `static` (default) | `ConfigController` | Returns configured `max_batch_size_docs`, ignores measurements |
-| `pid_bytes_to_doc_count` | `PidBytesToDocCount` | PID feedback: measures response bytes → adjusts doc count output |
+| `pid_bytes_to_doc_count` | `PidBytesToDocCount` | PID feedback: measures response bytes → adjusts doc count |
 
-### ThrottleController Resolution (from ThrottleConfig in CommonSinkConfig)
-| ThrottleConfig | Controller | Behavior |
+### ThrottleController Resolution (from `[throttle.sink]` → `mode` field)
+| ThrottleConfig mode | Controller | Behavior |
 |---|---|---|
 | `Static` (default) | `StaticThrottleController` | Fixed bytes, no feedback loop |
-| `Pid { set_point_ms, min, max, initial }` | `PidControllerBytesToMs` | PID feedback: measure(ms) → adjust byte output |
+| `Pid` | `PidControllerBytesToMs` | PID feedback: measure(ms) → adjust byte output (LICENSE-EE/BSL) |
 
 ## Responsibility Boundaries
-
 | Component | Responsibility |
 |---|---|
-| Controller | Adaptive batch sizing: `output()` → doc count hint, `measure()` ← response bytes |
-| Source | Read raw page, return `Option<String>`. Accepts `set_page_size_hint()`. Format-ignorant. |
-| Channel | Carry `String` (raw pages) between workers |
-| SinkWorker | Buffer pages by dynamic byte size from ThrottleController, flush via Composer, measure send duration |
-| ThrottleController | Decide dynamic max request size. Static: fixed. PID: adaptive via latency feedback. |
+| Source | `pump(hint)` → raw page. Format-ignorant. None = EOF. |
+| SourceWorker | Owns `ControllerBackend`. Calls `output()` → `pump(hint)` → `measure()`. |
+| Channel | Carry `String` (raw pages) |
+| SinkWorker | Buffer raw pages by byte target, flush via Composer, call `drain()`, measure duration |
+| ThrottleControllerBackend | Dynamic max request size. Static: fixed. PID: latency feedback. |
 | Composer | Transform pages (via Transformer) + assemble wire-format payload |
-| Transform | Per-page → `Vec<Cow<str>>` items (Borrowed=passthrough, Owned=conversion) |
-| Sink | Pure I/O: HTTP POST, file write, memory push |
+| Transform | Per-page → `Vec<Cow<str>>` (Borrowed=passthrough, Owned=conversion) |
+| Sink | Pure I/O: `drain(payload)` → HTTP POST / file write / memory push |
+| CancellationToken | Graceful shutdown signal. Workers select! on it at every loop. |
 
 ## Public API (for kvx-cli)
-
-Config types exposed via `pub mod backends` + `pub mod transforms`:
-- `kvx::backends::{FileSourceConfig, FileSinkConfig, ElasticsearchSourceConfig, ElasticsearchSinkConfig, S3RallySourceConfig, RallyTrack, CommonSourceConfig, CommonSinkConfig}`
+- `kvx::app_config::{AppConfig, RuntimeConfig, SourceConfig, SinkConfig, ThrottleAppConfig, SourceThrottleConfig, SinkThrottleConfig}`
 - `kvx::transforms::{FlowDescriptor, supported_flows()}`
-- `kvx::app_config::{AppConfig, RuntimeConfig, SourceConfig, SinkConfig}`
-
-Backend impls (`Source`, `Sink`, `SourceBackend`, `SinkBackend`) remain `pub(crate)`.
-
-`RallyTrack` implements `FromStr` for CLI arg parsing (mirrors `as_str()` in reverse).
+- `kvx::backends::{FileSourceConfig, FileSinkConfig, ElasticsearchSourceConfig, ElasticsearchSinkConfig, S3RallySourceConfig, RallyTrack}`
+- `kvx::stop()` — triggers `CancellationToken` for graceful shutdown
 
 # Notes for future reference
 
 - POC/MVP stage — API surface is unstable
 - `Hit`/`HitBatch` in `common.rs` are now dead code — pipeline uses raw pages throughout
-- Rally S3 transform splits page by `\n`, transforms each doc individually, strips 6 top-level metadata fields; nested refs survive
-- ES bulk action line includes `_id` only; `_index`/`routing` set by sink URL
-- Passthrough doesn't validate or split — returns entire page as one `Cow::Borrowed` item
-- `escape_json_string()` avoids serde round-trip for action line construction (duplicated in rally_s3_to_es and es_hit_to_bulk)
-- **EsHitToBulk transform**: converts `{"_id":"abc","_index":"idx","_source":{...}}` → `{"index":{"_id":"abc"}}\n{...}`. Preserves `_id` for routing, strips `_index`/`_type`.
-- **OpenSearch source**: PIT + `search_after` pagination (same as ES source). Output: NDJSON lines with `_id`, `_index`, `_source` per hit.
-- **OpenSearch sink**: POST to `/_bulk` with NDJSON. Optional `danger_accept_invalid_certs` for dev clusters. SigV4 stubbed for future story.
-- **ES source**: stub replaced with real PIT + `search_after` implementation (mirrors OpenSearch source)
-- `channel_data.rs` still empty — to be removed
-- ES sink no longer buffers — SinkWorker handles all buffering via byte-size threshold + epsilon
-- `BUFFER_EPSILON_BYTES` = 64 KiB headroom to avoid exceeding max request size after transformation
-- Backend code split: each backend type has its own `{type}_source.rs` / `{type}_sink.rs`
-- Core Source/Sink traits in `backends/source.rs` and `backends/sink.rs`
-- Transforms and composers are Clone+Copy (zero-sized structs) — each SinkWorker gets its own copy
-- `SinkConfig::max_request_size_bytes()` helper is now on `SinkConfig` in `app_config.rs`
-- `SinkConfig::throttle_config()` returns `&ThrottleConfig` from embedded `CommonSinkConfig.throttle`
-- `ThrottleConfig` lives in `common_config.rs` (alongside `CommonSinkConfig`) — serde-tagged enum (`mode = "Static"` or `mode = "Pid"`)
-- PID controller gains auto-tune from ratio of initial output to set point: K_p = max/min, K_i = K_p/10, K_d = sqrt(K_p*K_i)
-- EMA alpha = 0.25, anti-windup bounds = ±5× set point, output clamped to [min_bytes, max_bytes]
-- EMA initialized to set_point (not zero) to prevent cold-start transient overcorrection
+- `controllers/` module **renamed** to `throttlers/` in Phase 1 — `ThrottleConfig` moved to `throttlers.rs`
+- `supervisors/workers/` **flattened** to `workers/` in Phase 3
+- `AppConfig` fields renamed: `source_config` → `source`, `sink_config` → `sink` (Phase 4)
+- `app_config.rs` **split** into module dir in Phase 5: `app_config/source_config.rs` + `app_config/sink_config.rs`
+- Factory functions moved to enum methods: `build_backend()` on `SourceConfig`/`SinkConfig` (Phase 5)
+- `ThrottleControllerBackend` gained `Clone` + `from_config()` in Phase 5
+- `CancellationToken` (tokio-util) added Phase 6 — workers use `tokio::select!` — `kvx::stop()` is public API
+- `BUFFER_EPSILON_BYTES` = 64 KiB headroom before max request size
+- PID (batch sizing): Kp = max/min, Ki = Kp/50, Kd = sqrt(Kp×Ki), EMA α=0.25 (measure) / α=0.75 (adj)
+- PID (throttle): gains auto-tuned from ratio initial→set_point, EMA α=0.25, anti-windup ±5×set_point
 - Each SinkWorker owns its ThrottleControllerBackend exclusively — no shared mutable state, no Mutex
-- **Config ownership**: `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs` (re-exported from `backends`)
-- `supervisors/config.rs` — **deleted**. No backwards-compat shim remains. All callers updated.
+- `escape_json_string()` avoids serde round-trip for action line construction (in rally_s3_to_es + es_hit_to_bulk)
+- ES/OS source: PIT + `search_after` pagination; output NDJSON with `_id`, `_index`, `_source` per hit
+- OpenSearch sink: `danger_accept_invalid_certs` for dev clusters; SigV4 stubbed
 
 # Aggregated Context Memory Across Sessions for Current and Future Use
 
-- Initial scaffold: empty `lib.rs`
-- v1 transforms: IngestTransform/EgressTransform + Hit intermediate — **superseded**
-- v2 transforms: direct pair functions + dead traits — **superseded**
-- v3 transforms: mirrors backends pattern. `Transform` trait → concrete struct impls → `DocumentTransformer` enum dispatch → `from_configs()` resolver
-- v4 pipeline refactor: Sources return `Vec<String>`, Sinks are I/O-only (`send(payload)`), SinkWorker does transform + binary collect. Hit/HitBatch phased out of pipeline.
-- v5 collectors: Extracted payload assembly into `PayloadCollector` trait + `NdjsonCollector`/`JsonArrayCollector` — **superseded by v10 composers**
-- v6-v9 backend file splits: separated backend implementations into dedicated files with re-export shims
-- v10 raw pages + composers (current): Source returns `Option<String>` (raw page), Transform returns `Vec<Cow<str>>` (zero-copy), Composer replaces Collector (transform+assemble in one shot), SinkWorker buffers by byte size. 31 tests passing.
-- v11 config migration (complete): `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs`; `supervisors/config.rs` deleted; all callers updated. 31 tests passing.
-- v12 S3 Rally source: `S3RallySource` streams Rally benchmark track data from S3. `RallyTrack` enum validates track names. Config: track, bucket, region, optional key override, CommonSourceConfig. Transport: `GetObject` → `ByteStream::into_async_read()` → `BufReader` → `read_line()` (same loop as FileSource). Transform routing: S3Rally→File = Passthrough, S3Rally→ES = RallyS3ToEs. 44 tests passing.
-- v13 public API + FlowDescriptor: `backends` and `transforms` modules made `pub`. Config struct re-exports changed from `pub(crate)` to `pub`. `FlowDescriptor` + `supported_flows()` added to transforms.rs as CLI source of truth. `RallyTrack` gained `FromStr` impl. Drift-detection test ensures `supported_flows()` ↔ `from_configs()` sync. 45 tests passing.
-- v14 PID controller (batch sizing): Adaptive batch sizing via `Controller` trait. Two impls: `ConfigController` (static, default) and `PidBytesToDocCount` (PID feedback loop ported from C#). `Source` trait gains `set_page_size_hint()`. `SourceWorker` owns `ControllerBackend`, runs feedback loop: `output()` → `set_page_size_hint()` → `next_page()` → `measure()`. `ControllerConfig` in `AppConfig` (`[controller]` TOML section). PID gains auto-calculated. EMA smoothing on measurements (α=0.25) and adjustments (α=0.75). Anti-windup clamping. 66 tests passing.
-- v15 PID controller throttling: Adaptive throttling system for SinkWorker. `ThrottleController` trait → `StaticThrottleController` (fixed bytes) + `PidControllerBytesToMs` (PID feedback loop, LICENSE-EE/BSL). Config-driven via `ThrottleConfig` enum in `CommonSinkConfig`. SinkWorker measures `sink.send()` duration → feeds to controller → reads dynamic output for next cycle. PID gains auto-tuned from ratio of initial output to set point. EMA smoothing (α=0.25), anti-windup (±5×set_point), output clamping. 55 tests passing.
-- v16 OpenSearch backend + ES source (current): OpenSearch sink/source (PIT + search_after), `EsHitToBulk` transform, ES source stub replaced with real PIT + search_after. Migration paths: File/S3Rally→OS, ES→OS, OS→ES, OS→OS, ES→ES. 69 tests passing.
+- v1-v9: See prior README revisions (transforms, collectors, backend file splits, etc.)
+- v10 raw pages + composers: Source → `Option<String>`, Transform → `Vec<Cow<str>>`, Composer replaces Collector
+- v11 config migration: `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `supervisors/config.rs` deleted
+- v12 S3 Rally source: `S3RallySource` streams Rally benchmark data from S3 via AWS SDK
+- v13 public API + FlowDescriptor: `supported_flows()`, `RallyTrack::from_str()`, drift-detection test
+- v14 PID controller (batch sizing): `Controller` trait, `PidBytesToDocCount`, `set_page_size_hint()` on Source
+- v15 PID controller throttling: `ThrottleController` trait, `PidControllerBytesToMs`, `ThrottleConfig` in `ThrottleAppConfig`
+- v16 OpenSearch backend + ES source: real PIT + search_after, `EsHitToBulk` transform, 69 tests
+- v17 six-phase refactor (current — 101 kvx tests, 9 kvx-cli tests = 110 total):
+  - Phase 1: `controllers/` → `throttlers/`; `ThrottleConfig` moved to `throttlers.rs`
+  - Phase 2: `sink.send()` → `sink.drain()`; `source.next_page()` → `source.pump(doc_count_hint)`; `set_page_size_hint()` eliminated
+  - Phase 3: `supervisors/workers/` → `workers/` (top-level flat)
+  - Phase 4: `ThrottleAppConfig` with `[throttle.source]` + `[throttle.sink]`; `source_config`/`sink_config` → `source`/`sink` in `AppConfig`
+  - Phase 5: `ThrottleControllerBackend` gains `Clone` + `from_config()`; `app_config.rs` split to module dir; `build_backend()` factory on config enums
+  - Phase 6: `CancellationToken` (tokio-util) added; workers use `tokio::select!`; `kvx::stop()` public API
 
-## S3 Rally Source Configuration Example
+## Current TOML Config Schema (v17)
 ```toml
-[source_config.S3Rally]
-track = "geonames"
-bucket = "my-rally-data"
-region = "us-east-1"
-# key = "custom/path/documents.json"  # optional override, defaults to {track}/documents.json
-
-[sink_config.File]
-file_name = "output.json"
-
 [runtime]
 queue_capacity = 8
-sink_parallelism = 1
-```
+sink_parallelism = 8
 
-## OpenSearch Configuration Examples
-```toml
-# ES → OpenSearch migration
-[source_config.Elasticsearch]
-url = "http://old-cluster:9200"
-index = "legacy-data"
-# username = "elastic"
-# password = "changeme"
+[source.File]
+file_name = "input.json"
 
-[sink_config.OpenSearch]
-url = "https://new-cluster:9200"
-index = "migrated-data"
-danger_accept_invalid_certs = true
-# username = "admin"
-# password = "admin"
-
-[runtime]
-queue_capacity = 8
-sink_parallelism = 2
-```
-
-```toml
-# File → OpenSearch ingestion
-[source_config.File]
-file_name = "rally_export.json"
-
-[sink_config.OpenSearch]
-url = "https://localhost:9200"
-index = "benchmark"
-danger_accept_invalid_certs = true
-
-[runtime]
-queue_capacity = 8
-sink_parallelism = 1
-```
-
-## PID Throttle Configuration Example
-```toml
-[sink_config.Elasticsearch]
-url = "https://my-cluster:9200"
+[sink.Elasticsearch]
+url = "http://localhost:9200"
 index = "target-index"
-api_key = "base64key"
-max_request_size_bytes = 10485760  # 10MB initial (used if throttle is Static)
 
-[sink_config.Elasticsearch.throttle]
-mode = "Pid"
-set_point_ms = 8000       # target 8s per bulk request
-min_bytes = 1048576        # 1MB floor
-max_bytes = 104857600      # 100MB ceiling
-initial_output_bytes = 10485760  # 10MB starting guess
+[throttle.source]
+max_batch_size_bytes = 131072
+max_batch_size_docs = 10000
+
+[throttle.sink]
+max_request_size_bytes = 131072
+# mode = "Pid"
+# set_point_ms = 8000
+# min_bytes = 1048576
+# max_bytes = 104857600
+# initial_output_bytes = 10485760
 ```
 
-### Available Rally Tracks
+## Available Rally Tracks
 big5, clickbench, eventdata, geonames, geopoint, geopointshape, geoshape, http_logs, nested, neural_search, noaa, noaa_semantic_search, nyc_taxis, percolator, pmc, so, treccovid_semantic_search, vectorsearch
-
-## Controller Configuration Example
-```toml
-# Static (default — preserves existing behavior, no PID):
-[controller]
-type = "static"
-
-# PID bytes-to-doc-count (adaptive batch sizing):
-[controller]
-type = "pid_bytes_to_doc_count"
-desired_response_size_bytes = 5242880.0  # 5MB target response size
-initial_doc_count = 1000                  # starting guess
-min_doc_count = 10                        # floor
-max_doc_count = 50000                     # ceiling
-```
-
-## PID Controller Theory
-Set-point = desired response bytes. Measured = actual response bytes (EMA-smoothed, α=0.25). Error = desired - measured. PID gains auto-calculated: Kp = max(max_docs, desired)/min(max_docs, desired), Ki = Kp/50, Kd = sqrt(Kp×Ki). Adjustment = (P+I+D)/avg_response_size, clamped to [-100,+100]. Output = EMA(current + adj, α=0.75), clamped to [min,max].

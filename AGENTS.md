@@ -130,6 +130,7 @@ User is obssessed with doing things the now "old school way" of by hand, with cr
   - Informative non-humor comments must be either:
     - You must embed knowledge graph information and details into comments.
     - You must embed tribal knowledge into comments. It must explain a combination of rationale, reasoning, deduction, logic, and thinking process.
+    - You must remove any mentions to removed or dead code. Do not keep a history of the code in the comments. Do not mention things which are only from the current conversation context. EX: This used to be XYzClass, but now it's MyCurrentNameStruct. Nobody cares, we have git. All comments must be kept to reference the code as it is, not ever as it was.
 
 ## Commit Message Policy
   - Every commit message must contain at least one of:

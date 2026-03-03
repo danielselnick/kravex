@@ -31,6 +31,10 @@ serde_json = "1.0"
 # 🧵👑 the async overlord. kneel before thy runtime, peasant threads.
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util"]}
 
+# 🛑 tokio-util — CancellationToken, because graceful shutdown
+# is what separates us from `kill -9`. Barely. 🦆
+tokio-util = "0.7"
+
 # 🍞 like breadcrumbs but for electrons
 tracing = "0.1"
 

@@ -1,0 +1,14 @@
+
+- Move from_sink_config, from_source_config out of lib.rs, maybe into app_config.rs if possible.
+- have app_config.rs refactored, into an /app_config/ folder which contains sink_config.rs, source_config.rs, and their related enums, structs, fn. app_config will operate at a higher level, using both source_config and sink_config to do the needfullly awesome
+- actually implement stop() in lib.rs
+- extract throttle controller creation out of lib.rs, and into controllers module
+  - utilize .clone() instead of a loop for having multiple instances of throttle controllers
+- move /supervisors/workers up one level to /workers
+- remover /supervisors/ folder, and only have supervisors.rs
+- in source.rs, move _doc_count from set_page_size_hint into next_page() as an arg, we don't need to have a separate method and variable, have it be an arg (stateless)
+- rename sink.send to sink.drain; drain the sink empty 
+- rename source.next_page to source.pump; pump it into the channel!
+- move throttle config out of /backends, so in toml it's [sink_config.throttle], [source_config.throttle], same with the cli args, so it's more flattened out. the concrete type (elasticsearch, file, etc) is only specific to that type (like url)
+- move ThrottleConfig out of /backends module, it needs to go into controllers module
+- rename controllers module to throttlers module, it's more descriptive of it's intent, to throttle this ish

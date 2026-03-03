@@ -56,6 +56,119 @@ pub(crate) mod pid_bytes_to_doc_count;
 pub(crate) mod pid_bytes_to_ms;
 pub(crate) mod static_throttle;
 
+// ============================================================
+//  🔧 ThrottleAppConfig — top-level [throttle] section in TOML
+//  Centralized throttle config — one place for batch/request sizing. 🏠
+// ============================================================
+
+/// 🔧 Top-level throttle configuration — the `[throttle]` section in TOML.
+///
+/// 🧠 Knowledge graph:
+/// - `source`: batch sizing for source workers (max_batch_size_docs, max_batch_size_bytes, controller)
+/// - `sink`: request sizing for sink workers (max_request_size_bytes, throttle mode)
+/// - Centralized here — backends are pure connection config. 🔌
+///
+/// ```toml
+/// [throttle.source]
+/// max_batch_size_docs = 10000
+/// max_batch_size_bytes = 10485760
+///
+/// [throttle.sink]
+/// max_request_size_bytes = 10485760
+/// ```
+///
+/// "He who scatters config across backends, debugs across lifetimes." — Ancient proverb 🦆
+#[derive(Debug, Deserialize, Clone)]
+pub struct ThrottleAppConfig {
+    /// 🚰 Source-side throttle knobs — batch sizing and controller config
+    #[serde(default)]
+    pub source: SourceThrottleConfig,
+    /// 🚰 Sink-side throttle knobs — request sizing and throttle mode
+    #[serde(default)]
+    pub sink: SinkThrottleConfig,
+}
+
+impl Default for ThrottleAppConfig {
+    fn default() -> Self {
+        Self {
+            source: SourceThrottleConfig::default(),
+            sink: SinkThrottleConfig::default(),
+        }
+    }
+}
+
+/// 🚰 Source-side throttle config — controls batch sizing for `pump()`.
+///
+/// 🧠 Knowledge graph:
+/// - `max_batch_size_docs`: doc-count ceiling per page (used by controller as default, by File/S3Rally directly)
+/// - `max_batch_size_bytes`: byte-size ceiling per page (File/S3Rally read capacity)
+/// - `controller`: adaptive batch sizing (Static = fixed, PidBytesToDocCount = feedback-driven)
+///
+/// Centralized here — backends are pure connection config. The backends are free. Like interns on their last day. 🎓
+#[derive(Debug, Deserialize, Clone)]
+pub struct SourceThrottleConfig {
+    /// 📦 Max docs per batch page — the doc-count speed limiter
+    #[serde(default = "default_max_batch_size_docs")]
+    pub max_batch_size_docs: usize,
+    /// 📦 Max bytes per batch page — the byte-size speed limiter
+    #[serde(default = "default_max_batch_size_bytes")]
+    pub max_batch_size_bytes: usize,
+    /// 🎛️ Controller config — Static (default) or PidBytesToDocCount (adaptive)
+    #[serde(default)]
+    pub controller: ControllerConfig,
+}
+
+impl Default for SourceThrottleConfig {
+    fn default() -> Self {
+        Self {
+            max_batch_size_docs: 1000,
+            max_batch_size_bytes: 1024 * 1024,
+            controller: ControllerConfig::default(),
+        }
+    }
+}
+
+// 📦 10,000 docs per batch — the serde default, generous for TOML configs
+fn default_max_batch_size_docs() -> usize {
+    10000
+}
+
+// 📦 10MB — the serde default byte ceiling for source pages
+fn default_max_batch_size_bytes() -> usize {
+    10485760
+}
+
+/// 🚰 Sink-side throttle config — controls request sizing for `drain()`.
+///
+/// 🧠 Knowledge graph:
+/// - `max_request_size_bytes`: flush threshold for the SinkWorker buffer
+/// - `mode`: Static (fixed bytes) or Pid (adaptive latency-driven)
+///
+/// Centralized here — sinks are pure I/O config. As they always should have been. 🦆
+#[derive(Debug, Deserialize, Clone)]
+pub struct SinkThrottleConfig {
+    /// 🚰 Max payload bytes per sink request — the flush trigger
+    #[serde(default = "default_max_request_size_bytes")]
+    pub max_request_size_bytes: usize,
+    /// 🧠 Throttle strategy — Static (fixed bytes) or Pid (adaptive). Default: Static.
+    #[serde(default)]
+    pub mode: ThrottleConfig,
+}
+
+impl Default for SinkThrottleConfig {
+    fn default() -> Self {
+        Self {
+            max_request_size_bytes: 64 * 1024 * 1024,
+            mode: ThrottleConfig::default(),
+        }
+    }
+}
+
+// 🚰 10MB sink request size serde default — the conservative option for TOML configs
+fn default_max_request_size_bytes() -> usize {
+    10485760
+}
+
 pub(crate) use pid_bytes_to_ms::PidControllerBytesToMs;
 pub(crate) use static_throttle::StaticThrottleController;
 
@@ -75,7 +188,6 @@ pub(crate) use static_throttle::StaticThrottleController;
 /// The controller adjusts future doc count outputs based on past byte measurements.
 /// For `ConfigController`, this is "set cruise control to 65 and never touch it."
 /// For `PidBytesToDocCount`, this is "the PID algorithm from a 1922 paper,
-/// reinvented by a C# developer, ported to Rust, running at 3am." 🔧
 ///
 /// # Contract 📜
 /// - `output()` returns the current batch size recommendation (doc count)
@@ -83,8 +195,8 @@ pub(crate) use static_throttle::StaticThrottleController;
 /// - Implementations must handle repeated calls gracefully
 /// - Output must always be > 0 (you can't fetch negative documents, despite what the borrow checker implies)
 ///
-/// 🧠 Knowledge graph: SourceWorker calls output() → source.set_page_size_hint() →
-/// source.next_page() → measure(page.len()) — the eternal feedback loop.
+/// 🧠 Knowledge graph: SourceWorker calls output() → source.pump(hint) →
+/// measure(page.len()) — the eternal feedback loop. Hint + fetch in one call.
 /// "He who measures not, optimizes in vain." — Ancient PID proverb 📜
 pub(crate) trait Controller: std::fmt::Debug {
     /// 🎯 Get the current output value — the recommended batch size in doc count.
@@ -140,7 +252,6 @@ pub enum ControllerConfig {
     #[default]
     Static,
     /// 🎛️ PID controller that measures response bytes and outputs doc count.
-    /// Ported from C# with love, sweat, and approximately 47 unit tests.
     PidBytesToDocCount {
         /// 🎯 The desired response size in bytes — the "72°F" of our thermostat.
         /// The PID will chase this like a golden retriever chasing a tennis ball.
@@ -253,6 +364,95 @@ impl ControllerBackend {
 }
 
 // ============================================================
+//  🧠 ThrottleConfig — adaptive throttling strategy selection
+//  Moved from backends/common_config.rs — belongs with the controllers that consume it.
+//  "He who colocates config with its consumer, avoids import spaghetti." 🍝
+// ============================================================
+
+/// 🧠 Throttle configuration — choose your fighter.
+///
+/// Controls how the SinkWorker decides the max request size for each bulk request.
+/// Either a fixed static value (the OG), or a PID controller that adapts based on
+/// measured request latency (the secret sauce, licensed under LICENSE-EE). 🔒
+///
+/// 🧠 Knowledge graph:
+/// - Resolved in `lib.rs` into a `ThrottleControllerBackend` which is passed to SinkWorker.
+/// - When `Static`: uses `SinkThrottleConfig.max_request_size_bytes` as the fixed output.
+/// - When `Pid`: builds a `PidControllerBytesToMs` with the configured gains and bounds.
+/// - Default: `Static` (backwards compatible — existing configs don't break). 🦆
+///
+/// ```toml
+/// [sink_config.Elasticsearch.throttle]
+/// mode = "Pid"
+/// set_point_ms = 8000
+/// min_bytes = 1048576
+/// max_bytes = 104857600
+/// initial_output_bytes = 10485760
+/// ```
+///
+/// "He who chooses Static, sleeps peacefully. He who chooses Pid, sleeps never." — Ancient proverb
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "mode", deny_unknown_fields)]
+pub enum ThrottleConfig {
+    /// 🧊 Fixed byte size. No feedback. Like a rock. Reliable, but not dynamic.
+    Static,
+    /// 🧠 PID control: adapts byte output based on measured latency.
+    /// Licensed under LICENSE-EE (BSL 1.1). The Krabby Patty formula. 🔒
+    Pid {
+        /// 🎯 Target request duration in milliseconds — the thermostat setting.
+        /// For Elasticsearch bulk, 8000ms is a reasonable starting point.
+        #[serde(default = "default_pid_set_point_ms")]
+        set_point_ms: f64,
+        /// 📏 Minimum output in bytes — the floor. Even during a 429 storm,
+        /// we won't shrink below this. "A controller needs standards." 🎯
+        #[serde(default = "default_pid_min_bytes")]
+        min_bytes: usize,
+        /// 📏 Maximum output in bytes — the ceiling. Even with a blazing fast server,
+        /// we won't go bigger than this. "Hubris has limits." ⚠️
+        #[serde(default = "default_pid_max_bytes")]
+        max_bytes: usize,
+        /// 📦 Initial byte size guess before any measurements arrive.
+        /// The PID loop adjusts from here. Your first order at the restaurant. 🍔
+        #[serde(default = "default_pid_initial_output_bytes")]
+        initial_output_bytes: usize,
+    },
+}
+
+impl Default for ThrottleConfig {
+    /// 🧊 Default is Static — backwards compatible, no surprises. Like comfort food. 🍕
+    fn default() -> Self {
+        ThrottleConfig::Static
+    }
+}
+
+impl ThrottleConfig {
+    /// 🧊 A static reference to the Static variant — for InMemory sinks that can't produce
+    /// a reference from a temporary. The eternal constant. The immovable object. 🪨
+    pub const STATIC_DEFAULT: ThrottleConfig = ThrottleConfig::Static;
+}
+
+// 🎯 8 seconds — the Goldilocks duration for Elasticsearch bulk requests.
+// Not too hot (overloading the cluster), not too cold (underutilizing bandwidth).
+fn default_pid_set_point_ms() -> f64 {
+    8000.0
+}
+
+// 📏 1MB floor — even if the server is choking, we send at least this much.
+fn default_pid_min_bytes() -> usize {
+    1_048_576
+}
+
+// 📏 100MB ceiling — the theoretical max. Elasticsearch says "up to 100MB" in the docs.
+fn default_pid_max_bytes() -> usize {
+    104_857_600
+}
+
+// 📦 10MB starting guess — same as the default max_request_size_bytes serde default.
+fn default_pid_initial_output_bytes() -> usize {
+    10_485_760
+}
+
+// ============================================================
 //  📡 ThrottleController — sink-side trait
 //  🏗️ measure(ms) ──▶ ThrottleController ──▶ output(bytes)
 //  "What's the DEAL with latency? You measure it, and then it changes."
@@ -302,7 +502,7 @@ pub(crate) trait ThrottleController: std::fmt::Debug + Send {
 /// Parallel structure to `ControllerBackend` but for an entirely different concern:
 /// - `ControllerBackend` → source side → doc count adaptation
 /// - `ThrottleControllerBackend` → sink side → byte size adaptation
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum ThrottleControllerBackend {
     /// 🧊 Fixed byte size. No feedback loop. The classic.
     Static(StaticThrottleController),
@@ -349,6 +549,24 @@ impl ThrottleControllerBackend {
             min_bytes,
             max_bytes,
         ))
+    }
+
+    /// 🔧 Build a ThrottleControllerBackend from SinkThrottleConfig.
+    ///
+    /// 🧠 Knowledge graph: replaces the manual match in lib.rs run().
+    /// Static → fixed bytes (the OG). Pid → PidControllerBytesToMs (the secret sauce). 🔒
+    /// Now you can `from_config()` once and `.clone()` for N sink workers.
+    /// "He who clones controllers, spawns workers without drama." — Ancient Rust proverb 🦆
+    pub(crate) fn from_config(config: &SinkThrottleConfig) -> Self {
+        match &config.mode {
+            ThrottleConfig::Static => Self::new_static(config.max_request_size_bytes),
+            ThrottleConfig::Pid {
+                set_point_ms,
+                min_bytes,
+                max_bytes,
+                initial_output_bytes,
+            } => Self::new_pid(*set_point_ms, *initial_output_bytes, *min_bytes, *max_bytes),
+        }
     }
 }
 
