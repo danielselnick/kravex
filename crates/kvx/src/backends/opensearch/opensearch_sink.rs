@@ -243,43 +243,42 @@ impl OpenSearchSink {
 
         // 📡 Parse the bulk response body to detect item-level errors.
         // OpenSearch uses the same response format as ES: {"took", "errors", "items"}
-        if let Ok(bulk_response) = serde_json::from_str::<serde_json::Value>(&body) {
-            if bulk_response
+        if let Ok(bulk_response) = serde_json::from_str::<serde_json::Value>(&body)
+            && bulk_response
                 .get("errors")
                 .and_then(|e| e.as_bool())
                 .unwrap_or(false)
-            {
-                let the_item_level_carnage = bulk_response
-                    .get("items")
-                    .and_then(|items| items.as_array())
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter(|item| {
-                                item.as_object()
-                                    .and_then(|obj| obj.values().next())
-                                    .and_then(|action| action.get("status"))
-                                    .and_then(|s| s.as_u64())
-                                    .map(|s| s >= 400)
-                                    .unwrap_or(false)
-                            })
-                            .count()
-                    })
-                    .unwrap_or(0);
+        {
+            let the_item_level_carnage = bulk_response
+                .get("items")
+                .and_then(|items| items.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter(|item| {
+                            item.as_object()
+                                .and_then(|obj| obj.values().next())
+                                .and_then(|action| action.get("status"))
+                                .and_then(|s| s.as_u64())
+                                .map(|s| s >= 400)
+                                .unwrap_or(false)
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
 
-                let the_total_items = bulk_response
-                    .get("items")
-                    .and_then(|items| items.as_array())
-                    .map(|items| items.len())
-                    .unwrap_or(0);
+            let the_total_items = bulk_response
+                .get("items")
+                .and_then(|items| items.as_array())
+                .map(|items| items.len())
+                .unwrap_or(0);
 
-                anyhow::bail!(
-                    "💀 OpenSearch bulk response: HTTP 200 but {}/{} items failed. \
-                     Partial success is the silent killer of data migrations. We now detect it.",
-                    the_item_level_carnage,
-                    the_total_items
-                );
-            }
+            anyhow::bail!(
+                "💀 OpenSearch bulk response: HTTP 200 but {}/{} items failed. \
+                 Partial success is the silent killer of data migrations. We now detect it.",
+                the_item_level_carnage,
+                the_total_items
+            );
         }
 
         trace!(
