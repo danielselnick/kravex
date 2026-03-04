@@ -25,6 +25,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -52,7 +53,7 @@ from shared.kvx_utils import (  # noqa: E402
 #  📦 Configuration Constants
 # ============================================================================
 
-CONFIGS_DIR = BENCHMARK_DIR / "configs"
+CONFIGS_DIR = BENCHMARK_DIR / "configs" / "local"
 DATA_DIR = BENCHMARK_DIR / "data"
 RESULTS_DIR = BENCHMARK_DIR / "results"
 ESRALLY_TRACKS_DIR = BENCHMARK_DIR / "esrally_tracks"
@@ -155,11 +156,17 @@ def check_all_clusters(es_url: str, os_url: str, filter_engine: str = None):
 
 
 def check_data_files(filter_dataset: str = None):
-    """Verify NDJSON data files exist for all configured datasets."""
+    """
+    Verify NDJSON data files exist for datasets that need them.
+    Geonames is skipped — it uses esrally-seeded ES index, not a file.
+    """
     log_section("Data File Verification")
 
+    # -- 🎯 Geonames uses esrally→ES→OS migration flow, no NDJSON file needed
+    datasets_needing_files = {k: v for k, v in DATASETS.items() if k != "geonames"}
+
     all_present = True
-    for dataset in DATASETS:
+    for dataset in datasets_needing_files:
         if filter_dataset and dataset != filter_dataset:
             continue
         ndjson_path = DATA_DIR / f"{dataset}.json"
@@ -168,6 +175,9 @@ def check_data_files(filter_dataset: str = None):
         else:
             log_error(f"Missing data file: {ndjson_path} — run: python benchmark/scripts/setup.py")
             all_present = False
+
+    if filter_dataset == "geonames":
+        log_info("Geonames uses esrally-seeded ES index — no NDJSON file needed ✅")
 
     if not all_present:
         log_error("Some data files are missing. Run: python benchmark/scripts/setup.py")
@@ -205,19 +215,54 @@ def run_tool_with_metrics(
 
     start_time = time.monotonic()
 
-    # -- 🚀 Launch the process
+    # -- 🚀 Launch the process (cwd=REPO_ROOT so relative TOML paths resolve correctly)
+    # 🧠 RUST_LOG must be set or tracing_subscriber's EnvFilter::from_default_env()
+    # defaults to ERROR-only — silencing all info!/warn! output. Ghost process vibes.
+    env = os.environ.copy()
+    env.setdefault("RUST_LOG", "info")
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        cwd=REPO_ROOT,
+        env=env,
     )
 
     # -- 🧵 Start metrics sampling
     sampler = MetricsSampler(proc.pid, interval=0.5)
     sampler.start()
 
-    # -- ⏳ Wait. Could be seconds. Could be hours. noaa is not joking around.
-    stdout_data, _ = proc.communicate()
+    # -- 🧵 Background thread drains stdout to prevent pipe buffer deadlock.
+    # Without this, kravex blocks on write() once the OS pipe buffer fills (~64KB on macOS).
+    # The child process goes to sleep. Docker shows 0% CPU. You stare into the void. The void stares back.
+    stdout_lines = []
+
+    def _drain_stdout():
+        for line in iter(proc.stdout.readline, b""):
+            decoded = line.decode("utf-8", errors="replace").rstrip()
+            stdout_lines.append(decoded)
+            print(f"  {decoded}")
+        proc.stdout.close()
+
+    reader_thread = threading.Thread(target=_drain_stdout, daemon=True)
+    reader_thread.start()
+
+    # -- ⏳ Poll doc count while the process runs — live progress instead of staring
+    # into the void. Like watching a loading bar, but with numbers that mean something.
+    POLL_INTERVAL = 15  # seconds — same cadence as migration_loop.py
+    while proc.poll() is None:
+        time.sleep(POLL_INTERVAL)
+        if proc.poll() is not None:
+            break
+        elapsed = time.monotonic() - start_time
+        docs = get_doc_count(cluster_url, index_name)
+        if docs > 0:
+            rate = f"{docs / elapsed * 60:,.0f}" if elapsed > 0 else "∞"
+            log_info(f"{prefix}⏱️  {elapsed:.0f}s | {docs:,} docs | {rate} docs/min")
+
+    proc.wait()
+    reader_thread.join(timeout=5)
+    stdout_data = "\n".join(stdout_lines).encode("utf-8")
     exit_code = proc.returncode
 
     # -- 🧵 Stop sampler and get stats
@@ -287,7 +332,7 @@ def run_kravex(
     kvx_binary: Path,
 ):
     """Run kvx-cli with a TOML config. Resets the target index first."""
-    index_name = f"{dataset}_benchmark"
+    index_name = f"benchmark_{dataset}"
     reset_index(cluster_url, index_name)
 
     return run_tool_with_metrics(
@@ -367,7 +412,7 @@ def run_elasticdump(
         log_error(f"Input file not found: {input_file}")
         return None
 
-    index_name = f"{dataset}_benchmark"
+    index_name = f"benchmark_{dataset}"
     full_target = f"{target_url}/{index_name}"
 
     reset_index(target_url, index_name)
@@ -396,6 +441,18 @@ def run_elasticdump(
 #  🔄 Orchestration — the nested loop of destiny
 # ============================================================================
 
+def get_config_path(dataset: str, engine: str, throttle_mode: str) -> Path:
+    """
+    Build the correct config filename based on engine.
+    ES configs: {dataset}_{mode}.toml (e.g. geonames_static.toml)
+    OS configs: {dataset}_opensearch_{mode}.toml (e.g. geonames_opensearch_static.toml)
+    """
+    if engine == "opensearch":
+        return CONFIGS_DIR / f"{dataset}_opensearch_{throttle_mode}.toml"
+    else:
+        return CONFIGS_DIR / f"{dataset}_{throttle_mode}.toml"
+
+
 def run_dataset_engine(
     dataset: str,
     engine: str,
@@ -407,44 +464,113 @@ def run_dataset_engine(
     skip_elasticdump: bool,
 ):
     """
-    Run all 4 tools for a single dataset × engine pair.
+    Run all 3 tools for a single dataset × engine pair (file-based ingest).
+    Used for noaa/pmc. Geonames uses run_geonames_migration() instead.
     'Knock knock. Who's there? Nested loop. Nested loop wh— O(n²) has entered the chat.'
     """
     cluster_url = get_engine_url(engine, es_url, os_url)
 
     log_section(f"{dataset} × {engine} (expected: {expected_docs:,} docs)")
 
-    # -- 1. kravex-static
-    log_info("--- Tool 1/4: kravex-static ---")
-    static_config = CONFIGS_DIR / f"{dataset}_{engine}_static.toml"
+    # -- 1. kravex-static (file → engine ingest)
+    log_info("--- Tool 1/3: kravex-static ---")
+    static_config = get_config_path(dataset, engine, "static")
     if static_config.exists():
         run_kravex(static_config, "kravex-static", dataset, engine, expected_docs, cluster_url, kvx_binary)
     else:
         log_warn(f"Config not found: {static_config} — skipping static run")
 
-    # -- 2. kravex-pid
-    log_info("--- Tool 2/4: kravex-pid ---")
-    pid_config = CONFIGS_DIR / f"{dataset}_{engine}_pid.toml"
-    if pid_config.exists():
-        run_kravex(pid_config, "kravex-pid", dataset, engine, expected_docs, cluster_url, kvx_binary)
-    else:
-        log_warn(f"Config not found: {pid_config} — skipping pid run")
-
-    # -- 3. esrally
+    # -- 2. esrally
     if not skip_esrally:
-        log_info("--- Tool 3/4: esrally ---")
+        log_info("--- Tool 2/3: esrally ---")
         run_esrally(dataset, cluster_url, expected_docs, engine)
     else:
         log_warn(f"Skipping esrally for {dataset}/{engine} (--skip-esrally)")
 
-    # -- 4. elasticdump
+    # -- 3. elasticdump
     if not skip_elasticdump:
-        log_info("--- Tool 4/4: elasticdump ---")
+        log_info("--- Tool 3/3: elasticdump ---")
         run_elasticdump(dataset, cluster_url, expected_docs, engine)
     else:
         log_warn(f"Skipping elasticdump for {dataset}/{engine} (--skip-elasticdump)")
 
     log_info(f"Completed all tools for {dataset} × {engine} ✅")
+
+
+def run_geonames_migration(
+    expected_docs: int,
+    kvx_binary: Path,
+    es_url: str,
+    os_url: str,
+    skip_esrally: bool,
+    skip_elasticdump: bool,
+):
+    """
+    🔄 Geonames migration flow: esrally seeds ES, kravex migrates ES → OS.
+    This demonstrates kravex's actual migration capability — not file ingest.
+
+    The pitch: 'In a world where 11.4M docs must cross the search engine divide...
+    one tool dared to migrate them. Without config. Without babysitting.'
+    """
+    log_section(f"geonames — ES → OS migration (expected: {expected_docs:,} docs)")
+
+    # -- 🎯 Step 1: Check if ES already has geonames data (idempotent seeding)
+    es_doc_count = get_doc_count(es_url, "geonames")
+
+    if es_doc_count >= expected_docs:
+        log_info(
+            f"ES 'geonames' index already has {es_doc_count:,} docs "
+            f"(expected: {expected_docs:,}) — skipping esrally seed ✅"
+        )
+    elif not skip_esrally:
+        log_info("--- Step 1: Seed ES via esrally ---")
+        log_info(f"ES 'geonames' has {max(es_doc_count, 0):,} docs — seeding required")
+        seed_result = run_esrally("geonames", es_url, expected_docs, "elasticsearch")
+        if seed_result and seed_result.get("exit_code") != 0:
+            log_error(
+                "esrally seed failed — cannot proceed with migration. "
+                "The foundation crumbled. The house of cards collapsed. "
+                "Like my fantasy football team in week 3."
+            )
+            return
+    else:
+        log_warn(
+            f"ES 'geonames' has {max(es_doc_count, 0):,} docs but --skip-esrally is set. "
+            f"Migration may produce incomplete results. You've been warned. 🎲"
+        )
+
+    # -- 🚀 Step 2: Migrate ES → OS via kravex
+    log_info("--- Step 2: Migrate ES → OS via kravex-static ---")
+    migration_config = CONFIGS_DIR / "geonames_es_to_os_static.toml"
+    if not migration_config.exists():
+        log_error(
+            f"Migration config not found: {migration_config} — "
+            f"'We looked everywhere. Under the couch. Behind the fridge. Nothing.'"
+        )
+        return
+
+    # -- 🔄 Reset OS target index before migration
+    reset_index(os_url, "benchmark_geonames")
+
+    run_tool_with_metrics(
+        cmd=[str(kvx_binary), "run", "--config", str(migration_config)],
+        tool_label="kravex-migration",
+        dataset="geonames",
+        engine="opensearch",
+        expected_docs=expected_docs,
+        cluster_url=os_url,
+        index_name="benchmark_geonames",
+        log_prefix="run_geonames_migration/kravex",
+    )
+
+    # -- 📊 Step 3: Run comparison tools against ES (file-based) if requested
+    if not skip_elasticdump:
+        log_info("--- Step 3: elasticdump baseline (file → ES) ---")
+        run_elasticdump("geonames", es_url, expected_docs, "elasticsearch")
+    else:
+        log_warn("Skipping elasticdump for geonames (--skip-elasticdump)")
+
+    log_info("Completed geonames migration flow ✅")
 
 
 # ============================================================================
@@ -556,6 +682,25 @@ def main():
             log_info(f"Skipping dataset '{dataset}' (--dataset={args.dataset})")
             continue
 
+        # -- 🔄 Geonames gets the migration flow (ES → OS), not file-based ingest
+        if dataset == "geonames":
+            if args.engine == "elasticsearch":
+                log_warn(
+                    "Geonames migration targets OpenSearch — skipping "
+                    "(--engine=elasticsearch filters out the OS target)"
+                )
+                continue
+            run_geonames_migration(
+                expected_docs=expected_docs,
+                kvx_binary=kvx_binary,
+                es_url=es_url,
+                os_url=os_url,
+                skip_esrally=args.skip_esrally,
+                skip_elasticdump=args.skip_elasticdump,
+            )
+            continue
+
+        # -- 📦 noaa/pmc: file-based ingest across engines
         for engine in ENGINES:
             if args.engine and engine != args.engine:
                 log_info(f"Skipping engine '{engine}' (--engine={args.engine})")

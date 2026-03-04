@@ -10,7 +10,7 @@ queue_capacity = 16
 sink_parallelism = 4
 
 [source.File]
-file_name = "benchmark/data/pmc.ndjson"
+file_name = "benchmark/data/pmc.json"
 
 [sink.Elasticsearch]
 url = "http://localhost:9200"
@@ -29,6 +29,8 @@ max_doc_count = 10000
 
 [throttle.sink]
 max_request_size_bytes = 52428800
+
+[throttle.sink.mode]
 mode = "Pid"
 set_point_ms = 5000.0
 min_bytes = 1048576

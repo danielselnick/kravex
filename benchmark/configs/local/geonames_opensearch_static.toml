@@ -9,7 +9,7 @@ queue_capacity = 16
 sink_parallelism = 4
 
 [source.File]
-file_name = "benchmark/data/geonames.ndjson"
+file_name = "benchmark/data/geonames.json"
 
 [sink.OpenSearch]
 url = "http://localhost:9201"

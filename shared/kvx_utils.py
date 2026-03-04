@@ -221,11 +221,16 @@ def build_kvx_binary(project_root: Optional[Path] = None) -> Path:
 
 
 def find_or_build_kvx_binary(project_root: Optional[Path] = None) -> Path:
-    """Find existing binary or build one. The 'just make it work' function."""
-    binary = find_kvx_binary(project_root)
-    if binary:
-        return binary
-    return build_kvx_binary(project_root)
+    """
+    Find existing release binary or build one. Debug binaries are forbidden —
+    benchmarking a debug build is like timing a sprint in ski boots.
+    """
+    root = project_root or _guess_project_root()
+    release_path = root / "target" / "release" / "kvx-cli"
+    if release_path.exists():
+        return release_path
+    # -- 🚀 No release binary found — build one. No debug fallback allowed.
+    return build_kvx_binary(root)
 
 
 def _guess_project_root() -> Path:

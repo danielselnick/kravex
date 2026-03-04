@@ -32,15 +32,15 @@ from shared.kvx_utils import find_or_build_kvx_binary  # noqa: E402
 
 DATASETS = {
     "geonames": {
-        "url": "https://data.elastic.co/geonames/documents.json.bz2",
+        "url": "https://rally-tracks.elastic.co/geonames/documents-2.json.bz2",
         "expected_docs": 11_396_503,
     },
     "noaa": {
-        "url": "https://data.elastic.co/noaa/documents.json.bz2",
+        "url": "https://rally-tracks.elastic.co/noaa/documents.json.bz2",
         "expected_docs": 33_659_481,
     },
     "pmc": {
-        "url": "https://data.elastic.co/pmc/documents.json.bz2",
+        "url": "https://rally-tracks.elastic.co/pmc/documents.json.bz2",
         "expected_docs": 574_199,
     },
 }
