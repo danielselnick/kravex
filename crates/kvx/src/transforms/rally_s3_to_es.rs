@@ -370,8 +370,7 @@ mod tests {
             // ✅ Action line should be {"index":{}} — no _id because geonames has no ObjectID
             let the_action_line = item.as_ref().split('\n').next().unwrap();
             assert_eq!(
-                the_action_line,
-                r#"{"index":{}}"#,
+                the_action_line, r#"{"index":{}}"#,
                 "🐛 Item {} action line should have no _id for geonames data",
                 idx
             );

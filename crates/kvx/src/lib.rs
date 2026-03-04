@@ -270,9 +270,8 @@ mod tests {
         let source_config = FileSourceConfig {
             file_name: temp_file.path().to_string_lossy().to_string(),
         };
-        let source = SourceBackend::File(
-            FileSource::new(source_config, 50 * 1024 * 1024, 1000).await?,
-        );
+        let source =
+            SourceBackend::File(FileSource::new(source_config, 50 * 1024 * 1024, 1000).await?);
 
         // 🗑️ Build the sink — InMemorySink to capture payloads for counting
         let sink_inner = InMemorySink::new().await?;
@@ -294,9 +293,9 @@ mod tests {
         // 🎛️ PID sink controller — adaptive byte budget, also a suspect
         let max_request_size_bytes: usize = 10 * 1024 * 1024; // 🧮 10MB max
         let throttle_controllers = vec![ThrottleControllerBackend::new_pid(
-            5000.0,               // 🎯 set_point_ms = 5s target latency
-            2 * 1024 * 1024,      // 🚀 initial = 2MB
-            512 * 1024,           // 📉 min = 512KB
+            5000.0,                 // 🎯 set_point_ms = 5s target latency
+            2 * 1024 * 1024,        // 🚀 initial = 2MB
+            512 * 1024,             // 📉 min = 512KB
             max_request_size_bytes, // 📈 max = 10MB
         )];
 
@@ -340,7 +339,8 @@ mod tests {
 
         // 🎯 THE ASSERTION: exactly N documents, no more, no less
         assert_eq!(
-            the_total_action_lines, the_sacred_doc_count,
+            the_total_action_lines,
+            the_sacred_doc_count,
             "🐛 PID PIPELINE DUPLICATE BUG: Expected {} docs, got {} across {} payloads. \
              Ratio: {:.4}x. If > 1.0, the PID pipeline is creating phantom documents!",
             the_sacred_doc_count,
@@ -368,8 +368,7 @@ mod tests {
         use std::io::Write;
 
         let the_sacred_doc_count: usize = 10_000;
-        let mut temp_file = tempfile::NamedTempFile::new()
-            .expect("💀 Temp file creation failed");
+        let mut temp_file = tempfile::NamedTempFile::new().expect("💀 Temp file creation failed");
 
         for i in 0..the_sacred_doc_count {
             writeln!(temp_file, r#"{{"geonameid":{},"name":"P{}"}}"#, i, i)
@@ -380,9 +379,8 @@ mod tests {
         let source_config = FileSourceConfig {
             file_name: temp_file.path().to_string_lossy().to_string(),
         };
-        let source = SourceBackend::File(
-            FileSource::new(source_config, 50 * 1024 * 1024, 1000).await?,
-        );
+        let source =
+            SourceBackend::File(FileSource::new(source_config, 50 * 1024 * 1024, 1000).await?);
 
         // 🗑️ 4 parallel InMemorySinks — each gets its own received Vec
         let the_sink_parallelism = 4;
@@ -467,7 +465,8 @@ mod tests {
         }
 
         assert_eq!(
-            the_total_action_lines, the_sacred_doc_count,
+            the_total_action_lines,
+            the_sacred_doc_count,
             "🐛 PARALLEL PID DUPLICATE BUG: Expected {} docs across 4 sinks, got {}. \
              Ratio: {:.4}x. MPMC channel delivering pages to multiple consumers?!",
             the_sacred_doc_count,

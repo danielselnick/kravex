@@ -201,8 +201,7 @@ impl OpenSearchSink {
         // This ensures the action line `{"index":{}}` (no `_index` field) works correctly.
         // Without this, OpenSearch rejects docs that lack `_index` in the action metadata.
         // When no index is configured (per-doc routing), fall back to the bare `/_bulk` endpoint.
-        let the_base_url_trimmed_like_a_fresh_haircut =
-            self.sink_config.url.trim_end_matches('/');
+        let the_base_url_trimmed_like_a_fresh_haircut = self.sink_config.url.trim_end_matches('/');
         let bulk_url = match self.sink_config.index {
             Some(ref index_name) => format!(
                 "{}/{}/_bulk",
@@ -281,9 +280,7 @@ impl OpenSearchSink {
             );
         }
 
-        trace!(
-            "🚀 OpenSearch bulk request landed — all items indexed, fork-side, zero casualties"
-        );
+        trace!("🚀 OpenSearch bulk request landed — all items indexed, fork-side, zero casualties");
         Ok(())
     }
 }

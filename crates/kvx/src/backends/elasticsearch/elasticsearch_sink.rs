@@ -206,8 +206,7 @@ impl ElasticsearchSink {
         // When no index is configured (per-doc routing), fall back to the bare `/_bulk` endpoint.
         // 🧠 TRIBAL KNOWLEDGE: Without index in URL, ES 8.x returns 400 for every doc and
         // kravex hangs at 0% progress. This was Bug 6 from the benchmark session.
-        let the_base_url_trimmed_like_a_fresh_haircut =
-            self.sink_config.url.trim_end_matches('/');
+        let the_base_url_trimmed_like_a_fresh_haircut = self.sink_config.url.trim_end_matches('/');
         let bulk_url = match self.sink_config.index {
             Some(ref index_name) => format!(
                 "{}/{}/_bulk",
@@ -299,9 +298,7 @@ impl ElasticsearchSink {
             );
         }
 
-        trace!(
-            "🚀 Bulk request landed successfully — all items indexed, zero casualties"
-        );
+        trace!("🚀 Bulk request landed successfully — all items indexed, zero casualties");
         Ok(())
     }
 }

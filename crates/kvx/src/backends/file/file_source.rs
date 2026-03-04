@@ -245,8 +245,8 @@ mod tests {
     /// "Trust, but verify. Especially the BufReader." — Ronald Reagan, systems architect 🦆
     #[tokio::test]
     async fn the_one_where_pid_varying_hints_never_cause_duplicate_reads() {
-        use std::io::Write;
         use crate::backends::Source;
+        use std::io::Write;
 
         // 📝 Create a temp file with exactly 1000 lines of valid JSON
         let the_sacred_doc_count: usize = 1000;
@@ -263,7 +263,8 @@ mod tests {
             file_name: temp_file.path().to_string_lossy().to_string(),
         };
         // 🎛️ Initial batch size doesn't matter — pump() overrides it via doc_count_hint
-        let mut source = FileSource::new(config, 50 * 1024 * 1024, 500).await
+        let mut source = FileSource::new(config, 50 * 1024 * 1024, 500)
+            .await
             .expect("💀 FileSource::new failed on a temp file that definitely exists");
 
         // 🎲 Simulate PID oscillation: varying hints like a PID controller having a mood swing
@@ -280,7 +281,9 @@ mod tests {
             let the_hint = the_pid_mood_swings[the_pump_cycle % the_pid_mood_swings.len()];
             the_pump_cycle += 1;
 
-            match source.pump(the_hint).await
+            match source
+                .pump(the_hint)
+                .await
                 .expect("💀 pump() returned an error — BufReader has trust issues")
             {
                 Some(page) => {
@@ -309,8 +312,8 @@ mod tests {
     /// "I'm in this picture and I don't like it" — the for loop in pump() 🦆
     #[tokio::test]
     async fn the_one_where_fifty_thousand_docs_survive_pid_chaos() {
-        use std::io::Write;
         use crate::backends::Source;
+        use std::io::Write;
 
         let the_sacred_doc_count: usize = 50_000;
         let mut temp_file = tempfile::NamedTempFile::new()
@@ -325,7 +328,8 @@ mod tests {
         let config = FileSourceConfig {
             file_name: temp_file.path().to_string_lossy().to_string(),
         };
-        let mut source = FileSource::new(config, 50 * 1024 * 1024, 1000).await
+        let mut source = FileSource::new(config, 50 * 1024 * 1024, 1000)
+            .await
             .expect("💀 FileSource::new failed");
 
         // 🎲 Aggressive PID hints — including edge cases like 1 and max_doc_count
