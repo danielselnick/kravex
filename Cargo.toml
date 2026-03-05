@@ -52,6 +52,9 @@ indicatif = "0.17"
 # 🍽️ a table so comfy it should come with a throw pillow and a cat
 comfy-table = "7"
 
+# 🧪 mock HTTP server for tests — like a stunt double, but for your API calls
+wiremock = "0.6"
+
 # 🧪 statistical benchmarking — because "it feels faster" is not a metric
 criterion = { version = "0.5", features = ["async_tokio"] }
 

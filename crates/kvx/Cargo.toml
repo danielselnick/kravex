@@ -19,6 +19,7 @@ indicatif = { workspace = true }
 comfy-table = { workspace = true }
 
 [dev-dependencies]
+wiremock = { workspace = true }
 criterion = { workspace = true }
 tempfile = { workspace = true }
 

@@ -11,6 +11,7 @@ Core library for kravex — the data migration engine. Raw pages, Cow-powered ze
 - **Workspace member**: `crates/kvx`
 - **Dependents**: `kvx-cli`
 - **Dependencies**: anyhow, async-channel, figment, memchr, reqwest, serde, serde_json, tokio, tracing, async-trait, futures, indicatif, comfy-table
+- **Dev-Dependencies**: wiremock (mock HTTP server for sink/source tests), criterion (benchmarks), tempfile
 - **Edition**: 2024
 - **Modules**:
   - `app_config` — `AppConfig`, `RuntimeConfig`, `SourceConfig`, `SinkConfig` (Figment-based config loading; owns all top-level config enums)
@@ -147,4 +148,5 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 - v10 raw pages + composers (current): Source returns `Option<String>` (raw page), Transform returns `Vec<Cow<str>>` (zero-copy), Composer replaces Collector (transform+assemble in one shot), SinkWorker buffers by byte size. 31 tests passing.
 - v11 config migration (complete): `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs`; `supervisors/config.rs` deleted; all callers updated. 31 tests passing.
 - v12 buffered chunk reading + tests + benchmarks (current): FileSource reads 128 KiB chunks via raw `tokio::fs::File` (no BufReader), scans for newlines with `memchr` (SIMD-accelerated), stashes remainder bytes between `next_page()` calls. 8 unit tests (edge cases, paging, remainder). Criterion benchmarks: **~1.09 GiB/s** buffered vs ~196 MiB/s read_line (**5.7x throughput**), **~9.97M docs/s** vs ~2.38M docs/s (**4.2x docs/s**). 36 tests passing.
+- v12 elasticsearch sink tests: 21 unit tests added via wiremock mock HTTP server. Covers constructor (ping, index check, auth), bulk POST (success, 4xx/5xx, headers, body integrity), close(), edge cases (trailing slashes, empty payloads). ElasticsearchSink tests cover: auth priority (ApiKey > Basic), Content-Type validation, payload integrity, trailing slash handling, close() no-op.
 - S3 source backend not yet implemented
