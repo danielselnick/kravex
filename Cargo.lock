@@ -812,6 +812,7 @@ dependencies = [
  "figment",
  "futures",
  "indicatif",
+ "memchr",
  "reqwest",
  "serde",
  "serde_json",

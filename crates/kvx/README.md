@@ -10,7 +10,7 @@ Core library for kravex — the data migration engine. Raw pages, Cow-powered ze
 
 - **Workspace member**: `crates/kvx`
 - **Dependents**: `kvx-cli`
-- **Dependencies**: anyhow, async-channel, figment, reqwest, serde, serde_json, tokio, tracing, async-trait, futures, indicatif, comfy-table
+- **Dependencies**: anyhow, async-channel, figment, memchr, reqwest, serde, serde_json, tokio, tracing, async-trait, futures, indicatif, comfy-table
 - **Edition**: 2024
 - **Modules**:
   - `app_config` — `AppConfig`, `RuntimeConfig`, `SourceConfig`, `SinkConfig` (Figment-based config loading; owns all top-level config enums)
@@ -125,6 +125,7 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 - `channel_data.rs` still empty — to be removed
 - ES sink no longer buffers — SinkWorker handles all buffering via byte-size threshold + epsilon
 - `BUFFER_EPSILON_BYTES` = 64 KiB headroom to avoid exceeding max request size after transformation
+- **FileSource I/O model**: reads 128 KiB chunks from raw `File`, scans with `memchr` SIMD, remainder bytes stashed between pages. No BufReader. `\n` byte `0x0A` is safe to scan in raw UTF-8 bytes.
 - Backend code split: each backend type has its own `{type}_source.rs` / `{type}_sink.rs`
 - Core Source/Sink traits in `backends/source.rs` and `backends/sink.rs`
 - Transforms and composers are Clone+Copy (zero-sized structs) — each SinkWorker gets its own copy
@@ -143,4 +144,5 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 - v6-v9 backend file splits: separated backend implementations into dedicated files with re-export shims
 - v10 raw pages + composers (current): Source returns `Option<String>` (raw page), Transform returns `Vec<Cow<str>>` (zero-copy), Composer replaces Collector (transform+assemble in one shot), SinkWorker buffers by byte size. 31 tests passing.
 - v11 config migration (complete): `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs`; `supervisors/config.rs` deleted; all callers updated. 31 tests passing.
+- v12 buffered chunk reading (current): FileSource now reads 128 KiB chunks via raw `tokio::fs::File` (no BufReader), scans for newlines with `memchr` (SIMD-accelerated), stashes remainder bytes between `next_page()` calls. Eliminates per-line syscall overhead. 28 tests passing.
 - S3 source backend not yet implemented

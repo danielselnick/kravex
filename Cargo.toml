@@ -13,6 +13,9 @@ members = ["crates/kvx-cli", "crates/kvx"]
 # 😬 because panic is not a personality trait. well, actually...
 anyhow = "1"
 
+# 🔍 SIMD-powered byte scanning — like a metal detector but for newlines
+memchr = "2"
+
 # ✉️ like passing notes in class but the teacher is the runtime
 async-channel = "2"
 
