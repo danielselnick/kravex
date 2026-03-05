@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
+memchr = { workspace = true }
 async-channel = { workspace = true }
 figment = { workspace = true }
 reqwest = { workspace = true }
@@ -19,3 +20,9 @@ comfy-table = { workspace = true }
 
 [dev-dependencies]
 wiremock = { workspace = true }
+criterion = { workspace = true }
+tempfile = { workspace = true }
+
+[[bench]]
+name = "file_source_bench"
+harness = false
