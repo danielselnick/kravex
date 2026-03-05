@@ -5,7 +5,7 @@
 # 🦆
 
 [runtime]
-queue_capacity = 2
+pumper_to_joiner_capacity = 2
 sink_parallelism = 1
 
 [source_config.File]

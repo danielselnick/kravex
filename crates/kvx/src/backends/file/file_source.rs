@@ -269,6 +269,10 @@ impl Source for FileSource {
         // 📄 Empty feed = EOF. The well is dry. Return None. 🏁
         if feed.is_empty() {
             // -- 🏁 "That's all folks!" — Porky Pig, and also this file source
+            // ✅ Finish the progress bar so indicatif's render thread exits cleanly.
+            // Without this, the ProgressBar drops unfinished → background thread lingers
+            // → process hangs until Ctrl+C. Like a guest who won't leave the party. 🎉💀
+            self.progress.finish();
             Ok(None)
         } else {
             // ✅ convert bytes to String — this validates UTF-8 in one pass at the end

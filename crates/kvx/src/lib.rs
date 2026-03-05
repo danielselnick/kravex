@@ -154,8 +154,8 @@ mod tests {
     async fn the_one_where_four_docs_made_it_home_safely() -> Result<()> {
         let app_config = AppConfig {
             runtime: RuntimeConfig {
-                queue_capacity: 10,
-                payload_channel_capacity: 10,
+                pumper_to_joiner_capacity: 10,
+                joiner_to_drainer_capacity: 10,
                 sink_parallelism: 1,
                 joiner_parallelism: 1,
             },

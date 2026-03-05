@@ -35,13 +35,14 @@ use tracing::info;
 #[derive(Debug, Deserialize, Clone)]
 pub struct RuntimeConfig {
     /// 📬 Bounded channel capacity for ch1 (pumper → joiners) — raw feeds in transit 🚚
-    #[serde(default = "default_queue_capacity", alias = "channel_size")]
-    pub queue_capacity: usize,
+    #[serde(default = "default_pumper_to_joiner_capacity", alias = "channel_size", alias = "queue_capacity")]
+    pub pumper_to_joiner_capacity: usize,
     /// 📬 Bounded channel capacity for ch2 (joiners → drainers) — assembled payloads in transit 🚛
-    /// Separate from queue_capacity because payloads are larger than raw feeds —
+    /// Separate from pumper_to_joiner_capacity because payloads are larger than raw feeds —
     /// think of ch1 as the loading dock and ch2 as the dispatch bay 🏗️
-    #[serde(default = "default_payload_channel_capacity")]
-    pub payload_channel_capacity: usize,
+    // The byte size of this effectively becomes source max bytes * this capacity
+    #[serde(default = "default_joiner_to_drainer_capacity", alias = "payload_channel_capacity")]
+    pub joiner_to_drainer_capacity: usize,
     /// 🧵 How many sink workers run in parallel — more lanes, more throughput, more debugging
     #[serde(default = "default_sink_parallelism", alias = "num_sink_workers")]
     pub sink_parallelism: usize,
@@ -55,8 +56,8 @@ pub struct RuntimeConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
-            queue_capacity: default_queue_capacity(),
-            payload_channel_capacity: default_payload_channel_capacity(),
+            pumper_to_joiner_capacity: default_pumper_to_joiner_capacity(),
+            joiner_to_drainer_capacity: default_joiner_to_drainer_capacity(),
             sink_parallelism: default_sink_parallelism(),
             joiner_parallelism: default_joiner_parallelism(),
         }
@@ -65,21 +66,25 @@ impl Default for RuntimeConfig {
 
 // 🔢 10: chosen by rolling a d20, getting a 10, and calling it "load tested".
 // -- The queue holds batches, not feelings, though both can become backpressure if ignored. 🦆
-fn default_queue_capacity() -> usize {
-    10
+fn default_pumper_to_joiner_capacity() -> usize {
+    default_parallelism()
 }
 
 // 🧵 One sink lane by default: fewer moving parts, fewer ways to invent folklore during debugging.
 // -- Ancient proverb: he who spawns eight writers before breakfast, debugs until dinner.
 fn default_sink_parallelism() -> usize {
-    1
+    default_parallelism() * 3
 }
 
 // 📬 Payload channel (ch2, joiners → drainers): same default as ch1. Assembled payloads are
 // chunkier than raw feeds, so a smaller buffer is fine. Like a VIP line at the club — fewer
 // people, more velvet rope per capita. 🦆
-fn default_payload_channel_capacity() -> usize {
-    10
+fn default_joiner_to_drainer_capacity() -> usize {
+    default_parallelism()
+}
+
+fn default_parallelism() -> usize {
+    default_joiner_parallelism() * 4
 }
 
 // 🧵 Joiner threads: cpu_count - 1, because leaving one core for the OS and tokio is the
@@ -162,7 +167,7 @@ pub struct AppConfig {
     /// 📡 How shall the source workers behave? Configurable, unlike my children.
     pub source_config: SourceConfig,
     pub sink_config: SinkConfig,
-    #[serde(default, alias = "supervisor_config")]
+    #[serde(default)]
     pub runtime: RuntimeConfig,
 }
 
@@ -244,7 +249,7 @@ mod tests {
         let config_path = write_test_config(
             r#"
             [runtime]
-            queue_capacity = 8
+            pumper_to_joiner_capacity = 8
             sink_parallelism = 3
 
             [source_config.File]
@@ -260,7 +265,7 @@ mod tests {
             "💀 Runtime config should parse. The schema drift goblin does not get this win.",
         );
 
-        assert_eq!(app_config.runtime.queue_capacity, 8);
+        assert_eq!(app_config.runtime.pumper_to_joiner_capacity, 8);
         assert_eq!(app_config.runtime.sink_parallelism, 3);
         match app_config.sink_config {
             SinkConfig::File(file_config) => {
@@ -293,8 +298,8 @@ mod tests {
             .extract()
             .expect("💀 Default runtime config should exist. Serde left us on read otherwise.");
 
-        assert_eq!(app_config.runtime.queue_capacity, 10);
-        assert_eq!(app_config.runtime.sink_parallelism, 1);
+        assert_eq!(app_config.runtime.pumper_to_joiner_capacity, RuntimeConfig::default().pumper_to_joiner_capacity);
+        assert_eq!(app_config.runtime.sink_parallelism, RuntimeConfig::default().sink_parallelism);
 
         fs::remove_file(config_path)
             .expect("💀 Failed to remove test config. The janitor quit mid-scene.");
@@ -319,7 +324,7 @@ mod tests {
         let app_config = load_config(Some(config_path.as_path()))
             .expect("💀 Runtime aliases should parse. The witness protection paperwork was valid.");
 
-        assert_eq!(app_config.runtime.queue_capacity, 12);
+        assert_eq!(app_config.runtime.pumper_to_joiner_capacity, 12);
         assert_eq!(app_config.runtime.sink_parallelism, 4);
 
         fs::remove_file(config_path)

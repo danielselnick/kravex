@@ -85,11 +85,11 @@ impl Foreman {
 
         // 📬 ch1: pumper → joiners — carries raw feed Strings, MPMC
         // Like a conveyor belt at a sushi restaurant, but the sushi is JSON 🍣
-        let (tx1, rx1) = async_channel::bounded(self.app_config.runtime.queue_capacity);
+        let (tx1, rx1) = async_channel::bounded(self.app_config.runtime.pumper_to_joiner_capacity);
 
         // 📬 ch2: joiners → drainers — carries assembled payload Strings, MPMC
         // The VIP lounge of the pipeline — only processed payloads allowed past this point 🎟️
-        let (tx2, rx2) = async_channel::bounded(self.app_config.runtime.payload_channel_capacity);
+        let (tx2, rx2) = async_channel::bounded(self.app_config.runtime.joiner_to_drainer_capacity);
 
         info!(
             "🏗️ Foreman assembling pipeline: 1 pumper → {} joiners → {} drainers",

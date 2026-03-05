@@ -4,7 +4,7 @@
 # 🦆
 
 [runtime]
-queue_capacity = 8
+pumper_to_joiner_capacity = 8
 sink_parallelism = 8
 
 [source_config]

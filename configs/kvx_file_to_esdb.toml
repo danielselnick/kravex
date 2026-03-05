@@ -4,9 +4,11 @@
 # and yet somehow still unpredictable. Like this codebase. 🌩️
 # 🦆
 
-[runtime]
-queue_capacity = 32
-sink_parallelism = 8
+# [runtime]
+# joiner_parallelism = (num cpus) - 1
+# pumper_to_joiner_capacity = (joiner_parallelism) * 4
+#
+# # sink_parallelism = 8
 
 [source_config.File]
 file_name = "benchmark/data/geonames.json"

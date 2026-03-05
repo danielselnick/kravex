@@ -74,6 +74,8 @@ impl Source for ElasticsearchSource {
     /// "He who stubs with None, deploys with hope." — Ancient scroll API proverb 📜
     async fn next_page(&mut self) -> Result<Option<String>> {
         // TODO: Implement search_after — the glow-up we deserve. 🚀
+        // ✅ Finish the progress bar so the process exits cleanly — no lingering indicatif threads 🧹
+        self.progress.finish();
         Ok(None)
     }
 }
