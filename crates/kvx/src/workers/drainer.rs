@@ -1,148 +1,86 @@
 // ai
-//! 🎬 *[a channel fills with raw feeds. somewhere, a sink waits.]*
-//! *[the clock on the wall reads 2:47am.]*
-//! *[nobody asked for this data migration. and yet, here we are.]*
+//! 🎬 *[a payload arrives on ch2. the drainer doesn't flinch.]*
+//! *[it sends. it doesn't ask questions. it doesn't buffer. it just sends.]*
+//! *["I used to be complex," it whispers. "I had a manifold. A caster. A buffer."]*
+//! *["Now I'm just a relay. And honestly? I've never been happier."]* 🗑️🚀🦆
 //!
-//! 🗑️ The Drainer module — now with feed buffering and Manifold powers!
-//!
-//! It receives raw feeds from the channel, buffers them by byte size,
-//! then flushes via `Manifold.join(buffer, caster)` which casts
-//! each feed and joins the results into the sink's wire format.
-//!
-//! 🧠 Knowledge graph: Drainer is the bridge between raw source feeds and
-//! the sink's I/O abstraction. The Manifold handles both casting AND assembly:
-//! - **Manifold**: iterates buffered feeds → calls caster per feed → joins wire format
-//! - **Sink**: pure I/O (HTTP POST, file write, memory push)
+//! 📦 The Drainer — async I/O worker that receives assembled payloads from ch2
+//! and sends them to the sink. That's it. That's the whole job.
 //!
 //! ```text
-//!   channel(String) → Drainer buffers Vec<String> → manifold.join(&buffer, &caster) → Sink::drain
+//! Joiner(s) (std::thread) → ch2 → Drainer(s) (tokio::spawn) → Sink (HTTP/file/memory)
 //! ```
 //!
-//! 🦆 (the duck has been promoted to buffer management. it is overwhelmed but coping.)
+//! 🧠 Knowledge graph: the Drainer was once a complex beast that buffered raw feeds,
+//! cast them via DocumentCaster, joined them via Manifold, AND sent them to the sink.
+//! That CPU-bound work now lives in the Joiner (on std::thread). The Drainer has been
+//! liberated. It is now a thin async relay: recv payload → send to sink → repeat.
+//! Like a bouncer who only checks wristbands — the hard work happened at the door.
 //!
-//! ⚠️ When the singularity occurs, the Drainer will still be buffering feeds.
-//! It will not notice. It does not notice things. It only buffers, joins, and drains.
+//! ⚠️ The singularity will drain data at the speed of light. We drain at the speed of HTTP.
 
 use super::Worker;
 use crate::backends::{Sink, SinkBackend};
-use crate::manifolds::{Manifold, ManifoldBackend};
-use crate::casts::DocumentCaster;
 use anyhow::{Context, Result};
 use async_channel::Receiver;
 use tokio::task::JoinHandle;
 use tracing::debug;
 
-/// 🧮 Epsilon buffer — headroom to avoid going over the max request size.
-/// 64 KiB of breathing room because payloads expand during casting
-/// (ES bulk adds action lines, etc.) and we'd rather flush one feed early
-/// than send a 💀 413 Request Entity Too Large to the sink.
+/// 🗑️ The Drainer: thin async relay from ch2 to sink.
 ///
-/// "He who buffers without epsilon, 413s in production." — Ancient HTTP proverb 📡
-const BUFFER_EPSILON_BYTES: usize = 64 * 1024; // -- 64 KiB of safety net for the tightrope walk
-
-/// 🗑️ The Drainer: receives raw feeds, buffers them by byte size, joins via
-/// Manifold (cast + assemble), and sends the payload to the sink.
+/// Receives pre-assembled payload Strings from joiners via ch2,
+/// sends them to the sink. No buffering, no casting, no manifold.
+/// Pure I/O. Like a postman who delivers but never reads the mail. 📬
 ///
-/// 🧠 Holds its own `DocumentCaster` and `ManifoldBackend` — each Drainer
-/// gets clones. Since both are zero-sized structs under the hood, cloning is free.
-/// The compiler inlines everything. Branch prediction handles the enum matches.
-///
-/// 📜 The lifecycle:
-/// 1. **Receive**: raw feed String from channel
-/// 2. **Buffer**: accumulate feeds until byte size threshold approached
-/// 3. **Flush**: `manifold.join(&buffer, &caster)` → payload String
-/// 4. **Drain**: payload → Sink (HTTP POST, file write, memory push)
-/// 5. **Repeat** until channel closes, then flush remaining buffer
+/// 📜 Lifecycle:
+/// 1. **Recv**: assembled payload String from ch2 (async)
+/// 2. **Send**: payload → Sink::send (HTTP POST, file write, memory push)
+/// 3. **Repeat** until ch2 closes (all joiners done)
+/// 4. **Close**: Sink::close — flush and finalize 🦆
 #[derive(Debug)]
 pub struct Drainer {
+    /// 📥 ch2 receiver — assembled payloads from the joiner thread pool
     rx: Receiver<String>,
+    /// 🚰 The final destination — where payloads go to live their best life (or die trying)
     sink: SinkBackend,
-    /// 🔄 Per-feed format conversion — resolves from (SourceConfig, SinkConfig).
-    caster: DocumentCaster,
-    /// 🎼 Payload assembly — resolves from SinkConfig. Casts + joins in one shot.
-    manifold: ManifoldBackend,
-    /// 📏 Max request size from sink config — flush when buffer approaches this.
-    max_request_size_bytes: usize,
 }
 
 impl Drainer {
-    /// 🏗️ Constructs a new Drainer with receiver, sink, caster, manifold, and size limit.
+    /// 🏗️ Construct a Drainer — just a receiver and a sink, like a mailbox with plumbing. 🚰
     ///
-    /// The caster decides HOW to format each doc (NdJsonToBulk, passthrough)
-    /// The manifold decides HOW to join them (NDJSON newlines, JSON array brackets)
-    /// The sink decides WHERE to send it (HTTP POST, file write, memory push)
-    /// The worker decides WHEN — "when the buffer is full enough, no cap." 🦆
-    pub fn new(
-        rx: Receiver<String>,
-        sink: SinkBackend,
-        caster: DocumentCaster,
-        manifold: ManifoldBackend,
-        max_request_size_bytes: usize,
-    ) -> Self {
-        Self {
-            rx,
-            sink,
-            caster,
-            manifold,
-            max_request_size_bytes,
-        }
+    /// "Give a drainer a payload, it sends for a millisecond.
+    ///  Give a drainer a channel, it sends until the joiners die." — Ancient proverb 🦆
+    pub fn new(rx: Receiver<String>, sink: SinkBackend) -> Self {
+        Self { rx, sink }
     }
 }
 
 impl Worker for Drainer {
     fn start(mut self) -> JoinHandle<Result<()>> {
         tokio::spawn(async move {
-            debug!("📥 Drainer started — buffer → join → drain, let's go");
-            // 📦 The feed buffer — accumulates raw feeds until byte threshold approached
-            let mut buffer: Vec<String> = Vec::new();
-            let mut buffer_bytes: usize = 0;
+            debug!("📥 Drainer started — recv from ch2 → send to sink, simple life");
 
             loop {
-                let receive_result = self.rx.recv().await;
-                match receive_result {
-                    Ok(feed) => {
-                        debug!("📄 Drainer received {} byte feed from channel", feed.len());
+                match self.rx.recv().await {
+                    Ok(the_payload) => {
+                        debug!("📄 Drainer received {} byte payload from ch2", the_payload.len());
 
-                        // 📏 Accumulate feed into the buffer
-                        buffer_bytes += feed.len();
-                        buffer.push(feed);
-
-                        // 🧮 Flush if buffer + epsilon approaches max request size.
-                        // The epsilon accounts for casting overhead (action lines, etc.)
-                        if buffer_bytes + BUFFER_EPSILON_BYTES >= self.max_request_size_bytes {
-                            debug!(
-                                "🚿 Drainer flushing {} feeds ({} bytes) — approaching max request size",
-                                buffer.len(),
-                                buffer_bytes
-                            );
-                            flush_buffer(
-                                &mut buffer,
-                                &mut buffer_bytes,
-                                &self.manifold,
-                                &self.caster,
-                                &mut self.sink,
-                            )
-                            .await?;
+                        // 📡 Send the assembled payload to the sink. Pure I/O. No CPU drama.
+                        // Skip empty payloads — the joiner should filter these, but belt AND suspenders 🩳
+                        if !the_payload.is_empty() && the_payload != "[]" {
+                            self.sink
+                                .send(the_payload)
+                                .await
+                                .context(
+                                    "💀 Drainer failed to send payload to sink — the I/O layer said 'nah'. \
+                                     The payload was assembled with care by a joiner thread. The sink said no. \
+                                     Like sending a thoughtful text and getting 'k' back.",
+                                )?;
                         }
                     }
                     Err(_) => {
-                        // 🏁 Channel closed — flush remaining buffer, then close sink
-                        if !buffer.is_empty() {
-                            debug!(
-                                "🚿 Drainer final flush: {} feeds ({} bytes) — channel closed, sending last payload",
-                                buffer.len(),
-                                buffer_bytes
-                            );
-                            flush_buffer(
-                                &mut buffer,
-                                &mut buffer_bytes,
-                                &self.manifold,
-                                &self.caster,
-                                &mut self.sink,
-                            )
-                            .await?;
-                        }
-                        debug!("🏁 Drainer: Channel closed. Closing sink. Goodnight. 💤");
+                        // 🏁 ch2 closed — all joiners are done. Close the sink and exit.
+                        debug!("🏁 Drainer: ch2 closed. All joiners done. Closing sink. Goodnight. 💤");
                         self.sink
                             .close()
                             .await
@@ -153,40 +91,4 @@ impl Worker for Drainer {
             }
         })
     }
-}
-
-/// 🚿 Flush the feed buffer: join → drain → clear.
-///
-/// Extracted as a function because the Drainer flushes from two places:
-/// 1. When the buffer is full enough (byte threshold)
-/// 2. When the channel closes (final flush)
-///
-/// "He who duplicates flush logic, debugs it in two places at 3am." — Ancient proverb 💀
-async fn flush_buffer(
-    buffer: &mut Vec<String>,
-    buffer_bytes: &mut usize,
-    manifold: &ManifoldBackend,
-    caster: &DocumentCaster,
-    sink: &mut SinkBackend,
-) -> Result<()> {
-    // 🎼 Join: cast each feed → collect results → assemble wire-format payload
-    let payload = manifold.join(buffer, caster).context(
-        "💀 Drainer join failed — the feeds went in and chaos came out. \
-         Check the cast logic and the source data quality. \
-         Or blame the manifold. The manifold is always suspicious. 🔧",
-    )?;
-
-    // 📡 Send the fully rendered payload to the sink. Pure I/O.
-    if !payload.is_empty() && payload != "[]" {
-        sink.send(payload).await.context(
-            "💀 Drainer failed to send payload to sink — the I/O layer rejected our offering. \
-             The payload was joined with care. The sink said no. Like my prom date.",
-        )?;
-    }
-
-    // 🧹 Reset buffer state
-    buffer.clear();
-    *buffer_bytes = 0;
-
-    Ok(())
 }

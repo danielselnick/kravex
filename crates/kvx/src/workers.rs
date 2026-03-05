@@ -22,6 +22,7 @@ pub use drainer::Drainer;
 mod pumper;
 pub use pumper::Pumper;
 mod joiner;
+pub use joiner::Joiner;
 
 /// 🏗️ A background worker, that does work. duh.
 pub trait Worker {
