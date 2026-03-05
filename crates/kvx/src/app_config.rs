@@ -91,8 +91,8 @@ pub enum SourceConfig {
 /// The InMemory(()) variant holds `()` which is the Rust way of saying "we have nothing to say here."
 ///
 /// 🧠 Knowledge graph: moved from `supervisors/config.rs` to `app_config` — same rationale as
-/// SourceConfig. Resolved at startup into a `SinkBackend` by `lib.rs`. The SinkWorker
-/// reads `max_request_size_bytes()` to know when to flush its page buffer. 🚰
+/// SourceConfig. Resolved at startup into a `SinkBackend` by `lib.rs`. The Drainer
+/// reads `max_request_size_bytes()` to know when to flush its feed buffer. 🚰
 #[derive(Debug, Deserialize, Clone)]
 pub enum SinkConfig {
     /// 📡 Write to an Elasticsearch index via bulk API
@@ -110,9 +110,9 @@ impl SinkConfig {
     /// InMemory has no config struct, so it gets the `CommonSinkConfig::default()` value.
     /// "He who queries the config, avoids the match in the hot path." — Ancient proverb 📜
     ///
-    /// 🧠 Knowledge graph: SinkWorker uses this to know when to flush its page buffer.
-    /// The buffer accumulates raw pages until their total byte size approaches this limit,
-    /// then the Composer transforms+assembles them into a single payload for the sink.
+    /// 🧠 Knowledge graph: Drainer uses this to know when to flush its feed buffer.
+    /// The buffer accumulates raw feeds until their total byte size approaches this limit,
+    /// then the Manifold casts+joins them into a single payload for the sink.
     pub fn max_request_size_bytes(&self) -> usize {
         match self {
             SinkConfig::Elasticsearch(es) => es.common_config.max_request_size_bytes,

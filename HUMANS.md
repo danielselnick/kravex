@@ -20,3 +20,13 @@ IDE is my handtools.
 Lovingly caring over the feel of every line, this is my refuge from corporate america.
 Back in my day... to pass a class, I had to write a doubly linked list, and a stack implementation, in C++, with no GC, no notes, no google, no AI, no docs. Practically hand written from scratch.
 I'm trying to keep that vibe alive.
+
+# Architecture
+Architecture
+
+ source(s) ──→ ch1 (async_channel) ──→ composer_worker(s) ──→ ch2 (async_channel) ──→ sink_worker(s) ──→ sink
+                MPMC, String             std::thread              MPMC, String            tokio::spawn
+                bounded(queue_capacity)   blocking_recv/send       bounded(payload_ch_cap)  async recv
+
+Manifolds: Combines a bunch of different things together
+Fittings: like an adapter, adapts between different types of pipe types and sizes

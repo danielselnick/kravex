@@ -1,5 +1,5 @@
 //! 🧵 Workers: the backbone of kravex, the unsung heroes, the ones who actually
-//! do the work while the Supervisor takes all the credit in the sprint retro.
+//! do the work while the Foreman takes all the credit in the sprint retro.
 //!
 //! 🚀 This module is like a factory floor, except instead of hard hats
 //! we wear `#[derive(Debug)]` and instead of OSHA violations
@@ -17,10 +17,11 @@
 use anyhow::Result;
 use tokio::task::JoinHandle;
 
-mod sink_worker;
-pub use sink_worker::SinkWorker;
-mod source_worker;
-pub use source_worker::SourceWorker;
+mod drainer;
+pub use drainer::Drainer;
+mod pumper;
+pub use pumper::Pumper;
+mod joiner;
 
 /// 🏗️ A background worker, that does work. duh.
 pub trait Worker {

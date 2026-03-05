@@ -117,20 +117,20 @@ impl FileSource {
 
 #[async_trait]
 impl Source for FileSource {
-    /// 📄 Read the next page of lines from the file. Returns `None` when EOF.
+    /// 📄 Read the next feed of lines from the file. Returns `None` when EOF.
     ///
-    /// 🧠 Knowledge graph: sources return `Option<String>` — one raw page of newline-delimited
+    /// 🧠 Knowledge graph: sources return `Option<String>` — one raw feed of newline-delimited
     /// content, uninterpreted. The source accumulates lines up to byte/doc caps and returns
-    /// the whole thing as a single String. The Composer downstream splits and transforms.
+    /// the whole thing as a single String. The Manifold downstream splits and casts.
     ///
     /// KNOWLEDGE GRAPH: two exit conditions exist beyond EOF —
-    ///   1. `max_batch_size_docs`: line count cap. Don't build a page the size of Texas.
+    ///   1. `max_batch_size_docs`: line count cap. Don't build a feed the size of Texas.
     ///   2. `max_batch_size_bytes`: byte cap. Protects against memory-busting accumulation.
     /// Both are checked on every iteration. Whichever fires first wins.
     ///
     /// "He who reads the entire file into one String, OOMs in production." — Ancient proverb 📜
     async fn next_page(&mut self) -> Result<Option<String>> {
-        let mut page = String::with_capacity(self.source_config.common_config.max_batch_size_bytes);
+        let mut feed = String::with_capacity(self.source_config.common_config.max_batch_size_bytes);
         let mut total_bytes_read = 0usize;
         let mut line_count = 0usize;
         // ⚠️ 1MB initial capacity per line — because NDJSON documents can be chunky.
@@ -143,16 +143,16 @@ impl Source for FileSource {
             }
 
             total_bytes_read += bytes_read;
-            // 🧹 Strip trailing newlines from each line before appending to the page.
-            // read_line includes \n (and \r\n on Windows). We strip so the page is clean NDJSON.
+            // 🧹 Strip trailing newlines from each line before appending to the feed.
+            // read_line includes \n (and \r\n on Windows). We strip so the feed is clean NDJSON.
             let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
             if !trimmed.is_empty() {
                 // 🔗 Separate lines with \n — but no trailing newline on the last line.
-                // The Composer handles final formatting. We just build the raw page.
-                if !page.is_empty() {
-                    page.push('\n');
+                // The Manifold handles final joining. We just build the raw feed.
+                if !feed.is_empty() {
+                    feed.push('\n');
                 }
-                page.push_str(trimmed);
+                feed.push_str(trimmed);
                 line_count += 1;
             }
             line.clear();
@@ -173,11 +173,11 @@ impl Source for FileSource {
         self.progress
             .update(total_bytes_read as u64, line_count as u64);
 
-        // 📄 Empty page = EOF. The well is dry. Return None. 🏁
-        if page.is_empty() {
+        // 📄 Empty feed = EOF. The well is dry. Return None. 🏁
+        if feed.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(page))
+            Ok(Some(feed))
         }
     }
 }

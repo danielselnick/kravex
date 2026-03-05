@@ -7,7 +7,7 @@ use crate::backends::{elasticsearch, file, in_mem};
 ///
 /// The yin to the source's yang. The drain at the bottom of the pipeline tub.
 /// Sinks are ONLY an abstraction for how to send the request — HTTP POST to /_bulk,
-/// write to file, stash in memory. They do not buffer. They do not transform.
+/// write to file, stash in memory. They do not buffer. They do not cast.
 /// They receive the full rendered payload and send it. Like a postal worker who
 /// delivers the mail without reading it. (Unlike your actual postal worker, Kevin.)
 ///
@@ -15,11 +15,11 @@ use crate::backends::{elasticsearch, file, in_mem};
 /// - `send` accepts a fully rendered payload string and writes/sends it. That's it.
 /// - `close` flushes, finalizes, and bids the data a fond farewell. MUST be called.
 ///   Skipping `close` is a bug. It is also considered rude.
-/// - Buffering, transforming, and binary collecting happen in the SinkWorker, NOT here.
+/// - Buffering, casting, and binary collecting happen in the Drainer, NOT here.
 ///
 /// # Knowledge Graph 🧠
 /// - Pattern: trait → concrete impls (FileSink, InMemorySink, ElasticsearchSink) → SinkBackend enum
-/// - SinkWorker does: transform → buffer → binary collect → call sink.send(payload)
+/// - Drainer does: cast → buffer → binary collect → call sink.send(payload)
 /// - Sink does: I/O. Just I/O. HTTP POST, file write, memory push. Nothing else.
 /// - Ancient proverb: "He who puts business logic in the Sink, debugs in production."
 #[async_trait]

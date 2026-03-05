@@ -8,7 +8,7 @@
 //! 🧠 Knowledge graph:
 //! - `CommonSourceConfig`: embedded in every backend source config (`ElasticsearchSourceConfig`,
 //!   `FileSourceConfig`). Controls batch size in docs and bytes. Lives here because it's a
-//!   backend-level concern — how big a page do we pull?
+//!   backend-level concern — how big a feed do we pull?
 //! - `CommonSinkConfig`: embedded in every backend sink config (`ElasticsearchSinkConfig`,
 //!   `FileSinkConfig`). Controls max request size in bytes. How big a payload do we push?
 //! - Both are re-exported from `backends.rs` so callers can `use crate::backends::CommonSinkConfig`
@@ -30,14 +30,14 @@ use serde::Deserialize;
 
 /// 📦 Shared configuration embedded by every source backend config.
 ///
-/// Controls how large a "page" the source emits per `next_page()` call.
-/// Sources are ignorant of downstream concerns — they just pour raw pages
+/// Controls how large a "feed" the source emits per `next_page()` call.
+/// Sources are ignorant of downstream concerns — they just pour raw feeds
 /// at whatever batch size the config allows. 🚰
 ///
 /// 🧠 Knowledge graph:
 /// - Embedded in `ElasticsearchSourceConfig`, `FileSourceConfig` (and future source configs)
-/// - `max_batch_size_docs`: doc-count ceiling per page (ES scroll size, etc.)
-/// - `max_batch_size_bytes`: byte-size ceiling per page (avoid sending 1GB pages)
+/// - `max_batch_size_docs`: doc-count ceiling per feed (ES scroll size, etc.)
+/// - `max_batch_size_bytes`: byte-size ceiling per feed (avoid sending 1GB feeds)
 /// - The DEFAULT impl gives conservative values (1000 docs / 1MB)
 ///   while the serde defaults give more generous values (10k docs / 10MB)
 ///   because apparently we have two opinions and we're committed to both 🦆
@@ -45,10 +45,10 @@ use serde::Deserialize;
 /// No cap: these defaults were chosen empirically by staring at them until they felt right.
 #[derive(Debug, Deserialize, Clone)]
 pub struct CommonSourceConfig {
-    /// 📦 Max docs per batch page — the doc-count speed limiter
+    /// 📦 Max docs per batch feed — the doc-count speed limiter
     #[serde(default = "default_max_batch_size_docs")]
     pub max_batch_size_docs: usize,
-    /// 📦 Max bytes per batch page — the byte-size speed limiter
+    /// 📦 Max bytes per batch feed — the byte-size speed limiter
     #[serde(default = "default_max_batch_size_bytes")]
     pub max_batch_size_bytes: usize,
 }
@@ -84,12 +84,12 @@ impl Default for CommonSourceConfig {
 /// 🚰 Shared configuration embedded by every sink backend config.
 ///
 /// Controls the maximum request payload size when sending data to the sink.
-/// The `SinkWorker` uses this to decide when to flush its page buffer —
-/// accumulate until approaching this limit, then compose + send. 💡
+/// The `Drainer` uses this to decide when to flush its feed buffer —
+/// accumulate until approaching this limit, then join + send. 💡
 ///
 /// 🧠 Knowledge graph:
 /// - Embedded in `ElasticsearchSinkConfig`, `FileSinkConfig` (and future sink configs)
-/// - `max_request_size_bytes`: flush threshold for the SinkWorker buffer
+/// - `max_request_size_bytes`: flush threshold for the Drainer buffer
 /// - Default is 64MB — generous, because we trust the sink to handle it
 ///   (and because the Elasticsearch docs said "up to 100MB" and we wanted buffer room) 🔧
 /// - Serde default fn gives 10MB (the "I'm being careful" default)

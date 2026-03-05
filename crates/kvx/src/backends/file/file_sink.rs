@@ -37,8 +37,8 @@ fn default_file_common_sink_config() -> CommonSinkConfig {
 /// It's a BufWriter around a tokio `File`. Simple. Honest. Does not complain.
 /// Does not retry. Does not have opinions about your data format. It writes what you give it.
 ///
-/// 🧠 Knowledge graph: Sinks are pure I/O abstractions now. The SinkWorker upstream handles
-/// transform + binary collect. FileSink just writes the final payload bytes to disk.
+/// 🧠 Knowledge graph: Sinks are pure I/O abstractions now. The Drainer upstream handles
+/// cast + binary collect. FileSink just writes the final payload bytes to disk.
 /// Think of it as a very loyal golden retriever. You throw it data, it writes it.
 ///
 /// ⚠️ `File::create` truncates if the file exists. No warning. No backup. Just gone.
@@ -85,7 +85,7 @@ impl FileSink {
 impl Sink for FileSink {
     /// 📡 Write a fully rendered payload to the file. One write_all call. That's the whole job.
     ///
-    /// The SinkWorker already transformed and binary-collected. We just dump bytes to disk.
+    /// The Drainer already cast and binary-collected. We just dump bytes to disk.
     /// No parsing. No iterating over hits. No drama. Just I/O.
     /// "What do you do?" "I write bytes." "That's it?" "That's everything." 🦆
     async fn send(&mut self, payload: String) -> Result<()> {

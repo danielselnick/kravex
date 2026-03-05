@@ -3,17 +3,17 @@ use async_trait::async_trait;
 
 use crate::backends::Source;
 
-/// 📦 The world's most optimistic data source — now page-aware! 📄
+/// 📦 The world's most optimistic data source — now feed-aware! 📄
 ///
 /// `InMemorySource` is the "Hello, World!" of [`Source`] implementations.
 /// It knows exactly four documents. They are `{"doc":1}` through `{"doc":4}`.
-/// Returns them as a single newline-delimited page, because sources are
-/// maximally ignorant now — they don't split docs, they just pour raw pages. 🚰
+/// Returns them as a single newline-delimited feed, because sources are
+/// maximally ignorant now — they don't split docs, they just pour raw feeds. 🚰
 ///
 /// 🎯 Designed entirely for testing. Not for feelings. Feelings are unindexed.
 ///
-/// 🧠 Knowledge graph: Source returns `Option<String>` (raw page), not `Vec<String>` (parsed docs).
-/// The Composer downstream handles splitting + transforming via the Transformer.
+/// 🧠 Knowledge graph: Source returns `Option<String>` (raw feed), not `Vec<String>` (parsed docs).
+/// The Manifold downstream handles splitting + casting via the Caster.
 /// This enables zero-copy passthrough when formats match. The source doesn't care. It shouldn't.
 #[derive(Debug, Default)]
 pub struct InMemorySource {
@@ -40,17 +40,17 @@ impl InMemorySource {
 
 #[async_trait]
 impl Source for InMemorySource {
-    /// 📄 Returns the one and only page this source will ever produce.
+    /// 📄 Returns the one and only feed this source will ever produce.
     ///
-    /// Call it once: you get the goods as a newline-delimited page.
+    /// Call it once: you get the goods as a newline-delimited feed.
     /// Call it again: `None`. Go home. The snack cabinet is empty. 🍪
     ///
     /// ⚠️ What's the DEAL with `has_yielded`? It's a boolean. A single boolean.
     /// This is the entire state machine. One field. One decision. One life.
     /// Seinfeld would have a bit about this and honestly he'd be right.
     ///
-    /// 🧠 Knowledge graph: the source joins its 4 docs with `\n` into one raw page.
-    /// The Composer+Transformer downstream will split and process them.
+    /// 🧠 Knowledge graph: the source joins its 4 docs with `\n` into one raw feed.
+    /// The Manifold+Caster downstream will split and process them.
     /// Source is ignorant. Source is bliss. Source is a faucet. 🚰
     async fn next_page(&mut self) -> Result<Option<String>> {
         if self.has_yielded {
@@ -59,8 +59,8 @@ impl Source for InMemorySource {
 
         self.has_yielded = true;
 
-        // 📦 The sacred test corpus. Four docs, joined with newlines into one raw page.
-        // 🧠 Sources return raw pages now — the Composer handles doc splitting.
+        // 📦 The sacred test corpus. Four docs, joined with newlines into one raw feed.
+        // 🧠 Sources return raw feeds now — the Manifold handles doc splitting.
         // "I don't always return data, but when I do, it's newline-delimited." — This source, probably.
         let the_sacred_page = [
             r#"{"doc":1}"#,

@@ -36,12 +36,12 @@ pub struct ElasticsearchSinkConfig {
 /// 📡 The sink side of the Elasticsearch backend — pure I/O, zero buffering.
 ///
 /// `ElasticsearchSink` accepts a fully rendered NDJSON payload string and POSTs it
-/// to the `_bulk` API. That's it. No internal buffer. No transform logic.
-/// The SinkWorker upstream handles transform + binary collect + size management.
+/// to the `_bulk` API. That's it. No internal buffer. No cast logic.
+/// The Drainer upstream handles cast + binary collect + size management.
 ///
 /// 🧠 Knowledge graph: Sinks are I/O-only abstractions now. This one does HTTP POST.
 /// The FileSink does file write. The InMemorySink does Vec push.
-/// Buffering, transforming, and collecting moved to SinkWorker. Clean separation.
+/// Buffering, casting, and collecting moved to Drainer. Clean separation.
 ///
 /// Internally holds:
 /// - `client`: the HTTP muscle 💪 — reused across requests
@@ -60,7 +60,7 @@ pub struct ElasticsearchSink {
 impl Sink for ElasticsearchSink {
     /// 📡 POST the fully rendered NDJSON payload to /_bulk. Pure I/O. No buffering. No drama.
     ///
-    /// The SinkWorker upstream already transformed each doc and binary-collected them into
+    /// The Drainer upstream already cast each doc and binary-collected them into
     /// a single NDJSON payload string. We just fire it into the elastic void.
     /// "In a world where sinks had too many responsibilities... one refactor dared to simplify."
     async fn send(&mut self, payload: String) -> Result<()> {
@@ -69,11 +69,11 @@ impl Sink for ElasticsearchSink {
             payload.len()
         );
         self.submit_bulk_request(payload).await
-            .context("💀 The bulk submission stumbled at the finish line. The NDJSON was rendered with love, the SinkWorker did its job, and the HTTP layer said 'nah.' Check connectivity. Check your cluster. Check your horoscope.")?;
+            .context("💀 The bulk submission stumbled at the finish line. The NDJSON was rendered with love, the Drainer did its job, and the HTTP layer said 'nah.' Check connectivity. Check your cluster. Check your horoscope.")?;
         Ok(())
     }
 
-    /// 🗑️ Nothing to flush — we don't buffer. The SinkWorker sends complete payloads.
+    /// 🗑️ Nothing to flush — we don't buffer. The Drainer sends complete payloads.
     /// Close is a no-op. The HTTP client drops cleanly. The connections pool says goodbye.
     /// Knock knock. Who's there? Nobody. The sink is closed. Go home. 🦆
     async fn close(&mut self) -> Result<()> {

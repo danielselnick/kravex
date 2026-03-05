@@ -10,21 +10,21 @@
 #![allow(dead_code, unused_variables, unused_imports)]
 pub mod app_config;
 pub mod backends;
-pub mod composers;
+pub mod manifolds;
 pub mod progress;
-mod supervisors;
-pub mod transforms;
-pub mod transformers;
+mod foreman;
+pub mod casts;
 pub mod workers;
+
 use crate::app_config::AppConfig;
 use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSource};
 use crate::backends::file::{FileSink, FileSource};
 use crate::backends::in_mem::{InMemorySink, InMemorySource};
 use crate::backends::{SinkBackend, SourceBackend};
-use crate::supervisors::Supervisor;
+use crate::foreman::Foreman;
 use crate::app_config::{RuntimeConfig, SinkConfig, SourceConfig};
-use crate::composers::ComposerBackend;
-use crate::transforms::DocumentTransformer;
+use crate::manifolds::ManifoldBackend;
+use crate::casts::DocumentCaster;
 use anyhow::{Context, Result};
 use std::time::SystemTime;
 use tracing::info;
@@ -51,23 +51,23 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
         );
     }
 
-    // 🔄 Resolve the transform from source/sink config pair.
-    // 🧠 Knowledge graph: DocumentTransformer::from_configs() matches (source, sink) → transform.
-    // File→ES = RallyS3ToEs, File→File = Passthrough, InMemory→InMemory = Passthrough, etc.
-    let transformer =
-        DocumentTransformer::from_configs(&app_config.source_config, &app_config.sink_config);
+    // 🔄 Resolve the caster from source/sink config pair.
+    // 🧠 Knowledge graph: DocumentCaster::from_configs() matches (source, sink) → caster.
+    // File→ES = NdJsonToBulk, File→File = Passthrough, InMemory→InMemory = Passthrough, etc.
+    let caster =
+        DocumentCaster::from_configs(&app_config.source_config, &app_config.sink_config);
 
-    // 🎼 Resolve the composer from sink config.
-    // 🧠 ES/File → NdjsonComposer, InMemory → JsonArrayComposer.
-    // The Composer transforms raw pages AND assembles them into wire format. Two birds, one Cow. 🐄
-    let composer = ComposerBackend::from_sink_config(&app_config.sink_config);
+    // 🎼 Resolve the manifold from sink config.
+    // 🧠 ES/File → NdjsonManifold, InMemory → JsonArrayManifold.
+    // The Manifold casts raw feeds AND joins them into wire format. Two birds, one Cow. 🐄
+    let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
 
-    // 📏 Extract max request size from sink config for SinkWorker buffering.
+    // 📏 Extract max request size from sink config for Drainer buffering.
     let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
 
-    let supervisor = Supervisor::new(app_config.clone());
-    supervisor
-        .start_workers(source_backend, sink_backends, transformer, composer, max_request_size_bytes)
+    let foreman = Foreman::new(app_config.clone());
+    foreman
+        .start_workers(source_backend, sink_backends, caster, manifold, max_request_size_bytes)
         .await?;
 
     info!(
@@ -143,13 +143,13 @@ mod tests {
     use crate::app_config::{RuntimeConfig, SinkConfig, SourceConfig};
 
     /// 🧪 Full pipeline integration: InMemory→Passthrough→InMemory.
-    /// Four raw docs in (as one newline-delimited page), one JSON array payload out.
+    /// Four raw docs in (as one newline-delimited feed), one JSON array payload out.
     ///
-    /// 🧠 InMemory source returns one page: "{"doc":1}\n{"doc":2}\n{"doc":3}\n{"doc":4}".
-    /// Passthrough returns the entire page as one Cow::Borrowed item.
-    /// JsonArrayComposer wraps it as [page_content].
+    /// 🧠 InMemory source returns one feed: "{"doc":1}\n{"doc":2}\n{"doc":3}\n{"doc":4}".
+    /// Passthrough returns the entire feed as-is.
+    /// JsonArrayManifold wraps it as [feed_content].
     ///
-    /// 🐄 Zero-copy verification: passthrough borrows from the buffered page, no per-doc alloc.
+    /// 🐄 Zero-copy verification: passthrough borrows from the buffered feed, no per-doc alloc.
     #[tokio::test]
     async fn the_one_where_four_docs_made_it_home_safely() -> Result<()> {
         let app_config = AppConfig {
@@ -165,38 +165,38 @@ mod tests {
         let sink_inner = InMemorySink::new().await?;
         let sink = SinkBackend::InMemory(sink_inner.clone());
 
-        // 🔄 InMemory→InMemory resolves to Passthrough transform
-        let transformer = DocumentTransformer::from_configs(
+        // 🔄 InMemory→InMemory resolves to Passthrough caster
+        let caster = DocumentCaster::from_configs(
             &app_config.source_config,
             &app_config.sink_config,
         );
 
-        // 🎼 InMemory sink → JsonArrayComposer: [item,item,...]
-        let composer = ComposerBackend::from_sink_config(&app_config.sink_config);
+        // 🎼 InMemory sink → JsonArrayManifold: [item,item,...]
+        let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
 
         // 📏 Max request size from sink config
         let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
 
-        let supervisor = Supervisor::new(app_config);
-        supervisor
-            .start_workers(source, vec![sink], transformer, composer, max_request_size_bytes)
+        let foreman = Foreman::new(app_config);
+        foreman
+            .start_workers(source, vec![sink], caster, manifold, max_request_size_bytes)
             .await?;
 
-        // 📦 SinkWorker received 1 page (4 docs newline-delimited), passthrough composed into JSON array.
-        // 🧠 Passthrough treats entire page as one item → payload = '[{"doc":1}\n{"doc":2}\n{"doc":3}\n{"doc":4}]'
-        // The page content includes newlines because passthrough doesn't split — that's by design!
+        // 📦 Drainer received 1 feed (4 docs newline-delimited), passthrough joined into JSON array.
+        // 🧠 Passthrough treats entire feed as one item → payload = '[{"doc":1}\n{"doc":2}\n{"doc":3}\n{"doc":4}]'
+        // The feed content includes newlines because passthrough doesn't split — that's by design!
         let received = sink_inner.received.lock().await;
         assert_eq!(received.len(), 1, "Should have received exactly 1 payload");
 
         let the_payload = &received[0];
-        // 📄 Passthrough returns the whole page as one item, so JSON array wraps the entire page
+        // 📄 Passthrough returns the whole feed as one item, so JSON array wraps the entire feed
         let expected = format!(
             "[{}]",
             [r#"{"doc":1}"#, r#"{"doc":2}"#, r#"{"doc":3}"#, r#"{"doc":4}"#].join("\n")
         );
         assert_eq!(
             the_payload, &expected,
-            "InMemory sink should receive a JSON array wrapping the passthrough page"
+            "InMemory sink should receive a JSON array wrapping the passthrough feed"
         );
 
         Ok(())

@@ -1,34 +1,34 @@
 // ai
-//! 🎬 *[two composers walk into a bar. the dispatcher buys both a drink.]*
+//! 🎬 *[two manifolds walk into a bar. the dispatcher buys both a drink.]*
 //! *[one wants newlines. one wants brackets. the enum holds them both.]*
-//! *["In a world where payloads needed composing... one enum dared to dispatch."]*
+//! *["In a world where payloads needed joining... one enum dared to dispatch."]*
 //!
-//! 🎭 **ComposerBackend** — polymorphic dispatcher resolved from `SinkConfig`.
+//! 🎭 **ManifoldBackend** — polymorphic dispatcher resolved from `SinkConfig`.
 //!
 //! 🧠 Knowledge graph:
-//! - Same pattern as `DocumentTransformer`, `SourceBackend`, `SinkBackend`
-//! - Resolution: SinkConfig → ComposerBackend::from_sink_config() → concrete composer
-//! - ES/File → NdjsonComposer | InMemory → JsonArrayComposer
+//! - Same pattern as `DocumentCaster`, `SourceBackend`, `SinkBackend`
+//! - Resolution: SinkConfig → ManifoldBackend::from_sink_config() → concrete manifold
+//! - ES/File → NdjsonManifold | InMemory → JsonArrayManifold
 //! - The compiler monomorphizes each arm; branch prediction eliminates the match
 //!   after a couple iterations. The enum is a formality. The dispatch is basically free.
-//! - Cloning ComposerBackend is free — NdjsonComposer and JsonArrayComposer are zero-sized.
+//! - Cloning ManifoldBackend is free — NdjsonManifold and JsonArrayManifold are zero-sized.
 //!
 //! 🦆 The duck asked why we need a backend enum when we have trait objects.
 //!    We said "monomorphization." The duck left. It didn't want a lecture.
 
-use super::{Composer, JsonArrayComposer, NdjsonComposer};
+use super::{Manifold, JsonArrayManifold, NdjsonManifold};
 use crate::app_config::SinkConfig;
-use crate::transforms::DocumentTransformer;
+use crate::casts::DocumentCaster;
 use anyhow::Result;
 
 // -- ┌─────────────────────────────────────────────────────────┐
-// -- │  ComposerBackend                                        │
-// -- │  Enum → impl ComposerBackend → impl Composer → tests   │
+// -- │  ManifoldBackend                                         │
+// -- │  Enum → impl ManifoldBackend → impl Manifold → tests    │
 // -- └─────────────────────────────────────────────────────────┘
 
-/// 🎭 The polymorphic composer — wraps concrete composers, dispatches via match.
+/// 🎭 The polymorphic manifold — wraps concrete manifolds, dispatches via match.
 ///
-/// Same pattern as `DocumentTransformer`, `SourceBackend`, `SinkBackend`.
+/// Same pattern as `DocumentCaster`, `SourceBackend`, `SinkBackend`.
 /// The compiler monomorphizes each arm. Branch prediction eliminates the match
 /// after a couple iterations. The enum is a formality. The dispatch is basically free.
 ///
@@ -36,44 +36,44 @@ use anyhow::Result;
 /// is determined by where the data is going, not where it came from.
 /// ES needs NDJSON. Files need NDJSON. InMemory wants JSON arrays. Simple.
 #[derive(Debug, Clone)]
-pub enum ComposerBackend {
-    /// 📡 Newline-delimited JSON — transform + join with `\n`
-    Ndjson(NdjsonComposer),
-    /// 📦 JSON array — transform + wrap in `[`, commas, `]`
-    JsonArray(JsonArrayComposer),
+pub enum ManifoldBackend {
+    /// 📡 Newline-delimited JSON — cast + join with `\n`
+    Ndjson(NdjsonManifold),
+    /// 📦 JSON array — cast + wrap in `[`, commas, `]`
+    JsonArray(JsonArrayManifold),
 }
 
-impl ComposerBackend {
-    /// 🔧 Resolve the composer from the sink config.
+impl ManifoldBackend {
+    /// 🔧 Resolve the manifold from the sink config.
     ///
-    /// | SinkConfig      | Composer          | Format          |
+    /// | SinkConfig      | Manifold          | Format          |
     /// |-----------------|-------------------|-----------------|
-    /// | Elasticsearch   | NdjsonComposer    | `item\nitem\n`  |
-    /// | File            | NdjsonComposer    | `item\nitem\n`  |
-    /// | InMemory        | JsonArrayComposer | `[item,item]`   |
+    /// | Elasticsearch   | NdjsonManifold    | `item\nitem\n`  |
+    /// | File            | NdjsonManifold    | `item\nitem\n`  |
+    /// | InMemory        | JsonArrayManifold | `[item,item]`   |
     ///
     /// 🧠 Format follows the sink, not the source. The sink decides the wire format.
     /// This is the one true law. Do not question it. The borrow checker already has enough opinions.
     pub fn from_sink_config(sink: &SinkConfig) -> Self {
         match sink {
             // -- 📡 ES bulk requires NDJSON — action+source pairs, trailing \n
-            SinkConfig::Elasticsearch(_) => Self::Ndjson(NdjsonComposer),
+            SinkConfig::Elasticsearch(_) => Self::Ndjson(NdjsonManifold),
             // -- 📡 File sinks: NDJSON — one doc per line, trailing \n, everyone's happy
-            SinkConfig::File(_) => Self::Ndjson(NdjsonComposer),
+            SinkConfig::File(_) => Self::Ndjson(NdjsonManifold),
             // -- 📦 InMemory: JSON array — test assertions want `[doc1,doc2]` not `doc1\ndoc2\n`
-            SinkConfig::InMemory(_) => Self::JsonArray(JsonArrayComposer),
+            SinkConfig::InMemory(_) => Self::JsonArray(JsonArrayManifold),
         }
     }
 }
 
-impl Composer for ComposerBackend {
+impl Manifold for ManifoldBackend {
     #[inline]
-    fn compose(&self, pages: &[String], transformer: &DocumentTransformer) -> Result<String> {
-        // -- 🎭 Dispatch to the concrete composer — the match arm that wins is the one that deserves to
+    fn join(&self, feeds: &[String], caster: &DocumentCaster) -> Result<String> {
+        // -- 🎭 Dispatch to the concrete manifold — the match arm that wins is the one that deserves to
         // -- TODO: win the lottery, retire, replace this with a lookup table. Just kidding. This is fine.
         match self {
-            Self::Ndjson(c) => c.compose(pages, transformer),
-            Self::JsonArray(c) => c.compose(pages, transformer),
+            Self::Ndjson(m) => m.join(feeds, caster),
+            Self::JsonArray(m) => m.join(feeds, caster),
         }
     }
 }
@@ -81,11 +81,11 @@ impl Composer for ComposerBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transforms::passthrough::Passthrough;
+    use crate::casts::passthrough::Passthrough;
 
-    // -- 🔧 Passthrough transformer helper — the identity function of the transform world
-    fn passthrough_transformer() -> DocumentTransformer {
-        DocumentTransformer::Passthrough(Passthrough)
+    // -- 🔧 Passthrough caster helper — the identity function of the cast world
+    fn passthrough_caster() -> DocumentCaster {
+        DocumentCaster::Passthrough(Passthrough)
     }
 
     #[test]
@@ -99,15 +99,15 @@ mod tests {
             index: None,
             common_config: Default::default(),
         });
-        let composer = ComposerBackend::from_sink_config(&config);
-        assert!(matches!(composer, ComposerBackend::Ndjson(_)));
+        let manifold = ManifoldBackend::from_sink_config(&config);
+        assert!(matches!(manifold, ManifoldBackend::Ndjson(_)));
     }
 
     #[test]
     fn backend_the_one_where_inmemory_resolves_to_json_array() {
         let config = SinkConfig::InMemory(());
-        let composer = ComposerBackend::from_sink_config(&config);
-        assert!(matches!(composer, ComposerBackend::JsonArray(_)));
+        let manifold = ManifoldBackend::from_sink_config(&config);
+        assert!(matches!(manifold, ManifoldBackend::JsonArray(_)));
     }
 
     #[test]
@@ -117,19 +117,19 @@ mod tests {
             file_name: "output.json".into(),
             common_config: Default::default(),
         });
-        let composer = ComposerBackend::from_sink_config(&config);
-        assert!(matches!(composer, ComposerBackend::Ndjson(_)));
+        let manifold = ManifoldBackend::from_sink_config(&config);
+        assert!(matches!(manifold, ManifoldBackend::Ndjson(_)));
     }
 
     #[test]
-    fn backend_the_one_where_compose_dispatches_correctly() -> Result<()> {
-        // 🧪 ComposerBackend dispatches to the right concrete composer
-        let composer = ComposerBackend::from_sink_config(&SinkConfig::InMemory(()));
-        let pages = vec![
+    fn backend_the_one_where_join_dispatches_correctly() -> Result<()> {
+        // 🧪 ManifoldBackend dispatches to the right concrete manifold
+        let manifold = ManifoldBackend::from_sink_config(&SinkConfig::InMemory(()));
+        let feeds = vec![
             String::from(r#"{"a":1}"#),
             String::from(r#"{"b":2}"#),
         ];
-        let result = composer.compose(&pages, &passthrough_transformer())?;
+        let result = manifold.join(&feeds, &passthrough_caster())?;
         assert_eq!(result, r#"[{"a":1},{"b":2}]"#);
         Ok(())
     }
