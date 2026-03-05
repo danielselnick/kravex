@@ -58,11 +58,18 @@ impl Foreman {
     ///                                      --[ch2: payloads]--> Drainer(s) (async) --> Sink
     /// ```
     ///
-    /// The flow cascades via channel closure:
-    /// 1. Pumper finishes → closes ch1 (drops tx1)
-    /// 2. Joiners see ch1 closed → flush remaining → drop tx2
-    /// 3. All joiners' tx2 dropped → ch2 closes
-    /// 4. Drainers see ch2 closed → close sinks → exit
+    /// 🔒 Channel closure semantics (async_channel implicit close):
+    /// An async_channel closes when ALL clones of its Sender (or Receiver) are dropped.
+    /// This is refcount-based — every `.clone()` extends the channel's lifetime.
+    /// There is no single "owner" that closes the channel; the LAST drop does it.
+    /// The foreman creates both channels but is NOT a participant — it's the orchestrator.
+    /// So it must drop its copies after distributing clones to the actual workers.
+    ///
+    /// 🔄 Shutdown cascade (all driven by implicit Sender drops, no `.close()` calls):
+    /// 1. Pumper finishes → its tx1 is dropped (only Sender for ch1) → ch1 closes
+    /// 2. Joiners' recv_blocking() returns Err → flush remaining → joiner threads exit → tx2 clones dropped
+    /// 3. Last joiner's tx2 dropped → all Senders for ch2 gone → ch2 closes
+    /// 4. Drainers' recv().await returns Err → close sinks → exit
     ///
     /// "In the beginning there was main(). And main() said 'let there be workers.'
     ///  And the Foreman made it so. And it was... mostly okay." — Genesis 1:1 (Cargo edition) 🦆
@@ -90,10 +97,31 @@ impl Foreman {
             sink_backends.len()
         );
 
+        // ═══════════════════════════════════════════════════════════════════
+        // 🔒 CHANNEL OWNERSHIP CONTRACT
+        //
+        // async_channel uses refcounting: a channel stays open as long as at
+        // least one Sender (or Receiver) clone exists. The channel closes
+        // implicitly when the LAST clone is dropped — no explicit .close()
+        // needed. This means every .clone() is a commitment: "I am keeping
+        // this channel alive." The foreman creates both channels but must
+        // surrender all handles to the workers, retaining NOTHING. Otherwise
+        // a stale foreman handle prevents implicit closure → deadlock.
+        //
+        // We enforce this by:
+        //   - Moving tx1 directly into the pumper (no clone, no foreman copy)
+        //   - Dropping tx2, rx1, rx2 after distributing clones to workers
+        //
+        // The result: only workers hold channel handles. When workers exit,
+        // their handles drop, channels close, downstream workers see Err,
+        // and the pipeline cascades to shutdown. No .close() calls anywhere.
+        // Pure RAII. The borrow checker would shed a single, proud tear. 🦀
+        // ═══════════════════════════════════════════════════════════════════
+
         // 🧵 Spawn N joiners on dedicated OS threads (std::thread).
         // They do the CPU-heavy lifting: buffering raw feeds, casting, manifold join.
-        // Each gets its own clone of rx1, tx2, caster, manifold.
-        // Since casters and manifolds are zero-sized structs, cloning is cheaper than this comment. 🐄
+        // Each gets its own clone of rx1 and tx2.
+        // Casters and manifolds are zero-sized structs — cloning is cheaper than this comment. 🐄
         let mut the_joiner_thread_handles = Vec::with_capacity(the_joiner_count);
         for _ in 0..the_joiner_count {
             let joiner = workers::Joiner::new(
@@ -105,10 +133,16 @@ impl Foreman {
             );
             the_joiner_thread_handles.push(joiner.start());
         }
-        // 🗑️ Drop the foreman's copy of tx2 — otherwise ch2 never closes because
-        // the foreman holds a sender that never sends. Like having a phone but never calling.
-        // When all joiner threads finish and drop their tx2 clones, ch2 closes naturally. 📱
+
+        // 🗑️ Foreman surrenders ch2 sender and ch1 receiver.
+        // tx2: if foreman kept this, ch2 would never close (foreman's Sender outlives
+        //   the joiners → drainers hang on recv() forever → deadlock). By dropping it,
+        //   only joiner threads hold ch2 Senders. When the last joiner exits and drops
+        //   its tx2 clone, ch2 closes, and drainers see Err on recv(). 📱
+        // rx1: receivers don't affect send-side closure, but the foreman has no business
+        //   holding a receiver it will never read. Clean ownership = clean conscience. 🧹
         drop(tx2);
+        drop(rx1);
 
         // 🚰 Spawn N drainers on tokio — thin async relays from ch2 to sinks.
         // Each drainer gets its own sink and a clone of rx2.
@@ -118,9 +152,16 @@ impl Foreman {
             the_async_worker_handles.push(drainer.start());
         }
 
-        // 🚰 Spawn the pumper — it reads from the source and fills ch1 with raw feeds.
-        // The pumper is the DJ of this party: it sets the tempo. When it stops, everyone goes home.
-        let pumper = workers::Pumper::new(tx1.clone(), source_backend);
+        // 🗑️ Foreman surrenders ch2 receiver — only drainer tasks hold rx2 clones now.
+        // Same reasoning: foreman is orchestrator, not participant. No stale handles. 🧹
+        drop(rx2);
+
+        // 🚰 Spawn the pumper — gets tx1 by MOVE (not clone).
+        // tx1 is moved directly into the pumper, so no foreman copy exists.
+        // When the pumper's async task exits (EOF from source), tx1 drops,
+        // and since it's the ONLY Sender for ch1, ch1 closes implicitly.
+        // No .close() call needed — RAII handles it. Like a self-closing door. 🚪
+        let pumper = workers::Pumper::new(tx1, source_backend);
         the_async_worker_handles.push(pumper.start());
 
         // ⏳ Wait for all async workers (pumper + drainers).
