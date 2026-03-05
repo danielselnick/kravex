@@ -1,6 +1,6 @@
 # Summary
 
-Core library for kravex — the data migration engine. Raw pages, Cow-powered zero-copy, Composer-based payload assembly, and a clean config ownership model.
+Core library for kravex — the data migration engine. 3-stage pipeline: Pumper (async I/O) → Joiner (sync CPU, std::thread) → Drainer (async I/O). Cow-powered zero-copy, Manifold-based payload assembly, and a clean config ownership model.
 
 # Description
 
@@ -21,21 +21,28 @@ Core library for kravex — the data migration engine. Raw pages, Cow-powered ze
   - `backends/elasticsearch/{elasticsearch_source,elasticsearch_sink}` — ES backend impls
   - `backends/file/{file_source,file_sink}` — file backend impls
   - `backends/in_mem/{in_mem_source,in_mem_sink}` — in-memory test backend
-  - `composers` — `Composer` trait + `NdjsonComposer`/`JsonArrayComposer` + `ComposerBackend` dispatcher
-  - `collectors` — `PayloadCollector` trait + `NdjsonCollector`/`JsonArrayCollector` + `CollectorBackend` dispatcher
-  - `transforms` — `Transform` trait + `DocumentTransformer` enum (Cow-based)
-  - `supervisors` — pipeline orchestration (Supervisor + workers); no config submodule — config lives in `app_config`
-  - `common` — `Hit`/`HitBatch` (legacy dead code)
+  - `casts` — `Caster` trait + `DocumentCaster` enum (NdJsonToBulk, Passthrough) + from_configs resolver
+  - `manifolds` — `Manifold` trait + `ManifoldBackend` enum (NdjsonManifold, JsonArrayManifold)
+  - `workers` — `Worker` trait, `Pumper` (async), `Joiner` (std::thread), `Drainer` (async)
+  - `foreman` — pipeline orchestration (Foreman spawns+joins all workers)
   - `progress` — TUI metrics
 
-## Pipeline Architecture (current — Raw Pages + Composer)
+## Pipeline Architecture (current — 3-stage: Pumper → Joiner → Drainer)
 ```
 Source.next_page() → Option<String> (raw page)
-  → channel(String)
-  → SinkWorker buffers Vec<String> (by byte size threshold)
-  → Composer.compose(&buffer, &transformer) → final payload String
-  → Sink.send(payload)
+  → ch1 (async_channel, bounded, MPMC)
+  → Joiner(s) on std::thread (recv_blocking → buffer → manifold.join(buffer, caster) → send_blocking)
+  → ch2 (async_channel, bounded, MPMC)
+  → Drainer(s) on tokio (recv → sink.send)
+  → Sink (HTTP POST, file write, memory push)
 ```
+
+### Why 3 stages?
+- **Pumper**: async — blocked on I/O (source reads, HTTP, file)
+- **Joiner**: sync std::thread — CPU-bound (JSON parsing, casting, manifold join, buffering)
+- **Drainer**: async — blocked on I/O (sink writes, HTTP, file)
+
+Separating CPU work onto OS threads prevents starving tokio's async I/O workers.
 
 ## Module Dependency Graph
 ```
@@ -45,83 +52,76 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
   │         backends ──► backends/common_config (CommonSinkConfig, CommonSourceConfig)
   │              │              ↑ (imported by backend-specific configs to embed)
   │              ▼
-  │         supervisors ──► workers (SourceWorker, SinkWorker)
-  │              │                │
-  ├──► transforms ◄───────────────┘ (called by Composer)
-  └──► composers  ◄── SinkWorker (holds ComposerBackend + DocumentTransformer)
-
+  │         foreman ──► workers (Pumper, Joiner, Drainer)
+  │              │         │         │
+  ├──► casts    ◄──────────┘ (Joiner holds DocumentCaster)
+  └──► manifolds ◄─────────┘ (Joiner holds ManifoldBackend)
 ```
 
 # Key Concepts
 
-- **Sources return `Option<String>`**: one raw page per call, content uninterpreted. `None` = EOF. Source is maximally ignorant — it's a faucet, not a chef.
-- **Sinks are I/O-only**: accept a fully rendered payload `String`, send it (HTTP POST, file write, memory push)
-- **SinkWorker buffers raw pages** by byte size, flushes via Composer when buffer approaches `max_request_size_bytes`
-- **Transform** (`DocumentTransformer`): per-page format conversion. Returns `Vec<Cow<str>>` items:
-  - `Cow::Borrowed` = zero-copy passthrough (no allocation!)
-  - `Cow::Owned` = format conversion (Rally→ES bulk, etc.)
-- **Composer** (`ComposerBackend`): transform + assemble in one shot:
-  - ES/File → `NdjsonComposer`: items joined with `\n`, trailing `\n`
-  - InMemory → `JsonArrayComposer`: `[item,item,item]`, zero serde
+- **Sources return `Option<String>`**: one raw page per call, content uninterpreted. `None` = EOF
+- **Sinks are I/O-only**: accept a fully rendered payload `String`, send it
+- **Joiner buffers raw pages** by byte size, flushes via Manifold when buffer approaches `max_request_size_bytes`
+- **Caster** (`DocumentCaster`): per-page format conversion (NdJsonToBulk, Passthrough)
+- **Manifold** (`ManifoldBackend`): cast + assemble in one shot:
+  - ES/File → `NdjsonManifold`: items joined with `\n`, trailing `\n`
+  - InMemory → `JsonArrayManifold`: `[item,item,item]`, zero serde
 - **All abstractions follow the same pattern**: trait → concrete impls → enum dispatcher → from_config resolver
-- **Zero-copy passthrough**: NDJSON→NDJSON scenarios (file-to-file) — Cow borrows from buffered pages, no per-doc allocation
-
-## Architecture Pattern (used by backends, transforms, composers)
-```
-┌──────────────────┐   ┌──────────────────────┐   ┌─────────────────────┐
-│ trait Source      │   │ trait Transform       │   │ trait Composer      │
-│   fn next_page() │   │   fn transform(&str)  │   │   fn compose(pages) │
-│   → Option<Str>  │   │   → Vec<Cow<str>>     │   │   → String          │
-└────────┬─────────┘   └────────┬─────────────┘   └────────┬────────────┘
-         │                      │                           │
-┌────────┴─────────┐   ┌────────┴─────────────┐   ┌────────┴────────────┐
-│ FileSource       │   │ RallyS3ToEs          │   │ NdjsonComposer      │
-│ InMemorySource   │   │ Passthrough          │   │ JsonArrayComposer   │
-│ ElasticsearchSrc │   │                      │   │                     │
-└────────┬─────────┘   └────────┬─────────────┘   └────────┬────────────┘
-         │                      │                           │
-┌────────┴─────────┐   ┌────────┴─────────────┐   ┌────────┴────────────┐
-│ enum SourceBknd  │   │ enum DocTransformer   │   │ enum ComposerBknd   │
-│   match dispatch │   │   match dispatch      │   │   match dispatch    │
-└──────────────────┘   └──────────────────────┘   └─────────────────────┘
-```
+- **Joiner threads**: CPU-bound work on `std::thread`, not tokio. Uses `recv_blocking()`/`send_blocking()` on async_channel
+- **Drainer is thin**: just recv from ch2, send to sink. No buffering, no casting, no manifold
 
 ## Resolution Tables
 
-### Transform Resolution (from SourceConfig × SinkConfig)
+### Caster Resolution (from SourceConfig × SinkConfig)
 | SourceConfig | SinkConfig | Resolves to |
 |---|---|---|
-| File | Elasticsearch | `RallyS3ToEs` — splits page by `\n`, transforms each doc |
-| File | File | `Passthrough` — returns entire page as `Cow::Borrowed` |
+| File | Elasticsearch | `NdJsonToBulk` |
+| File | File | `Passthrough` |
 | InMemory | InMemory | `Passthrough` |
 | Elasticsearch | File | `Passthrough` |
-| other | other | `panic!` at resolve time |
 
-### Composer Resolution (from SinkConfig)
-| SinkConfig | Composer | Wire Format |
+### Manifold Resolution (from SinkConfig)
+| SinkConfig | Manifold | Wire Format |
 |---|---|---|
-| Elasticsearch | `NdjsonComposer` | `item\nitem\n` |
-| File | `NdjsonComposer` | `item\nitem\n` |
-| InMemory | `JsonArrayComposer` | `[item,item]` |
+| Elasticsearch | `NdjsonManifold` | `item\nitem\n` |
+| File | `NdjsonManifold` | `item\nitem\n` |
+| InMemory | `JsonArrayManifold` | `[item,item]` |
 
 ## Responsibility Boundaries
 
 | Component | Responsibility |
 |---|---|
 | Source | Read raw page, return `Option<String>`. Format-ignorant. |
-| Channel | Carry `String` (raw pages) between workers |
-| SinkWorker | Buffer pages by byte size, flush via Composer |
-| Composer | Transform pages (via Transformer) + assemble wire-format payload |
-| Transform | Per-page → `Vec<Cow<str>>` items (Borrowed=passthrough, Owned=conversion) |
+| ch1 | Carry `String` (raw pages) between Pumper and Joiners. MPMC bounded. |
+| Joiner | Buffer pages by byte size, flush via `manifold.join(buffer, caster)`. CPU-bound on std::thread. |
+| ch2 | Carry `String` (assembled payloads) between Joiners and Drainers. MPMC bounded. |
+| Drainer | Pure I/O relay: recv payload from ch2, send to sink. Async on tokio. |
+| Caster | Per-page format conversion (NdJsonToBulk, Passthrough) |
+| Manifold | Cast all buffered feeds + assemble wire-format payload |
 | Sink | Pure I/O: HTTP POST, file write, memory push |
+
+## RuntimeConfig Fields
+
+| Field | Default | Description |
+|---|---|---|
+| `queue_capacity` | 10 | ch1 bounded capacity (pumper → joiners) |
+| `payload_channel_capacity` | 10 | ch2 bounded capacity (joiners → drainers) |
+| `sink_parallelism` | 1 | Number of drainer/sink workers |
+| `joiner_parallelism` | cpu_count - 1 (min 1) | Number of joiner threads (std::thread) |
 
 # Notes for future reference
 
 - POC/MVP stage — API surface is unstable
-- `Hit`/`HitBatch` in `common.rs` are now dead code — pipeline uses raw pages throughout
-- Rally S3 transform splits page by `\n`, transforms each doc individually, strips 6 top-level metadata fields; nested refs survive
+- Joiner threads use `std::thread::spawn`, not `tokio::task::spawn_blocking` — full control over OS threads
+- Joiner does NOT implement the `Worker` trait (which returns `tokio::task::JoinHandle`); has its own `start()` → `std::thread::JoinHandle`
+- Foreman manages both async (tokio JoinHandle) and sync (std::thread JoinHandle) workers
+- Pipeline cascade: pumper done → ch1 closes → joiners flush+exit → ch2 closes → drainers exit
+- `BUFFER_EPSILON_BYTES` = 64 KiB headroom; lives in joiner.rs now (moved from drainer.rs)
+- Casters and manifolds are zero-sized structs — cloning per-joiner is free
+- `SinkConfig::max_request_size_bytes()` helper is on `SinkConfig` in `app_config.rs`
+- **Config ownership**: `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs`
 - ES bulk action line includes `_id` only; `_index`/`routing` set by sink URL
-- Passthrough doesn't validate or split — returns entire page as one `Cow::Borrowed` item
 - `escape_json_string()` avoids serde round-trip for action line construction
 - `channel_data.rs` still empty — to be removed
 - ES sink no longer buffers — SinkWorker handles all buffering via byte-size threshold + epsilon
@@ -135,6 +135,8 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 - `SinkConfig::max_request_size_bytes()` helper is now on `SinkConfig` in `app_config.rs`
 - **Config ownership**: `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs` (re-exported from `backends`)
 - `supervisors/config.rs` — **deleted**. No backwards-compat shim remains. All callers updated.
+- **3-stage pipeline**: Pumper (async) → ch1 → Joiner(s) (std::thread, CPU-bound: buffer+cast+join) → ch2 → Drainer(s) (async, thin I/O relay). `joiner_parallelism` and `payload_channel_capacity` in RuntimeConfig.
+- S3 source backend not yet implemented
 
 # Aggregated Context Memory Across Sessions for Current and Future Use
 
@@ -147,6 +149,7 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 - v6-v9 backend file splits: separated backend implementations into dedicated files with re-export shims
 - v10 raw pages + composers (current): Source returns `Option<String>` (raw page), Transform returns `Vec<Cow<str>>` (zero-copy), Composer replaces Collector (transform+assemble in one shot), SinkWorker buffers by byte size. 31 tests passing.
 - v11 config migration (complete): `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs`; `supervisors/config.rs` deleted; all callers updated. 31 tests passing.
-- v12 buffered chunk reading + tests + benchmarks (current): FileSource reads 128 KiB chunks via raw `tokio::fs::File` (no BufReader), scans for newlines with `memchr` (SIMD-accelerated), stashes remainder bytes between `next_page()` calls. 8 unit tests (edge cases, paging, remainder). Criterion benchmarks: **~1.09 GiB/s** buffered vs ~196 MiB/s read_line (**5.7x throughput**), **~9.97M docs/s** vs ~2.38M docs/s (**4.2x docs/s**). 36 tests passing.
-- v12 elasticsearch sink tests: 21 unit tests added via wiremock mock HTTP server. Covers constructor (ping, index check, auth), bulk POST (success, 4xx/5xx, headers, body integrity), close(), edge cases (trailing slashes, empty payloads). ElasticsearchSink tests cover: auth priority (ApiKey > Basic), Content-Type validation, payload integrity, trailing slash handling, close() no-op.
+- v12 buffered chunk reading + tests + benchmarks: FileSource reads 128 KiB chunks via raw `tokio::fs::File` (no BufReader), scans for newlines with `memchr` (SIMD-accelerated), stashes remainder bytes between `next_page()` calls. 8 unit tests. Criterion benchmarks: **~1.09 GiB/s** buffered vs ~196 MiB/s read_line (**5.7x throughput**), **~9.97M docs/s** vs ~2.38M docs/s (**4.2x docs/s**). 36 tests passing.
+- v12 elasticsearch sink tests: 21 unit tests via wiremock. Covers constructor, bulk POST, close(), edge cases.
+- v12 joiner threads: 3-stage pipeline — Pumper (async) → ch1 → Joiner(s) (std::thread, CPU-bound) → ch2 → Drainer(s) (async, thin I/O relay). Drainer simplified to recv+send.
 - S3 source backend not yet implemented

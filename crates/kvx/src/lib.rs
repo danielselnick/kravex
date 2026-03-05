@@ -155,7 +155,9 @@ mod tests {
         let app_config = AppConfig {
             runtime: RuntimeConfig {
                 queue_capacity: 10,
+                payload_channel_capacity: 10,
                 sink_parallelism: 1,
+                joiner_parallelism: 1,
             },
             source_config: SourceConfig::InMemory(()),
             sink_config: SinkConfig::InMemory(()),
@@ -182,7 +184,8 @@ mod tests {
             .start_workers(source, vec![sink], caster, manifold, max_request_size_bytes)
             .await?;
 
-        // 📦 Drainer received 1 feed (4 docs newline-delimited), passthrough joined into JSON array.
+        // 📦 Joiner received 1 feed (4 docs newline-delimited), passthrough-cast and joined into JSON array.
+        // Joiner buffers raw feeds → manifold.join(buffer, caster) → payload on ch2 → Drainer relays to sink.
         // 🧠 Passthrough treats entire feed as one item → payload = '[{"doc":1}\n{"doc":2}\n{"doc":3}\n{"doc":4}]'
         // The feed content includes newlines because passthrough doesn't split — that's by design!
         let received = sink_inner.received.lock().await;

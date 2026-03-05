@@ -34,19 +34,31 @@ use tracing::info;
 /// immediately explode on first run, ambitious enough to migrate actual data. 🦆
 #[derive(Debug, Deserialize, Clone)]
 pub struct RuntimeConfig {
-    /// 📬 Bounded channel capacity — how many raw pages buffer between source and sink workers
+    /// 📬 Bounded channel capacity for ch1 (pumper → joiners) — raw feeds in transit 🚚
     #[serde(default = "default_queue_capacity", alias = "channel_size")]
     pub queue_capacity: usize,
+    /// 📬 Bounded channel capacity for ch2 (joiners → drainers) — assembled payloads in transit 🚛
+    /// Separate from queue_capacity because payloads are larger than raw feeds —
+    /// think of ch1 as the loading dock and ch2 as the dispatch bay 🏗️
+    #[serde(default = "default_payload_channel_capacity")]
+    pub payload_channel_capacity: usize,
     /// 🧵 How many sink workers run in parallel — more lanes, more throughput, more debugging
     #[serde(default = "default_sink_parallelism", alias = "num_sink_workers")]
     pub sink_parallelism: usize,
+    /// 🧵 How many joiner threads to spawn for CPU-bound casting+joining work.
+    /// Defaults to (cpu_count - 1, minimum 1) because we're generous enough to leave
+    /// one core for the OS, the async runtime, and whatever else wants to live. 🦆
+    #[serde(default = "default_joiner_parallelism", alias = "num_joiner_workers")]
+    pub joiner_parallelism: usize,
 }
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             queue_capacity: default_queue_capacity(),
+            payload_channel_capacity: default_payload_channel_capacity(),
             sink_parallelism: default_sink_parallelism(),
+            joiner_parallelism: default_joiner_parallelism(),
         }
     }
 }
@@ -61,6 +73,23 @@ fn default_queue_capacity() -> usize {
 // -- Ancient proverb: he who spawns eight writers before breakfast, debugs until dinner.
 fn default_sink_parallelism() -> usize {
     1
+}
+
+// 📬 Payload channel (ch2, joiners → drainers): same default as ch1. Assembled payloads are
+// chunkier than raw feeds, so a smaller buffer is fine. Like a VIP line at the club — fewer
+// people, more velvet rope per capita. 🦆
+fn default_payload_channel_capacity() -> usize {
+    10
+}
+
+// 🧵 Joiner threads: cpu_count - 1, because leaving one core for the OS and tokio is the
+// polite thing to do. Like leaving one slice of pizza for the next person.
+// Nobody does it, but we pretend we would. Minimum 1 because 0 joiners means 0 progress
+// and that's called a government agency.
+fn default_joiner_parallelism() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().saturating_sub(1).max(1))
+        .unwrap_or(1)
 }
 
 // ============================================================

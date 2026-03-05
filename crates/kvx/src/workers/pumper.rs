@@ -61,8 +61,12 @@ impl Worker for Pumper {
                         self.tx.send(feed).await?;
                     }
                     None => {
-                        debug!("🏁 Pumper: None = EOF. Closing channel. The well is dry.");
-                        self.tx.close();
+                        // 🏁 EOF — source is exhausted. Just break out of the loop.
+                        // tx drops when the async block exits, which implicitly closes ch1
+                        // (this is the ONLY Sender — foreman moved it here, no clones).
+                        // No .close() needed — RAII does the work. Like clocking out by
+                        // walking away. The channel knows. 💤
+                        debug!("🏁 Pumper: None = EOF. The well is dry. tx will drop on exit.");
                         break;
                     }
                 }
