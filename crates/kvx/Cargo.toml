@@ -17,3 +17,11 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 indicatif = { workspace = true }
 comfy-table = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+tempfile = { workspace = true }
+
+[[bench]]
+name = "file_source_bench"
+harness = false

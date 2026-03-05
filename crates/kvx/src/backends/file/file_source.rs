@@ -283,3 +283,228 @@ impl Source for FileSource {
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  🧪 TESTS — "Previously on FileSource: the buffered chunk saga"
+// ═══════════════════════════════════════════════════════════════════
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    // -- 🧪 test helper: conjures a FileSource from raw string content and custom batch limits.
+    // -- like a test fixture factory, but with more existential dread about temp file lifetimes.
+    /// 🔧 Summons a FileSource from thin air (and a temp file).
+    /// Returns the source AND the temp file handle — because if the temp file drops,
+    /// the file vanishes like my motivation on a Monday morning. 💀
+    async fn summon_file_source(
+        content: &str,
+        max_docs: usize,
+        max_bytes: usize,
+    ) -> (FileSource, NamedTempFile) {
+        // -- 📁 write content to a temp file that self-destructs on drop (very Mission Impossible 🕵️)
+        let mut tmp = NamedTempFile::new().expect("💀 Failed to create temp file. The OS has forsaken us.");
+        tmp.write_all(content.as_bytes())
+            .expect("💀 Failed to write test content. The disk is either full or haunted.");
+        tmp.flush()
+            .expect("💀 Flush failed. The bytes are stuck in the pipe like a hairball. 🐱");
+
+        let path = tmp.path().to_str().unwrap().to_string();
+        let config = FileSourceConfig {
+            file_name: path,
+            common_config: CommonSourceConfig {
+                max_batch_size_docs: max_docs,
+                max_batch_size_bytes: max_bytes,
+            },
+        };
+        let source = FileSource::new(config)
+            .await
+            .expect("💀 FileSource::new failed on a temp file. That's a new low.");
+        (source, tmp)
+    }
+
+    // -- 🧪 helper: drains all pages from a source and returns them as a Vec
+    // -- because manually calling next_page() in a loop is beneath us (barely)
+    /// 🔄 Drains every page from the source until EOF.
+    /// Returns all non-None pages in order. Like squeezing a tube of toothpaste
+    /// until nothing comes out. 🦷
+    async fn drain_all_pages(source: &mut FileSource) -> Result<Vec<String>> {
+        // -- 🦆 this function exists because copy-pasting while loops is a code smell
+        let mut pages = Vec::new();
+        while let Some(page) = source.next_page().await? {
+            pages.push(page);
+        }
+        Ok(pages)
+    }
+
+    #[tokio::test]
+    async fn the_one_where_three_lines_come_home_in_one_feed() -> Result<()> {
+        // -- 🧪 basic happy path: small file, no limits hit, everything in one page
+        let (mut source, _tmp) =
+            summon_file_source("line1\nline2\nline3\n", 10_000, 10 * 1024 * 1024).await;
+
+        let page1 = source.next_page().await?;
+        assert_eq!(
+            page1,
+            Some("line1\nline2\nline3".to_string()),
+            "💀 Expected all three lines in one feed, got something else. The vibes are off."
+        );
+
+        let page2 = source.next_page().await?;
+        assert_eq!(
+            page2, None,
+            "💀 Expected None (EOF), but the source kept talking. It doesn't know when to stop."
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_one_where_doc_count_limit_rations_the_buffet() -> Result<()> {
+        // -- 🧪 10 docs, max 3 per page → pages of 3, 3, 3, 1, then None
+        let content: String = (0..10).map(|i| format!("doc{i}\n")).collect();
+        let (mut source, _tmp) = summon_file_source(&content, 3, 10 * 1024 * 1024).await;
+
+        let pages = drain_all_pages(&mut source).await?;
+
+        // -- 🎯 verify page count: ceil(10/3) = 4 pages
+        assert_eq!(pages.len(), 4, "💀 Expected 4 pages (3+3+3+1), got {}", pages.len());
+
+        // -- 🎯 verify doc counts per page
+        let doc_counts: Vec<usize> = pages.iter().map(|p| p.split('\n').count()).collect();
+        assert_eq!(
+            doc_counts,
+            vec![3, 3, 3, 1],
+            "💀 Doc distribution across pages is wrong. The buffet rations are off."
+        );
+
+        // -- ✅ verify total content integrity — no docs lost in the mail
+        let all_docs: String = pages.join("\n");
+        let expected: String = (0..10).map(|i| format!("doc{i}")).collect::<Vec<_>>().join("\n");
+        assert_eq!(all_docs, expected, "💀 Total content mismatch. Some docs went AWOL.");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_one_where_byte_limit_chops_the_feed() -> Result<()> {
+        // -- 🧪 5 lines of "aaaaaaaaaa" (10 bytes each), max_bytes=25
+        // -- first page: 2 docs (10 + 1 + 10 = 21 bytes, next would be 32 > 25)
+        // -- actually the limit check is >= so let's verify empirically
+        let content = "aaaaaaaaaa\nbbbbbbbbbb\ncccccccccc\ndddddddddd\neeeeeeeeee\n";
+        let (mut source, _tmp) = summon_file_source(content, 10_000, 25).await;
+
+        let pages = drain_all_pages(&mut source).await?;
+
+        // -- 🎯 verify we got multiple pages (byte limit forced splits)
+        assert!(
+            pages.len() > 1,
+            "💀 Expected multiple pages due to byte limit, got {} page(s). The chopper is broken.",
+            pages.len()
+        );
+
+        // -- ✅ verify all 5 docs survived the chopping
+        let total_docs: usize = pages.iter().map(|p| p.split('\n').count()).sum();
+        assert_eq!(
+            total_docs, 5,
+            "💀 Expected 5 total docs across all pages, got {total_docs}. Some bytes went missing."
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_one_where_the_file_is_empty_and_so_is_my_soul() -> Result<()> {
+        // -- 🧪 empty file → immediate None. Nothing to see here. Like my bank account.
+        let (mut source, _tmp) = summon_file_source("", 10_000, 10 * 1024 * 1024).await;
+
+        let page = source.next_page().await?;
+        assert_eq!(
+            page, None,
+            "💀 Empty file should return None immediately. The void stares back, but silently."
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_one_where_no_trailing_newline_still_delivers() -> Result<()> {
+        // -- 🧪 file ends without \n — last line should still be captured as a doc.
+        // -- like a sentence without a period. It's still a sentence
+        let (mut source, _tmp) =
+            summon_file_source("alpha\nbeta\ngamma", 10_000, 10 * 1024 * 1024).await;
+
+        let page = source.next_page().await?;
+        assert_eq!(
+            page,
+            Some("alpha\nbeta\ngamma".to_string()),
+            "💀 Missing trailing newline should not eat the last doc. gamma deserves better."
+        );
+
+        let eof = source.next_page().await?;
+        assert_eq!(eof, None, "💀 Expected EOF after all docs consumed.");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_one_where_windows_line_endings_get_deported() -> Result<()> {
+        // -- 🧪 \r\n line endings → \r stripped from each line. No carriage returns in our house.
+        // -- "Give me your tired, your poor, your \\r\\n endings yearning to be \\n" 🗽
+        let (mut source, _tmp) =
+            summon_file_source("hello\r\nworld\r\n", 10_000, 10 * 1024 * 1024).await;
+
+        let page = source.next_page().await?;
+        assert_eq!(
+            page,
+            Some("hello\nworld".to_string()),
+            "💀 \\r\\n should be stripped to \\n. Windows line endings are not welcome here."
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_one_where_empty_lines_are_ghosted() -> Result<()> {
+        // -- 🧪 empty lines between docs should be silently skipped
+        // -- they add nothing to the conversation, like reply-all emails
+        let (mut source, _tmp) =
+            summon_file_source("a\n\n\nb\n\nc\n", 10_000, 10 * 1024 * 1024).await;
+
+        let page = source.next_page().await?;
+        assert_eq!(
+            page,
+            Some("a\nb\nc".to_string()),
+            "💀 Empty lines should be ghosted. Only real docs make it to the feed."
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_one_where_remainder_carries_its_weight_across_pages() -> Result<()> {
+        // -- 🧪 10 docs split across pages via doc limit. Verify ZERO data loss across
+        // -- page boundaries — the remainder buffer must faithfully carry leftover bytes.
+        // -- This is the trust-fall exercise of buffered I/O. 🤝
+        let lines: Vec<String> = (0..10)
+            .map(|i| format!("{{\"id\":{i},\"name\":\"doc_{i}\"}}"))
+            .collect();
+        let content = lines.join("\n") + "\n";
+        let (mut source, _tmp) = summon_file_source(&content, 4, 10 * 1024 * 1024).await;
+
+        let pages = drain_all_pages(&mut source).await?;
+
+        // -- 🎯 reconstruct full content from pages and compare to original
+        let reconstructed = pages.join("\n");
+        let expected = lines.join("\n");
+        assert_eq!(
+            reconstructed, expected,
+            "💀 Data integrity violation across page boundaries! \
+            The remainder buffer dropped the ball. This is a trust-fall failure."
+        );
+
+        // -- ✅ verify correct page structure (4 + 4 + 2)
+        let doc_counts: Vec<usize> = pages.iter().map(|p| p.split('\n').count()).collect();
+        assert_eq!(
+            doc_counts,
+            vec![4, 4, 2],
+            "💀 Page structure should be [4, 4, 2] with max_docs=4 and 10 docs."
+        );
+        Ok(())
+    }
+}
