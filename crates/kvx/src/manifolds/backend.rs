@@ -18,8 +18,9 @@
 
 use super::{Manifold, JsonArrayManifold, NdjsonManifold};
 use crate::config::SinkConfig;
-use crate::casts::DocumentCaster;
+use crate::{Entry, Payload};
 use anyhow::Result;
+use std::collections::VecDeque;
 
 // -- ┌─────────────────────────────────────────────────────────┐
 // -- │  ManifoldBackend                                         │
@@ -82,12 +83,12 @@ impl ManifoldBackend {
 
 impl Manifold for ManifoldBackend {
     #[inline]
-    fn join(&self, feeds: &[String], caster: &DocumentCaster) -> Result<String> {
+    fn join(&self, entries: &mut VecDeque<Entry>) -> Result<Payload> {
         // -- 🎭 Dispatch to the concrete manifold — the match arm that wins is the one that deserves to
         // -- TODO: win the lottery, retire, replace this with a lookup table. Just kidding. This is fine.
         match self {
-            Self::Ndjson(m) => m.join(feeds, caster),
-            Self::JsonArray(m) => m.join(feeds, caster),
+            Self::Ndjson(m) => m.join(entries),
+            Self::JsonArray(m) => m.join(entries),
         }
     }
 }
@@ -95,12 +96,6 @@ impl Manifold for ManifoldBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::casts::passthrough::Passthrough;
-
-    // -- 🔧 Passthrough caster helper — the identity function of the cast world
-    fn passthrough_caster() -> DocumentCaster {
-        DocumentCaster::Passthrough(Passthrough)
-    }
 
     #[test]
     fn backend_the_one_where_es_config_resolves_to_ndjson() {
@@ -139,12 +134,12 @@ mod tests {
     fn backend_the_one_where_join_dispatches_correctly() -> Result<()> {
         // 🧪 ManifoldBackend dispatches to the right concrete manifold
         let manifold = ManifoldBackend::from_sink_config(&SinkConfig::InMemory(()));
-        let feeds = vec![
-            String::from(r#"{"a":1}"#),
-            String::from(r#"{"b":2}"#),
-        ];
-        let result = manifold.join(&feeds, &passthrough_caster())?;
-        assert_eq!(result, r#"[{"a":1},{"b":2}]"#);
+        let mut entries = VecDeque::from(vec![
+            Entry(r#"{"a":1}"#.to_string()),
+            Entry(r#"{"b":2}"#.to_string()),
+        ]);
+        let result = manifold.join(&mut entries)?;
+        assert_eq!(*result, r#"[{"a":1},{"b":2}]"#);
         Ok(())
     }
 }

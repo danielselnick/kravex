@@ -25,7 +25,7 @@ use crate::backends::{SinkBackend, SourceBackend};
 use crate::foreman::Foreman;
 use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
 use crate::manifolds::ManifoldBackend;
-use crate::casts::DocumentCaster;
+use crate::casts::PageToEntriesCaster;
 use crate::regulators::pressure_gauge::{FlowKnob, SinkAuth, spawn_pressure_gauge};
 use anyhow::{Context, Result};
 use std::ops::Deref;
@@ -61,7 +61,7 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     // 🧠 Knowledge graph: DocumentCaster::from_configs() matches (source, sink) → caster.
     // File→ES = NdJsonToBulk, File→File = Passthrough, InMemory→InMemory = Passthrough, etc.
     let caster =
-        DocumentCaster::from_configs(&app_config.source_config, &app_config.sink_config);
+        PageToEntriesCaster::from_configs(&app_config.source_config, &app_config.sink_config);
 
     // 🎼 Resolve the manifold from sink config.
     // 🧠 ES/File → NdjsonManifold, InMemory → JsonArrayManifold.
@@ -232,7 +232,7 @@ impl From<String> for Page {
     }
 }
 
-/// 📦 A fully assembled, wire-ready payload — the final form before I/O.
+// 📦 A fully assembled, wire-ready payload — the final form before I/O.
 #[derive(Debug, PartialEq)]
 pub struct Payload(pub String);
 
@@ -256,6 +256,7 @@ impl PartialEq<&str> for Payload {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct Entry(pub String);
 impl Deref for Entry {
     type Target = String;
@@ -310,7 +311,7 @@ mod tests {
         let sink = SinkBackend::InMemory(sink_inner.clone());
 
         // 🔄 InMemory→InMemory resolves to Passthrough caster
-        let caster = DocumentCaster::from_configs(
+        let caster = PageToEntriesCaster::from_configs(
             &app_config.source_config,
             &app_config.sink_config,
         );

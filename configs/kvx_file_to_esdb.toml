@@ -1,23 +1,108 @@
-# kvx_file_to_esdb.toml — file source, Elasticsearch sink.
-# The benchmark config. The one that makes graphs go up.
-# NOAA weather data into Elasticsearch because weather is a solved problem
-# and yet somehow still unpredictable. Like this codebase. 🌩️
-# 🦆
-
-# [runtime]
-# joiner_parallelism = (num cpus) - 1
-# pumper_to_joiner_capacity = (joiner_parallelism) * 4
+# kvx_file_to_esdb.toml — Complete Reference Configuration
+# File source → Elasticsearch sink. Every config field documented.
 #
-# # sink_parallelism = 8
+# 🔧 Config loading: TOML merged with KVX_* env vars (env wins on conflicts).
+#    Powered by Figment. No manual parsing. No regrets. 🦆
+#
+# 📐 TOML NESTING RULES (tribal knowledge, commit to memory):
+#   Source common_config → NOT flattened → needs [source_config.*.common_config] sub-table
+#   Sink   common_config → IS  flattened → max_request_size_bytes at same level as url/file_name
+#
+# 📐 DEFAULT BEHAVIOR (the dual-default trap):
+#   Source common_config:
+#     Section ABSENT  → Default::default() kicks in: 1,000 docs / 1 MiB
+#     Section PRESENT → serde field defaults kick in: 10,000 docs / 10 MiB
+#     (yes, these differ. yes, it's intentional. yes, we're committed to both.)
+#   Sink max_request_size_bytes:
+#     Field ABSENT → serde field default: 10 MiB
+#     (Default::default() = 64 MiB is only used programmatically, e.g. InMemory)
 
+# ============================================================
+# ⚙️  Runtime — worker counts and channel capacities
+# ============================================================
+# Defaults are CPU-aware. Example values below assume 8-core machine.
+# Formulas:
+#   joiner_parallelism         = num_cpus - 1                  (7 on 8-core)
+#   pumper_to_joiner_capacity  = joiner_parallelism × 4        (28)
+#   joiner_to_drainer_capacity = joiner_parallelism × 4        (28)
+#   sink_parallelism           = joiner_parallelism × 12       (84)
+#
+# Aliases accepted:
+#   channel_size / queue_capacity  → pumper_to_joiner_capacity
+#   payload_channel_capacity       → joiner_to_drainer_capacity
+#   num_sink_workers               → sink_parallelism
+#   num_joiner_workers             → joiner_parallelism
+
+ [runtime]
+ joiner_parallelism = 1
+ pumper_to_joiner_capacity = 1
+ joiner_to_drainer_capacity = 1
+ sink_parallelism = 8
+
+# ============================================================
+# 📂 Source — File (active)
+# ============================================================
 [source_config.File]
 file_name = "benchmark/data/geonames.json"
 
-[source_config.File.common_config]
-max_batch_size_bytes = 33554432 # 128 * 1024 is a single read chunk * 256 read Kibibyte
-max_batch_size_docs = 1000000
+[source_config]
 
+# Source common_config is a sub-table (NOT flattened).
+# Absent section → Default::default(): 1,000 docs / 1,048,576 bytes (1 MiB)
+# Present section with missing fields → serde defaults: 10,000 docs / 10,485,760 bytes (10 MiB)
+[source_config.File.common_config]
+max_batch_size_bytes = 33554432    # 32 MiB — benchmark override
+max_batch_size_docs = 1000000      # 1M docs — benchmark override
+
+# ============================================================
+# 📡 Sink — Elasticsearch (active)
+# ============================================================
+# Sink common_config is FLATTENED — max_request_size_bytes lives at this level.
 [sink_config.Elasticsearch]
 url = "http://localhost:9200"
-index = "test-123"
-max_request_size_bytes = 4194304 # 128 * 1024 is a single read chuck * 64 chunks
+index = "test-123"                      # Optional — each doc can carry its own _index
+# username = "elastic"                  # 🔒 Basic auth username
+# password = "changeme"                # 🔒 Basic auth password
+# api_key = "base64-encoded-api-key"   # 🔒 API key auth (preferred over basic)
+max_request_size_bytes = 4194304        # 4 MiB — benchmark override (serde default: 10,485,760 / 10 MiB)
+
+# ============================================================
+# 🎚️  Regulator — PID-controlled adaptive throttling (optional)
+# ============================================================
+# Absent → pipeline runs at fixed max_request_size_bytes. No PID. No drama.
+# Present → spawns manometer + flow_master, dynamically adjusts payload size
+# based on sink cluster CPU pressure.
+
+[regulator]
+ target_cpu = 75.0                     # 🎯 Target CPU % for sink cluster
+ poll_interval_secs = 1               # ⏱️  Node stats poll interval (seconds)
+ min_request_size_bytes = 131072       # 📏 PID floor: 128 KiB
+ initial_output_bytes = 512000        # 📊 Starting flow rate: 4 MiB
+
+# ============================================================
+# 📡 Source — Elasticsearch (commented-out reference)
+# ============================================================
+# [source_config.Elasticsearch]
+# url = "http://localhost:9200"
+# username = "elastic"                  # 🔒 Optional basic auth
+# password = "changeme"                # 🔒 Optional basic auth
+# api_key = "base64-encoded-api-key"   # 🔒 Optional API key auth
+#
+# # Source common_config is a sub-table (NOT flattened).
+# [source_config.Elasticsearch.common_config]
+# max_batch_size_docs = 10000           # serde default: 10,000
+# max_batch_size_bytes = 10485760       # serde default: 10,485,760 (10 MiB)
+
+# ============================================================
+# 📂 Sink — File (commented-out reference)
+# ============================================================
+# Sink common_config is FLATTENED — max_request_size_bytes at same level as file_name.
+# [sink_config.File]
+# file_name = "output.json"
+# max_request_size_bytes = 10485760     # serde default: 10 MiB
+
+# ============================================================
+# 🧪 InMemory — unit variants, test-only (commented-out reference)
+# ============================================================
+# [source_config.InMemory]              # No fields — unit variant ()
+# [sink_config.InMemory]                # No fields — unit variant ()

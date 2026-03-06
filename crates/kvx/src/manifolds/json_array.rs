@@ -14,8 +14,9 @@
 //! 🦆 The duck asked why we don't use serde. We said "trust the process." It nodded.
 
 use super::Manifold;
-use crate::casts::{DocumentCaster, Caster};
+use crate::{Entry, Payload};
 use anyhow::Result;
+use std::collections::VecDeque;
 
 // -- ┌─────────────────────────────────────────────────────────┐
 // -- │  JsonArrayManifold                                       │
@@ -38,80 +39,64 @@ pub struct JsonArrayManifold;
 
 impl Manifold for JsonArrayManifold {
     #[inline]
-    fn join(&self, feeds: &[String], caster: &DocumentCaster) -> Result<String> {
-        // -- 📦 First, cast all feeds and collect results
-        let mut all_items: Vec<String> = Vec::with_capacity(feeds.len());
-        for feed in feeds {
-            let cast_result = caster.cast(feed)?;
-            all_items.push(cast_result);
-        }
-
-        // -- 🧮 Pre-allocate: brackets(2) + sum of items + commas(max n-1).
+    fn join(&self, entries: &mut VecDeque<Entry>) -> Result<Payload> {
+        // -- 🧮 Pre-allocate: brackets(2) + sum of entries + commas(max n-1).
         // -- This is exact capacity — no growth, no realloc, no drama.
         // -- No cap this capacity math slaps fr fr 🎯
-        let commas = if all_items.is_empty() {
-            0
-        } else {
-            all_items.len() - 1
-        };
+        let commas = entries.len().saturating_sub(1);
         let estimated_size: usize =
-            2 + all_items.iter().map(|s| s.len()).sum::<usize>() + commas;
+            2 + entries.iter().map(|e| e.len()).sum::<usize>() + commas;
         let mut payload = String::with_capacity(estimated_size);
         payload.push('[');
-        for (i, item) in all_items.iter().enumerate() {
+        for (i, entry) in entries.drain(..).enumerate() {
             if i > 0 {
                 // -- 🔗 The comma: JSON's way of saying "and there's more where that came from."
-                // -- Without this comma, the JSON validator weeps. With it, it beams with pride.
                 payload.push(',');
             }
-            payload.push_str(item);
+            payload.push_str(&entry);
         }
         payload.push(']');
         // -- ✅ Valid JSON array. No serde was harmed in the making of this string.
-        Ok(payload)
+        Ok(Payload(payload))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::casts::passthrough::Passthrough;
-
-    // -- 🔧 Helper: passthrough caster — casts by doing absolutely nothing. Inspirational.
-    fn passthrough_caster() -> DocumentCaster {
-        DocumentCaster::Passthrough(Passthrough)
-    }
 
     #[test]
-    fn json_array_the_one_where_feeds_become_an_array() -> Result<()> {
-        // 🧪 Three feeds, each passthrough → [feed1,feed2,feed3]
+    fn json_array_the_one_where_entries_become_an_array() -> Result<()> {
+        // 🧪 Three entries → [entry1,entry2,entry3]
         let manifold = JsonArrayManifold;
-        let feeds = vec![
-            String::from(r#"{"doc":1}"#),
-            String::from(r#"{"doc":2}"#),
-            String::from(r#"{"doc":3}"#),
-        ];
-        let result = manifold.join(&feeds, &passthrough_caster())?;
-        assert_eq!(result, r#"[{"doc":1},{"doc":2},{"doc":3}]"#);
+        let mut entries = VecDeque::from(vec![
+            Entry(r#"{"doc":1}"#.to_string()),
+            Entry(r#"{"doc":2}"#.to_string()),
+            Entry(r#"{"doc":3}"#.to_string()),
+        ]);
+        let result = manifold.join(&mut entries)?;
+        assert_eq!(*result, r#"[{"doc":1},{"doc":2},{"doc":3}]"#);
+        assert!(entries.is_empty(), "🎯 drain(..) should leave the VecDeque empty but allocated");
         Ok(())
     }
 
     #[test]
-    fn json_array_the_one_where_empty_feeds_is_empty_array() -> Result<()> {
-        // 🧪 No feeds → []. Still valid JSON. Still technically correct. The best kind of correct.
+    fn json_array_the_one_where_empty_entries_is_empty_array() -> Result<()> {
+        // 🧪 No entries → []. Still valid JSON. Still technically correct. The best kind of correct.
         let manifold = JsonArrayManifold;
-        let result = manifold.join(&[], &passthrough_caster())?;
-        assert_eq!(result, "[]");
+        let mut entries = VecDeque::new();
+        let result = manifold.join(&mut entries)?;
+        assert_eq!(*result, "[]");
         Ok(())
     }
 
     #[test]
-    fn json_array_the_one_where_single_feed_has_no_commas() -> Result<()> {
-        // 🧪 One feed, no commas. Like a party with one guest. Awkward but valid.
+    fn json_array_the_one_where_single_entry_has_no_commas() -> Result<()> {
+        // 🧪 One entry, no commas. Like a party with one guest. Awkward but valid.
         let manifold = JsonArrayManifold;
-        let feeds = vec![String::from(r#"{"lonely":true}"#)];
-        let result = manifold.join(&feeds, &passthrough_caster())?;
-        assert_eq!(result, r#"[{"lonely":true}]"#);
+        let mut entries = VecDeque::from(vec![Entry(r#"{"lonely":true}"#.to_string())]);
+        let result = manifold.join(&mut entries)?;
+        assert_eq!(*result, r#"[{"lonely":true}]"#);
         Ok(())
     }
 }

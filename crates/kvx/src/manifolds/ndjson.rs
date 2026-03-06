@@ -12,8 +12,9 @@
 //! 🦆 The duck asked what NDJSON stands for. We told it. It left anyway.
 
 use super::Manifold;
-use crate::casts::{DocumentCaster, Caster};
+use crate::{Entry, Payload};
 use anyhow::Result;
+use std::collections::VecDeque;
 
 // -- ┌─────────────────────────────────────────────────────────┐
 // -- │  NdjsonManifold                                          │
@@ -36,64 +37,60 @@ pub struct NdjsonManifold;
 
 impl Manifold for NdjsonManifold {
     #[inline]
-    fn join(&self, feeds: &[String], caster: &DocumentCaster) -> Result<String> {
-        // -- 🧮 Pre-allocate based on total feed bytes — a vibes-based estimate that's usually close
-        // -- Knowledge graph: +64 per feed accounts for cast overhead (action lines in ES bulk)
-        let estimated_size: usize = feeds.iter().map(|f| f.len() + 64).sum();
+    fn join(&self, entries: &mut VecDeque<Entry>) -> Result<Payload> {
+        // -- 🧮 Pre-allocate based on total entry bytes — a vibes-based estimate that's usually close
+        // -- Knowledge graph: +1 per entry for the \n separator, because math is caring
+        let estimated_size: usize = entries.iter().map(|e| e.len() + 1).sum();
         let mut payload = String::with_capacity(estimated_size);
 
-        for feed in feeds {
-            // -- 🔄 Cast this feed → transformed String
-            // -- Passthrough: identity (zero overhead). NdJsonToBulk: action+source pairs.
-            let cast_result = caster.cast(feed)?;
-            payload.push_str(&cast_result);
-            payload.push('\n');
+        for entry in entries.drain(..) {
+            // -- 🔄 Each entry is already cast — just stitch them together with newlines
+            // -- Like a quilt, but made of JSON, and nobody finds it cozy
+            payload.push_str(&entry);
+            // We expect each entry to have \n if it's being casted to bulk
+            // payload.push('\n');
         }
 
         // -- ✅ Trailing \n included — ES bulk requires it, files appreciate it, nobody complains.
         // -- Ancient proverb: "He who omits the trailing newline, debugs at 3am."
-        Ok(payload)
+        Ok(Payload(payload))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::casts::passthrough::Passthrough;
-
-    // -- 🔧 Helper: build a passthrough caster — the laziest caster that ever lived
-    fn passthrough_caster() -> DocumentCaster {
-        DocumentCaster::Passthrough(Passthrough)
-    }
 
     #[test]
-    fn ndjson_the_one_where_single_feed_joins_to_ndjson() -> Result<()> {
-        // 🧪 One feed with content → content + trailing newline
+    fn ndjson_the_one_where_single_entry_joins_to_ndjson() -> Result<()> {
+        // 🧪 One entry with its own trailing \n → concatenated as-is
         let manifold = NdjsonManifold;
-        let feeds = vec![String::from(r#"{"doc":1}"#)];
-        let result = manifold.join(&feeds, &passthrough_caster())?;
-        assert_eq!(result, "{\"doc\":1}\n");
+        let mut entries = VecDeque::from(vec![Entry("{\"doc\":1}\n".to_string())]);
+        let result = manifold.join(&mut entries)?;
+        assert_eq!(*result, "{\"doc\":1}\n");
+        assert!(entries.is_empty(), "🎯 drain(..) should leave the VecDeque empty but allocated");
         Ok(())
     }
 
     #[test]
-    fn ndjson_the_one_where_multiple_feeds_join() -> Result<()> {
-        // 🧪 Two feeds → two lines, each with trailing \n
+    fn ndjson_the_one_where_multiple_entries_join() -> Result<()> {
+        // 🧪 Two entries already carrying their \n — concatenated in order
         let manifold = NdjsonManifold;
-        let feeds = vec![
-            String::from(r#"{"doc":1}"#),
-            String::from(r#"{"doc":2}"#),
-        ];
-        let result = manifold.join(&feeds, &passthrough_caster())?;
-        assert_eq!(result, "{\"doc\":1}\n{\"doc\":2}\n");
+        let mut entries = VecDeque::from(vec![
+            Entry("{\"doc\":1}\n".to_string()),
+            Entry("{\"doc\":2}\n".to_string()),
+        ]);
+        let result = manifold.join(&mut entries)?;
+        assert_eq!(*result, "{\"doc\":1}\n{\"doc\":2}\n");
         Ok(())
     }
 
     #[test]
-    fn ndjson_the_one_where_empty_feeds_produces_nothing() -> Result<()> {
-        // 🧪 No feeds, no payload. The void stares back. It is empty. 🦆
+    fn ndjson_the_one_where_empty_entries_produces_nothing() -> Result<()> {
+        // 🧪 No entries, no payload. The void stares back. It is empty. 🦆
         let manifold = NdjsonManifold;
-        let result = manifold.join(&[], &passthrough_caster())?;
+        let mut entries = VecDeque::new();
+        let result = manifold.join(&mut entries)?;
         assert!(result.is_empty(), "Empty input → empty output. Zen.");
         Ok(())
     }

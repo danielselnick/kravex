@@ -24,8 +24,10 @@
 //!
 //! ⚠️ The singularity will join its own payloads. Until then, we have this module.
 
-use crate::casts::{DocumentCaster, Caster};
 use anyhow::Result;
+use crate::Entry;
+use crate::Payload;
+use std::collections::VecDeque;
 
 pub mod backend;
 pub mod json_array;
@@ -54,5 +56,5 @@ pub trait Manifold: std::fmt::Debug {
     /// The input feeds are raw source data (un-cast). The caster is called
     /// per-feed to produce a transformed String. The manifold then joins all results
     /// in the wire format (NDJSON, JSON array, etc.).
-    fn join(&self, feeds: &[String], caster: &DocumentCaster) -> Result<String>;
+    fn join(&self, entries: &mut VecDeque<Entry>) -> Result<Payload>;
 }

@@ -23,7 +23,7 @@
 //! 🔒 Like Fight Club, but for async tasks. First rule: you don't pub the workers.
 
 use crate::config::AppConfig;
-use crate::casts::DocumentCaster;
+use crate::casts::PageToEntriesCaster;
 use crate::manifolds::ManifoldBackend;
 use crate::regulators::pressure_gauge::FlowKnob;
 use crate::workers;
@@ -78,7 +78,7 @@ impl Foreman {
         &self,
         source_backend: crate::backends::SourceBackend,
         sink_backends: Vec<crate::backends::SinkBackend>,
-        caster: DocumentCaster,
+        caster: PageToEntriesCaster,
         manifold: ManifoldBackend,
         the_flow_knob: FlowKnob,
         the_gauge_handle: Option<tokio::task::JoinHandle<()>>,

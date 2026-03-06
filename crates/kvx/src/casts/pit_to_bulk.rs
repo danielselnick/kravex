@@ -30,6 +30,9 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 
 use crate::casts::Caster;
+use crate::Entry;
+use crate::Page;
+
 
 // 🧠 Field name constants — stubs for future configurable extraction.
 // -- "He who hardcodes field names, refactors in production." — Ancient DevOps proverb 🦆
@@ -86,17 +89,18 @@ pub struct PitToBulk;
 
 impl Caster for PitToBulk {
     #[inline]
-    fn cast(&self, feed: &str) -> Result<String> {
+    fn cast(&self, page: Page) -> Result<Vec<Entry>> {
         // 🎭 Phase 1: Deserialize the search envelope — zero-copy for _source via RawValue
-        let the_envelope: SearchEnvelope<'_> = serde_json::from_str(feed)
+        let the_envelope: SearchEnvelope<'_> = serde_json::from_str(page.0.as_ref())
             .context("💀 Failed to parse _search response envelope. The JSON is cursed. Call a priest.")?;
 
         let the_hits = &the_envelope.hits.hits;
 
         // 🧘 Early return — empty hits means empty bulk body. Zen.
         if the_hits.is_empty() {
-            return Ok(String::new());
+            return Ok(Vec::new());
         }
+        
 
         // 📏 Phase 2: Pre-size output buffer — ~80 bytes overhead per hit for the action line
         let the_estimated_size: usize = the_hits
@@ -104,9 +108,11 @@ impl Caster for PitToBulk {
             .map(|hit| hit._source.get().len() + 80)
             .sum();
         let mut the_bulk_body = String::with_capacity(the_estimated_size);
+        let mut the_final_result = Vec::with_capacity(the_estimated_size);
 
         // 🏗️ Phase 3: Build bulk NDJSON — action line + source doc per hit
         for hit in the_hits {
+            let mut the_bulk_body = String::new();
             // 📡 Write action line: {"index":{"_index":"...","_id":"...","_routing":"..."}}
             the_bulk_body.push_str(r#"{"index":{"_index":""#);
             the_bulk_body.push_str(hit._index);
@@ -127,9 +133,10 @@ impl Caster for PitToBulk {
             // 📄 Write source doc — raw JSON borrowed directly from input, zero-copy
             the_bulk_body.push_str(hit._source.get());
             the_bulk_body.push('\n');
+            the_final_result.push(Entry(the_bulk_body));
         }
 
-        Ok(the_bulk_body)
+        Ok(the_final_result)
     }
 }
 
@@ -139,6 +146,11 @@ mod tests {
 
     // 🧪 The PitToBulk test suite — where search responses go to become bulk bodies.
     // -- If these tests fail, the singularity has been postponed indefinitely. 🦆
+
+    /// 🔧 Reassembles Vec<Entry> into a single bulk body string for line-based assertions.
+    fn entries_to_bulk_body(entries: &[Entry]) -> String {
+        entries.iter().map(|e| e.0.as_str()).collect()
+    }
 
     /// 🧪 Single hit → valid bulk pair (action line + source doc).
     #[test]
@@ -156,7 +168,8 @@ mod tests {
             }
         }"#;
 
-        let the_bulk_body = the_caster.cast(the_search_response)?;
+        let the_entries = the_caster.cast(Page(the_search_response.to_string()))?;
+        let the_bulk_body = entries_to_bulk_body(&the_entries);
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
         // 🎯 Exactly 2 lines: action + source
@@ -188,7 +201,8 @@ mod tests {
             }
         }"#;
 
-        let the_bulk_body = the_caster.cast(the_search_response)?;
+        let the_entries = the_caster.cast(Page(the_search_response.to_string()))?;
+        let the_bulk_body = entries_to_bulk_body(&the_entries);
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
         // 🎯 3 hits × 2 lines each = 6 lines
@@ -222,7 +236,8 @@ mod tests {
             }
         }"#;
 
-        let the_bulk_body = the_caster.cast(the_search_response)?;
+        let the_entries = the_caster.cast(Page(the_search_response.to_string()))?;
+        let the_bulk_body = entries_to_bulk_body(&the_entries);
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
         let the_action: serde_json::Value = serde_json::from_str(lines[0])?;
@@ -248,7 +263,8 @@ mod tests {
             }
         }"#;
 
-        let the_bulk_body = the_caster.cast(the_search_response)?;
+        let the_entries = the_caster.cast(Page(the_search_response.to_string()))?;
+        let the_bulk_body = entries_to_bulk_body(&the_entries);
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
         let the_action: serde_json::Value = serde_json::from_str(lines[0])?;
@@ -259,14 +275,14 @@ mod tests {
         Ok(())
     }
 
-    /// 🧪 Empty hits array → empty string. The void returns void.
+    /// 🧪 Empty hits array → empty Vec. The void returns void.
     #[test]
     fn the_one_where_empty_hits_produce_nothing_like_my_motivation_on_mondays() -> Result<()> {
         let the_caster = PitToBulk;
         let the_search_response = r#"{"hits": {"hits": []}}"#;
 
-        let the_bulk_body = the_caster.cast(the_search_response)?;
-        assert!(the_bulk_body.is_empty(), "💀 Empty hits should produce empty output");
+        let the_entries = the_caster.cast(Page(the_search_response.to_string()))?;
+        assert!(the_entries.is_empty(), "💀 Empty hits should produce empty output");
 
         Ok(())
     }
@@ -288,7 +304,8 @@ mod tests {
             }
         }"#;
 
-        let the_bulk_body = the_caster.cast(the_search_response)?;
+        let the_entries = the_caster.cast(Page(the_search_response.to_string()))?;
+        let the_bulk_body = entries_to_bulk_body(&the_entries);
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
         // ✅ Parse the source doc and verify nested structure survived
@@ -309,7 +326,8 @@ mod tests {
             "hits": {"hits": [{"_index": "test", "_id": "1", "_source": {"ok": true}}]}
         }"#;
 
-        let the_bulk_body = the_caster.cast(the_search_response)?;
+        let the_entries = the_caster.cast(Page(the_search_response.to_string()))?;
+        let the_bulk_body = entries_to_bulk_body(&the_entries);
         assert!(the_bulk_body.ends_with('\n'), "💀 Bulk body must end with \\n — ES will reject this");
 
         Ok(())
@@ -328,7 +346,8 @@ mod tests {
             }
         }"#;
 
-        let the_bulk_body = the_caster.cast(the_search_response)?;
+        let the_entries = the_caster.cast(Page(the_search_response.to_string()))?;
+        let the_bulk_body = entries_to_bulk_body(&the_entries);
 
         for (i, line) in the_bulk_body.lines().enumerate() {
             let _parsed: serde_json::Value = serde_json::from_str(line)
@@ -355,7 +374,8 @@ mod tests {
             }
         }"#;
 
-        let the_bulk_body = the_caster.cast(the_search_response)?;
+        let the_entries = the_caster.cast(Page(the_search_response.to_string()))?;
+        let the_bulk_body = entries_to_bulk_body(&the_entries);
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
         let the_action: serde_json::Value = serde_json::from_str(lines[0])?;
@@ -378,7 +398,7 @@ mod tests {
         let the_caster = PitToBulk;
         let the_garbage = "this is not JSON and everyone knows it";
 
-        let the_result = the_caster.cast(the_garbage);
+        let the_result = the_caster.cast(Page(the_garbage.to_string()));
         assert!(the_result.is_err(), "💀 Invalid JSON should produce an error, not silence");
     }
 
@@ -399,7 +419,8 @@ mod tests {
             }
         }"#;
 
-        let the_bulk_body = the_caster.cast(the_full_response)?;
+        let the_entries = the_caster.cast(Page(the_full_response.to_string()))?;
+        let the_bulk_body = entries_to_bulk_body(&the_entries);
         let lines: Vec<&str> = the_bulk_body.lines().collect();
         assert_eq!(lines.len(), 2, "💀 One hit should produce 2 lines");
 

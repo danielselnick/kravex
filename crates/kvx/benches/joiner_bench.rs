@@ -15,9 +15,10 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use kvx::casts::passthrough::Passthrough;
-use kvx::casts::DocumentCaster;
+use kvx::casts::PageToEntriesCaster;
 use kvx::manifolds::ManifoldBackend;
 use kvx::workers::Joiner;
+use kvx::{Page, Payload};
 use std::hint::black_box;
 
 // -- 📏 Doc counts to sweep — enough range to see if throughput scales linearly
@@ -41,10 +42,14 @@ const MAX_REQUEST_SIZE_BYTES: usize = 10 * 1024 * 1024;
 fn generate_feeds(count: usize) -> Vec<String> {
     // -- 🚀 pre-size the vec because reallocation mid-generation is for amateurs
     let mut feeds = Vec::with_capacity(count);
-    for i in 0..count {
-        feeds.push(format!(
-            r#"{{"id":{i},"name":"bench_doc_{i}","data":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#
-        ));
+    for j in 0..count {
+        let mut feed = String::new();
+        for i in 0..count {
+            feed.push_str(&format!(
+                r#"{{"id":{i},"name":"bench_doc_{i}","data":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}\n"#
+            ));
+        }
+        feeds.push(feed)
     }
     feeds
 }
@@ -76,13 +81,13 @@ fn joiner_throughput_bytes(c: &mut Criterion) {
                 |b, &_n| {
                     b.iter(|| {
                         // -- 🧵 Fresh channels + joiner per iteration — no stale state leaking between runs
-                        let (tx1, rx1) = async_channel::bounded::<String>(CHANNEL_CAPACITY);
-                        let (tx2, rx2) = async_channel::bounded::<String>(CHANNEL_CAPACITY);
+                        let (tx1, rx1) = async_channel::bounded::<Page>(CHANNEL_CAPACITY);
+                        let (tx2, rx2) = async_channel::bounded::<Payload>(CHANNEL_CAPACITY);
 
                         let joiner = Joiner::new(
                             rx1,
                             tx2,
-                            DocumentCaster::Passthrough(Passthrough),
+                            PageToEntriesCaster::Passthrough(Passthrough),
                             manifold.clone(),
                             std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(MAX_REQUEST_SIZE_BYTES)),
                         );
@@ -94,7 +99,7 @@ fn joiner_throughput_bytes(c: &mut Criterion) {
                         let feeds_clone = feeds.clone();
                         let sender_handle = std::thread::spawn(move || {
                             for feed in feeds_clone {
-                                tx1.send_blocking(feed).unwrap();
+                                tx1.send_blocking(Page(feed)).unwrap();
                             }
                             // -- 🏁 Close ch1 — triggers joiner's final flush
                             drop(tx1);
@@ -138,13 +143,13 @@ fn joiner_throughput_docs(c: &mut Criterion) {
                 |b, &_n| {
                     b.iter(|| {
                         // -- 🧵 Fresh channels + joiner per iteration
-                        let (tx1, rx1) = async_channel::bounded::<String>(CHANNEL_CAPACITY);
-                        let (tx2, rx2) = async_channel::bounded::<String>(CHANNEL_CAPACITY);
+                        let (tx1, rx1) = async_channel::bounded::<Page>(CHANNEL_CAPACITY);
+                        let (tx2, rx2) = async_channel::bounded::<Payload>(CHANNEL_CAPACITY);
 
                         let joiner = Joiner::new(
                             rx1,
                             tx2,
-                            DocumentCaster::Passthrough(Passthrough),
+                            PageToEntriesCaster::Passthrough(Passthrough),
                             manifold.clone(),
                             std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(MAX_REQUEST_SIZE_BYTES)),
                         );
@@ -155,7 +160,7 @@ fn joiner_throughput_docs(c: &mut Criterion) {
                         let feeds_clone = feeds.clone();
                         let sender_handle = std::thread::spawn(move || {
                             for feed in feeds_clone {
-                                tx1.send_blocking(feed).unwrap();
+                                tx1.send_blocking(Page(feed)).unwrap();
                             }
                             drop(tx1);
                         });

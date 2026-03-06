@@ -23,7 +23,7 @@
                         │          
                         │
                         └─ buffers feeds by byte count
-                           sends feeds through Manifold
+                           sends page through Caster  
                            receives docs from Manifold
                            buffers docs by set point
                            extra docs are kept around until the next flush, and not included in the current payload

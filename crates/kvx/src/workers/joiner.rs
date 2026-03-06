@@ -25,14 +25,16 @@
 //!
 //! ⚠️ The singularity will parse JSON in constant time. Until then, we have threads.
 
-use crate::{Page, Payload};
-use crate::casts::{Caster, DocumentCaster};
+use crate::{Entry, Page, Payload};
+use crate::casts::{Caster, PageToEntriesCaster};
 use crate::manifolds::{Manifold, ManifoldBackend};
 use crate::regulators::pressure_gauge::FlowKnob;
 use anyhow::{Context, Result};
 use async_channel::{Receiver, Sender};
 use std::sync::atomic::Ordering;
 use tracing::debug;
+use std::collections::VecDeque;
+
 
 /// 🧮 Epsilon buffer — headroom so casting overhead doesn't push us over the limit.
 /// 64 KiB of breathing room because payloads expand during casting
@@ -65,7 +67,7 @@ pub struct Joiner {
     tx: Sender<Payload>,
     /// 🔄 Per-feed format conversion — NdJsonToBulk, Passthrough, etc.
     /// Cloned per-joiner but zero-sized, so cloning costs less than this comment 🐄
-    caster: DocumentCaster,
+    caster: PageToEntriesCaster,
     /// 🎼 Payload assembly — casts each feed + joins into wire format (NDJSON, JSON array)
     /// Also zero-sized. Also free to clone. Sensing a theme here.
     manifold: ManifoldBackend,
@@ -74,6 +76,8 @@ pub struct Joiner {
     /// When no regulator is active, it stays at the initial max_request_size_bytes forever.
     /// Like a volume knob that someone else might be turning while you're listening. 🎚️
     the_throttle_knob: FlowKnob,
+    entries_buffer: VecDeque<Entry>,
+    the_running_byte_tab: usize
 }
 
 impl Joiner {
@@ -84,7 +88,7 @@ impl Joiner {
     pub fn new(
         rx: Receiver<Page>,
         tx: Sender<Payload>,
-        caster: DocumentCaster,
+        caster: PageToEntriesCaster,
         manifold: ManifoldBackend,
         the_throttle_knob: FlowKnob,
     ) -> Self {
@@ -94,6 +98,8 @@ impl Joiner {
             caster,
             manifold,
             the_throttle_knob,
+            entries_buffer : VecDeque::new(),
+            the_running_byte_tab: 0,
         }
     }
 
@@ -106,111 +112,41 @@ impl Joiner {
     ///
     /// 🧠 The thread runs until ch1 closes (pumper done), then flushes remaining
     /// buffered feeds and drops tx (which helps close ch2 when all joiners finish).
-    pub fn start(self) -> std::thread::JoinHandle<Result<()>> {
+    pub fn start(mut self) -> std::thread::JoinHandle<Result<()>> {
         std::thread::spawn(move || {
             debug!("🧵 Joiner thread started — recv_blocking → buffer → join → send_blocking");
 
-            // 📦 Feed buffer — accumulates raw feeds until flush threshold
-            let mut the_feed_buffer: Vec<String> = Vec::new();
-            let mut the_running_byte_tab: usize = 0;
-
             loop {
                 match self.rx.recv_blocking() {
-                    Ok(Page(feed)) => {
-                        debug!("📄 Joiner received {} byte feed from ch1", feed.len());
+                    Ok(page) => {
+                        // 📜 Page arrives → cast into entries → buffer → flush when full
+                        let entries = self.caster.cast(page).context("💀 Caster failed — the data fought back")?;
+                        for entry in entries {
+                            self.the_running_byte_tab += entry.len();
+                            self.entries_buffer.push_back(entry);
 
-                        // 📏 Accumulate feed into buffer, track bytes like a metered taxi 🚕
-                        the_running_byte_tab += feed.len();
-                        the_feed_buffer.push(feed);
-
-                        // 🧮 Flush when buffer + epsilon approaches the throttle knob value.
-                        // 🔧 Relaxed ordering — eventual consistency is fine for a throttle.
-                        // We'll see the updated value within a few iterations at most. No rush. 🎚️
-                        let the_current_max = self.the_throttle_knob.load(Ordering::Relaxed);
-                        if the_running_byte_tab + BUFFER_EPSILON_BYTES
-                            >= the_current_max
-                        {
-                            debug!(
-                                "🚿 Joiner flushing {} feeds ({} bytes) — buffer approaching max",
-                                the_feed_buffer.len(),
-                                the_running_byte_tab
-                            );
-                            flush_and_forward(
-                                &mut the_feed_buffer,
-                                &mut the_running_byte_tab,
-                                &self.manifold,
-                                &self.caster,
-                                &self.tx,
-                            )?;
+                            let the_ceiling = self.the_throttle_knob.load(Ordering::Relaxed).saturating_sub(BUFFER_EPSILON_BYTES);
+                            if self.the_running_byte_tab > the_ceiling {
+                                let the_payload = self.manifold.join(&mut self.entries_buffer)?;
+                                self.tx.send_blocking(the_payload).context("💀 ch2 closed — the drainers left without saying goodbye")?;
+                                self.the_running_byte_tab = 0;
+                            }
                         }
                     }
                     Err(_) => {
-                        // 🏁 ch1 closed — pumper is done. Flush remaining buffer and exit.
-                        if !the_feed_buffer.is_empty() {
-                            debug!(
-                                "🚿 Joiner final flush: {} feeds ({} bytes) — ch1 closed, last payload",
-                                the_feed_buffer.len(),
-                                the_running_byte_tab
-                            );
-                            flush_and_forward(
-                                &mut the_feed_buffer,
-                                &mut the_running_byte_tab,
-                                &self.manifold,
-                                &self.caster,
-                                &self.tx,
-                            )?;
+                        // 🏁 Channel closed — flush whatever's left in the buffer
+                        if !self.entries_buffer.is_empty() {
+                            let the_payload = self.manifold.join(&mut self.entries_buffer)?;
+                            self.tx.send_blocking(the_payload).context("💀 ch2 closed during final flush — so close, yet so far")?;
                         }
-                        debug!("🏁 Joiner: ch1 closed. Dropping tx. Thread signing off. 💤");
                         // tx drops here naturally — when all joiners drop their tx,
-                        // ch2 closes and drainers get the signal. Elegant, like a
-                        // synchronized swim team but for channel closures. 🏊
+                        // ch2 closes and drainers get the signal 🏊
                         return Ok(());
                     }
                 }
             }
         })
     }
-}
-
-/// 🚿 Flush the feed buffer: manifold.join → send_blocking to ch2 → clear buffer.
-///
-/// The joiner equivalent of the drainer's old flush_buffer(), except:
-/// - Sync, not async (no `.await` needed — we're on a std::thread)
-/// - Sends to ch2 (another channel) instead of directly to the sink
-/// - The sink never sees this function. It only sees assembled payloads. Clean separation. 🧼
-///
-/// 🧠 Extracted as a function because joiners flush from two places:
-/// 1. Buffer full enough (byte threshold hit)
-/// 2. Channel closed (final flush before thread exits)
-/// "He who duplicates flush logic, debugs it in two timelines." — Ancient proverb 💀
-fn flush_and_forward(
-    buffer: &mut Vec<String>,
-    buffer_bytes: &mut usize,
-    manifold: &ManifoldBackend,
-    caster: &DocumentCaster,
-    tx: &Sender<Payload>,
-) -> Result<()> {
-    // 🎼 Cast each feed + assemble wire-format payload via manifold
-    let the_assembled_payload = manifold.join(buffer, caster).context(
-        "💀 Joiner manifold.join failed — the feeds went in and existential dread came out. \
-         Check the cast logic and the source data quality. \
-         Or just stare at the logs. The logs stare back.",
-    )?;
-
-    // 📡 Send assembled payload to ch2 for drainers, unless it's empty/trivial
-    if !the_assembled_payload.is_empty() && the_assembled_payload != "[]" {
-        tx.send_blocking(Payload::from(the_assembled_payload)).context(
-            "💀 Joiner failed to send payload to ch2 — the channel rejected our offering. \
-             Like sliding a note under the door and hearing it slide back. \
-             ch2 may be closed or full. Either way, the vibes are off.",
-        )?;
-    }
-
-    // 🧹 Reset buffer state — a fresh start, like January 1st but for bytes
-    buffer.clear();
-    *buffer_bytes = 0;
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -239,7 +175,7 @@ mod tests {
         let joiner = Joiner::new(
             rx1,
             tx2,
-            DocumentCaster::Passthrough(passthrough::Passthrough),
+            PageToEntriesCaster::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             // 📏 Huge max so we don't trigger mid-test flushes — we control the flush via channel close
             knob(usize::MAX),
@@ -274,7 +210,7 @@ mod tests {
         let joiner = Joiner::new(
             rx1,
             tx2,
-            DocumentCaster::Passthrough(passthrough::Passthrough),
+            PageToEntriesCaster::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             knob(usize::MAX),
         );
@@ -312,7 +248,7 @@ mod tests {
         let joiner = Joiner::new(
             rx1,
             tx2,
-            DocumentCaster::Passthrough(passthrough::Passthrough),
+            PageToEntriesCaster::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             knob(comically_small_max),
         );
@@ -344,7 +280,7 @@ mod tests {
         let joiner = Joiner::new(
             rx1,
             tx2,
-            DocumentCaster::Passthrough(passthrough::Passthrough),
+            PageToEntriesCaster::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             knob(usize::MAX),
         );
@@ -378,7 +314,7 @@ mod tests {
         let joiner = Joiner::new(
             rx1,
             tx2,
-            DocumentCaster::Passthrough(passthrough::Passthrough),
+            PageToEntriesCaster::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             the_shared_knob,
         );

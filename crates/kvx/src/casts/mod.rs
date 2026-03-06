@@ -33,10 +33,8 @@ use crate::Entry;
 
 /// 🎭 A Caster transforms a raw feed into the sink's expected format.
 ///
-/// 🧠 Same pattern as Source/Sink — trait → concrete impls → enum dispatcher.
-/// "He who casts without matching, panics in production." — Ancient Rust proverb 🦆
 pub trait Caster: std::fmt::Debug {
-    /// 🔄 Cast a raw source feed into sink-format output.
+    /// 🔄 Cast a raw source feed into sink-format output entries.
     /// The feed goes in raw. It comes out ready. Like a pottery kiln, but for JSON. 🏺
     fn cast(&self, page: Page) -> Result<Vec<Entry>>;
 }
@@ -49,7 +47,7 @@ pub trait Caster: std::fmt::Debug {
 /// enum wraps concrete types, match dispatches, compiler monomorphizes, branch prediction
 /// eliminates the overhead after warmup. The enum is a formality. The cast is free. 🐄
 #[derive(Debug, Clone)]
-pub enum DocumentCaster {
+pub enum PageToEntriesCaster {
     // -- 📡 NDJSON raw docs → ES bulk action+source pairs
     NdJsonToBulk(ndjson_to_bulk::NdJsonToBulk),
     // -- 🚶 Identity cast — feed passes through unchanged, like TSA PreCheck for data
@@ -58,14 +56,14 @@ pub enum DocumentCaster {
     PitToBulk(pit_to_bulk::PitToBulk),
 }
 
-impl Caster for DocumentCaster {
+impl Caster for PageToEntriesCaster {
     #[inline]
-    fn cast(&self, feed: &str) -> Result<String> {
+    fn cast(&self, page: Page) -> Result<Vec<Entry>> {
         // -- 🎭 Dispatch to the concrete caster — "choose your fighter" but for data formats
         match self {
-            Self::NdJsonToBulk(t) => t.cast(feed),
-            Self::Passthrough(t) => t.cast(feed),
-            Self::PitToBulk(t) => t.cast(feed),
+            Self::NdJsonToBulk(t) => t.cast(page),
+            Self::Passthrough(t) => t.cast(page),
+            Self::PitToBulk(t) => t.cast(page),
         }
     }
 }
@@ -73,7 +71,7 @@ impl Caster for DocumentCaster {
 
 // ===== Factory =====
 
-impl DocumentCaster {
+impl PageToEntriesCaster {
     /// 🔧 Resolve a caster from source/sink config enums.
     ///
     /// Same approach as `from_source_config()` / `from_sink_config()` in `lib.rs`:
@@ -158,9 +156,9 @@ mod tests {
         });
 
         // 🎯 Resolve — should give us NdJsonToBulk
-        let the_caster = DocumentCaster::from_configs(&source, &sink);
+        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
         assert!(
-            matches!(the_caster, DocumentCaster::NdJsonToBulk(_)),
+            matches!(the_caster, PageToEntriesCaster::NdJsonToBulk(_)),
             "File → ES should resolve to NdJsonToBulk 🏎️"
         );
 
@@ -171,7 +169,7 @@ mod tests {
             "_rallyAPIMajor": "2"
         })
         .to_string();
-        let the_output = the_caster.cast(&rally_feed)?;
+        let the_output = the_caster.cast(Page(rally_feed))?;
 
         // ✅ Output should be non-empty (NdJsonToBulk produces action+source lines)
         assert!(!the_output.is_empty(), "Cast output should not be empty 🎯");
@@ -191,13 +189,13 @@ mod tests {
             common_config: CommonSinkConfig::default(),
         });
 
-        let the_caster = DocumentCaster::from_configs(&source, &sink);
-        assert!(matches!(the_caster, DocumentCaster::Passthrough(_)));
+        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
+        assert!(matches!(the_caster, PageToEntriesCaster::Passthrough(_)));
 
         // 🔄 Passthrough returns the feed unchanged — zero drama
         let the_input = r#"{"whatever":"goes"}"#.to_string();
-        let the_output = the_caster.cast(&the_input)?;
-        assert_eq!(the_output, the_input, "Passthrough must return feed unchanged! 🚶");
+        let the_output = the_caster.cast(Page(the_input.clone()))?;
+        assert_eq!(*the_output[0], the_input, "Passthrough must return feed unchanged! 🚶");
 
         Ok(())
     }
@@ -207,8 +205,8 @@ mod tests {
     fn the_one_where_in_memory_resolves_to_passthrough_for_testing() {
         let source = SourceConfig::InMemory(());
         let sink = SinkConfig::InMemory(());
-        let the_caster = DocumentCaster::from_configs(&source, &sink);
-        assert!(matches!(the_caster, DocumentCaster::Passthrough(_)));
+        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
+        assert!(matches!(the_caster, PageToEntriesCaster::Passthrough(_)));
     }
 
     /// 🧪 Full pipeline integration: resolve + cast multi-doc feed through NdJsonToBulk.
@@ -227,7 +225,7 @@ mod tests {
             common_config: CommonSinkConfig::default(),
         });
 
-        let the_caster = DocumentCaster::from_configs(&source, &sink);
+        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
 
         // 📄 Build a two-doc feed (newline-separated Rally blobs)
         let rally_feed = format!(
@@ -246,7 +244,7 @@ mod tests {
             })
         );
 
-        let the_output = the_caster.cast(&rally_feed)?;
+        let the_output = the_caster.cast(Page(rally_feed))?;
         // ✅ NdJsonToBulk should produce non-empty output for a multi-doc feed
         assert!(!the_output.is_empty(), "Cast output should not be empty for multi-doc feed 🎯");
 
@@ -272,15 +270,15 @@ mod tests {
             common_config: CommonSinkConfig::default(),
         });
 
-        let the_caster = DocumentCaster::from_configs(&source, &sink);
+        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
         assert!(
-            matches!(the_caster, DocumentCaster::PitToBulk(_)),
+            matches!(the_caster, PageToEntriesCaster::PitToBulk(_)),
             "💀 ES → ES should resolve to PitToBulk, not {:?}", the_caster
         );
 
         // 🔄 Verify it actually casts a search response into bulk format
-        let the_search_response = r#"{"hits":{"hits":[{"_index":"src","_id":"1","_source":{"ok":true}}]}}"#;
-        let the_output = the_caster.cast(the_search_response)?;
+        let the_search_response = r#"{"hits":{"hits":[{"_index":"src","_id":"1","_source":{"ok":true}}]}}"#.to_string();
+        let the_output = the_caster.cast(Page(the_search_response))?;
         assert!(!the_output.is_empty(), "💀 PitToBulk should produce output for a valid search response");
 
         Ok(())
