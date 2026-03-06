@@ -20,8 +20,9 @@
 
 pub mod passthrough;
 pub mod ndjson_to_bulk;
-pub mod scroll_to_bulk;
+pub mod pit_to_bulk;
 use ndjson_to_bulk::NdJsonToBulk;
+use pit_to_bulk::PitToBulk;
 
 use crate::app_config::{SourceConfig, SinkConfig};
 use anyhow::Result;
@@ -52,6 +53,8 @@ pub enum DocumentCaster {
     NdJsonToBulk(ndjson_to_bulk::NdJsonToBulk),
     // -- 🚶 Identity cast — feed passes through unchanged, like TSA PreCheck for data
     Passthrough(passthrough::Passthrough),
+    // -- 📡🎭 ES _search PIT response → _bulk NDJSON (extracts hits from envelope)
+    PitToBulk(pit_to_bulk::PitToBulk),
 }
 
 impl Caster for DocumentCaster {
@@ -61,6 +64,7 @@ impl Caster for DocumentCaster {
         match self {
             Self::NdJsonToBulk(t) => t.cast(feed),
             Self::Passthrough(t) => t.cast(feed),
+            Self::PitToBulk(t) => t.cast(feed),
         }
     }
 }
@@ -101,6 +105,12 @@ impl DocumentCaster {
                 Self::Passthrough(passthrough::Passthrough)
             }
 
+            // -- 📡🎭 ES source → ES sink: PIT response envelope → _bulk NDJSON
+            // -- "One does not simply walk into Elasticsearch without a bulk action line." — Boromir, probably
+            (SourceConfig::Elasticsearch(_), SinkConfig::Elasticsearch(_)) => {
+                Self::PitToBulk(PitToBulk)
+            }
+
             // -- 💀 Unimplemented pairs: panic with context.
             // -- "Config not found: We looked everywhere. Under the couch. Behind the fridge.
             // -- In the junk drawer. Nothing."
@@ -126,7 +136,7 @@ impl DocumentCaster {
 mod tests {
     use super::*;
     use crate::backends::file::{FileSinkConfig, FileSourceConfig};
-    use crate::backends::ElasticsearchSinkConfig;
+    use crate::backends::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
     use crate::backends::{CommonSinkConfig, CommonSourceConfig};
 
     /// 🧪 Resolve File→ES to NdJsonToBulk caster.
@@ -238,6 +248,39 @@ mod tests {
         let the_output = the_caster.cast(&rally_feed)?;
         // ✅ NdJsonToBulk should produce non-empty output for a multi-doc feed
         assert!(!the_output.is_empty(), "Cast output should not be empty for multi-doc feed 🎯");
+
+        Ok(())
+    }
+
+    /// 🧪 ES→ES resolves to PitToBulk — the PIT response caster for cross-cluster migration.
+    #[test]
+    fn the_one_where_es_to_es_resolves_to_pit_to_bulk() -> Result<()> {
+        let source = SourceConfig::Elasticsearch(ElasticsearchSourceConfig {
+            url: "http://source-cluster:9200".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            common_config: CommonSourceConfig::default(),
+        });
+        let sink = SinkConfig::Elasticsearch(ElasticsearchSinkConfig {
+            url: "http://dest-cluster:9200".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            index: Some("dest-index".to_string()),
+            common_config: CommonSinkConfig::default(),
+        });
+
+        let the_caster = DocumentCaster::from_configs(&source, &sink);
+        assert!(
+            matches!(the_caster, DocumentCaster::PitToBulk(_)),
+            "💀 ES → ES should resolve to PitToBulk, not {:?}", the_caster
+        );
+
+        // 🔄 Verify it actually casts a search response into bulk format
+        let the_search_response = r#"{"hits":{"hits":[{"_index":"src","_id":"1","_source":{"ok":true}}]}}"#;
+        let the_output = the_caster.cast(the_search_response)?;
+        assert!(!the_output.is_empty(), "💀 PitToBulk should produce output for a valid search response");
 
         Ok(())
     }
