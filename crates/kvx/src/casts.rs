@@ -38,6 +38,12 @@ pub trait Caster: std::fmt::Debug {
     /// 🔄 Cast a raw source feed into sink-format output.
     /// The feed goes in raw. It comes out ready. Like a pottery kiln, but for JSON. 🏺
     fn cast(&self, feed: &str) -> Result<String>;
+
+    /// 📏 How many NDJSON lines constitute one atomic doc-unit in the cast output.
+    /// Default is 1 (one line = one doc). Bulk casters return 2 (action + source).
+    /// 🧠 The manifold uses this stride to split cast output without severing
+    /// doc-units — like cutting a sandwich at the seam, not through the meat. 🥪
+    fn lines_per_doc(&self) -> usize { 1 }
 }
 
 // ===== Enum Dispatcher =====
@@ -65,6 +71,16 @@ impl Caster for DocumentCaster {
             Self::NdJsonToBulk(t) => t.cast(feed),
             Self::Passthrough(t) => t.cast(feed),
             Self::PitToBulk(t) => t.cast(feed),
+        }
+    }
+
+    #[inline]
+    fn lines_per_doc(&self) -> usize {
+        // -- 📏 Each caster knows its own stride — the manifold trusts but verifies (it doesn't verify)
+        match self {
+            Self::NdJsonToBulk(t) => t.lines_per_doc(),
+            Self::Passthrough(t) => t.lines_per_doc(),
+            Self::PitToBulk(t) => t.lines_per_doc(),
         }
     }
 }
@@ -248,6 +264,33 @@ mod tests {
         let the_output = the_caster.cast(&rally_feed)?;
         // ✅ NdJsonToBulk should produce non-empty output for a multi-doc feed
         assert!(!the_output.is_empty(), "Cast output should not be empty for multi-doc feed 🎯");
+
+        Ok(())
+    }
+
+    /// 🧪 lines_per_doc matches the actual output format for each caster.
+    /// "Trust but verify — except the borrow checker, which we just trust." 🦆
+    #[test]
+    fn the_one_where_lines_per_doc_matches_output_format() -> Result<()> {
+        // 📏 Passthrough: 1 line per doc (identity, no expansion)
+        let passthrough = DocumentCaster::Passthrough(passthrough::Passthrough);
+        assert_eq!(passthrough.lines_per_doc(), 1, "💀 Passthrough should be 1 line/doc");
+
+        // 📏 NdJsonToBulk: 2 lines per doc (action + source)
+        let bulk = DocumentCaster::NdJsonToBulk(NdJsonToBulk {});
+        assert_eq!(bulk.lines_per_doc(), 2, "💀 NdJsonToBulk should be 2 lines/doc");
+        // ✅ Verify the claim — cast a doc and count lines
+        let the_output = bulk.cast(r#"{"id":1}"#)?;
+        let the_line_count = the_output.lines().count();
+        assert_eq!(the_line_count, 2, "💀 NdJsonToBulk output has {} lines, expected 2", the_line_count);
+
+        // 📏 PitToBulk: 2 lines per doc (action + source)
+        let pit = DocumentCaster::PitToBulk(PitToBulk);
+        assert_eq!(pit.lines_per_doc(), 2, "💀 PitToBulk should be 2 lines/doc");
+        // ✅ Verify — cast a search response and count lines per hit
+        let the_output = pit.cast(r#"{"hits":{"hits":[{"_index":"x","_id":"1","_source":{"ok":true}}]}}"#)?;
+        let the_line_count = the_output.lines().count();
+        assert_eq!(the_line_count, 2, "💀 PitToBulk output has {} lines, expected 2", the_line_count);
 
         Ok(())
     }

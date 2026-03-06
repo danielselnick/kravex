@@ -82,12 +82,12 @@ impl ManifoldBackend {
 
 impl Manifold for ManifoldBackend {
     #[inline]
-    fn join(&self, feeds: &[String], caster: &DocumentCaster) -> Result<String> {
+    fn join(&self, feeds: &[String], caster: &DocumentCaster, max_bytes: usize) -> Result<(Vec<String>, usize)> {
         // -- 🎭 Dispatch to the concrete manifold — the match arm that wins is the one that deserves to
         // -- TODO: win the lottery, retire, replace this with a lookup table. Just kidding. This is fine.
         match self {
-            Self::Ndjson(m) => m.join(feeds, caster),
-            Self::JsonArray(m) => m.join(feeds, caster),
+            Self::Ndjson(m) => m.join(feeds, caster, max_bytes),
+            Self::JsonArray(m) => m.join(feeds, caster, max_bytes),
         }
     }
 }
@@ -143,8 +143,10 @@ mod tests {
             String::from(r#"{"a":1}"#),
             String::from(r#"{"b":2}"#),
         ];
-        let result = manifold.join(&feeds, &passthrough_caster())?;
-        assert_eq!(result, r#"[{"a":1},{"b":2}]"#);
+        let (payloads, consumed) = manifold.join(&feeds, &passthrough_caster(), usize::MAX)?;
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0], r#"[{"a":1},{"b":2}]"#);
+        assert_eq!(consumed, 2);
         Ok(())
     }
 }

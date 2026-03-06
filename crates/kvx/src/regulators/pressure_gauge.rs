@@ -19,7 +19,7 @@
 //! ⚠️ The singularity will regulate itself. We're just building the training data.
 
 use crate::regulators::{Regulate, RegulatorConfig, Regulators};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
@@ -29,6 +29,13 @@ use tracing::{debug, info, warn};
 /// The pressure gauge writes it. The joiners read it. Nobody else touches it.
 /// Like the office thermostat, except this one actually works. 🌡️
 pub type FlowKnob = Arc<AtomicUsize>;
+
+/// 🌡️ The CpuGauge — a shared atomic thermometer for cluster CPU pressure.
+///
+/// FlowMaster writes it (f64 stored as u64 bits via `to_bits()`).
+/// ProgressMetrics reads it (via `from_bits()`). Nobody else touches it.
+/// Like checking WebMD but for your Elasticsearch cluster's vital signs. 🏥
+pub type CpuGauge = Arc<AtomicU64>;
 
 /// 🚰 Authentication for accessing sink node stats — reuse the drain credentials.
 ///

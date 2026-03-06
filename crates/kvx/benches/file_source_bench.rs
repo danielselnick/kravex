@@ -78,7 +78,7 @@ fn bench_buffered_chunk_reading(c: &mut Criterion) {
                             max_batch_size_bytes: 10 * 1024 * 1024,
                         },
                     };
-                    let mut source = FileSource::new(config).await.unwrap();
+                    let mut source = FileSource::new(config, None, None).await.unwrap();
                     // -- 🔄 drain every page until EOF. This is the full pipeline.
                     let mut pages = 0u64;
                     while let Some(_feed) = source.next_page().await.unwrap() {
@@ -110,7 +110,7 @@ fn bench_buffered_chunk_reading(c: &mut Criterion) {
                             max_batch_size_bytes: 10 * 1024 * 1024,
                         },
                     };
-                    let mut source = FileSource::new(config).await.unwrap();
+                    let mut source = FileSource::new(config, None, None).await.unwrap();
                     let mut total_docs = 0usize;
                     while let Some(feed) = source.next_page().await.unwrap() {
                         // -- 🎯 count docs by counting newlines + 1 (feed has no trailing \n)

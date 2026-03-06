@@ -49,10 +49,18 @@ pub use ndjson::NdjsonManifold;
 ///
 /// Knock knock. Who's there? String. String who? String::with_capacity — I came prepared. 🎯
 pub trait Manifold: std::fmt::Debug {
-    /// 🎼 Cast raw feeds and join results into a single payload string.
+    /// 🎼 Cast raw feeds and join results into size-bounded payload chunks.
     ///
     /// The input feeds are raw source data (un-cast). The caster is called
-    /// per-feed to produce a transformed String. The manifold then joins all results
-    /// in the wire format (NDJSON, JSON array, etc.).
-    fn join(&self, feeds: &[String], caster: &DocumentCaster) -> Result<String>;
+    /// per-feed to produce a transformed String. The manifold then packs results
+    /// into payloads each `.len() <= max_bytes`, greedy-filling each chunk.
+    ///
+    /// Returns `(payloads, feeds_consumed)`:
+    /// - `Vec<String>`: finalized payloads, each within the size limit
+    /// - `usize`: number of input feeds fully consumed into emitted payloads
+    ///
+    /// 🧠 Unconsumed feeds (in the last partial chunk) are NOT emitted — the caller
+    /// keeps them for carry-over to the next flush. Pass `usize::MAX` to force everything out.
+    /// Like a buffet where you only take what fits on your plate. Except the last scraps. 🍽️
+    fn join(&self, feeds: &[String], caster: &DocumentCaster, max_bytes: usize) -> Result<(Vec<String>, usize)>;
 }

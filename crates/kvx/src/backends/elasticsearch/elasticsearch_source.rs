@@ -5,6 +5,7 @@ use serde::Deserialize;
 use crate::backends::Source;
 use crate::progress::ProgressMetrics;
 use crate::backends::CommonSourceConfig;
+use crate::regulators::pressure_gauge::{CpuGauge, FlowKnob};
 
 // Moved here from supervisors/config.rs because configs should live near the thing they configure.
 //
@@ -91,11 +92,15 @@ impl ElasticsearchSource {
     ///
     /// ⚠️ Future improvement: fire a `_count` query here so we can show a real ETA
     /// instead of an existential void on the progress bar.
-    pub async fn new(config: ElasticsearchSourceConfig) -> Result<Self> {
+    pub async fn new(
+        config: ElasticsearchSourceConfig,
+        the_flow_knob: Option<FlowKnob>,
+        the_cpu_gauge: Option<CpuGauge>,
+    ) -> Result<Self> {
         // 📡 total_size = 0: unknown until we scroll through everything.
         // -- Classic elasticsearch — "how much data is there?" — "yes"
         // -- It's fine. We'll count as we go. Like eating chips and not checking how many are left.
-        let progress = ProgressMetrics::new(config.url.clone(), 0);
+        let progress = ProgressMetrics::new(config.url.clone(), 0, the_flow_knob, the_cpu_gauge);
         Ok(Self { config, progress })
     }
 }

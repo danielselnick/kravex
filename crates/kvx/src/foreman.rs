@@ -26,9 +26,11 @@ use crate::app_config::AppConfig;
 use crate::casts::DocumentCaster;
 use crate::manifolds::ManifoldBackend;
 use crate::regulators::pressure_gauge::FlowKnob;
+use crate::regulators::signals::PipelineSignal;
 use crate::workers;
 use crate::workers::Worker;
 use anyhow::{Context, Result};
+use tokio::sync::mpsc;
 use tracing::info;
 
 /// 📦 The Foreman: because even async tasks need someone hovering over them
@@ -81,7 +83,7 @@ impl Foreman {
         caster: DocumentCaster,
         manifold: ManifoldBackend,
         the_flow_knob: FlowKnob,
-        the_gauge_handle: Option<tokio::task::JoinHandle<()>>,
+        the_signal_horn: Option<mpsc::Sender<PipelineSignal>>,
     ) -> Result<()> {
         let the_joiner_count = self.app_config.runtime.joiner_parallelism;
 
@@ -150,9 +152,18 @@ impl Foreman {
         // Each drainer gets its own sink and a clone of rx2.
         let mut the_async_worker_handles = Vec::with_capacity(sink_backends.len() + 1);
         for sink_backend in sink_backends {
-            let drainer = workers::Drainer::new(rx2.clone(), sink_backend);
+            let drainer = workers::Drainer::new(
+                rx2.clone(),
+                sink_backend,
+                the_signal_horn.as_ref().map(|tx| tx.clone()),
+            );
             the_async_worker_handles.push(drainer.start());
         }
+
+        // 🗑️ Foreman surrenders its signal horn clone — only drainers hold tx clones now.
+        // When all drainers finish, their tx clones drop, contributing to channel closure.
+        // The Manometer's tx drops when aborted. All gone → FlowMaster exits. RAII cascade. 🧹
+        drop(the_signal_horn);
 
         // 🗑️ Foreman surrenders ch2 receiver — only drainer tasks hold rx2 clones now.
         // Same reasoning: foreman is orchestrator, not participant. No stale handles. 🧹
@@ -195,13 +206,6 @@ impl Foreman {
                      but the feeds fought back like a cornered raccoon 🦝",
                     i
                 ))?;
-        }
-
-        // 🔬 Abort the pressure gauge if it was running — pipeline is done, no more regulating needed.
-        // Like turning off the thermostat when you're moving out. 🌡️🦆
-        if let Some(the_gauge) = the_gauge_handle {
-            the_gauge.abort();
-            info!("🔬 Pressure gauge aborted — pipeline complete, regulation no longer needed");
         }
 
         Ok(())

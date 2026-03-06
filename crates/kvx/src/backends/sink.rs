@@ -43,6 +43,63 @@ pub enum SinkBackend {
     InMemory(in_mem::InMemorySink),
     File(file::FileSink),
     Elasticsearch(elasticsearch::ElasticsearchSink),
+    /// 🧪 A sink with trust issues — fails N times before grudgingly succeeding.
+    /// Test-only. If this shows up in production, someone has made a series of
+    /// regrettable life choices. 🦆
+    #[cfg(test)]
+    FlakyMock(flaky_mock::FlakySink),
+}
+
+/// 🧪 Test-only module: a sink that fails on purpose. Like a coworker who "didn't
+/// get the email" but definitely got the email. 📧
+#[cfg(test)]
+pub mod flaky_mock {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    /// 🎭 A sink that fails `failures_remaining` times, then succeeds.
+    /// Tracks how many payloads it successfully received, for assertions.
+    /// Named after every microservice dependency you've ever had.
+    #[derive(Debug, Clone)]
+    pub struct FlakySink {
+        /// 🔢 Countdown to cooperation — each send() decrements until 0, then it plays nice
+        pub failures_remaining: Arc<AtomicU32>,
+        /// 📊 How many payloads actually made it through — proof of life
+        pub successful_sends: Arc<AtomicU32>,
+    }
+
+    impl FlakySink {
+        /// 🏗️ Create a new flaky sink that will fail `fail_count` times before succeeding.
+        /// Like training a puppy — it takes patience and repeated attempts.
+        pub fn new(fail_count: u32) -> Self {
+            Self {
+                failures_remaining: Arc::new(AtomicU32::new(fail_count)),
+                successful_sends: Arc::new(AtomicU32::new(0)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Sink for FlakySink {
+        async fn send(&mut self, _payload: String) -> Result<()> {
+            let remaining = self.failures_remaining.load(Ordering::Relaxed);
+            if remaining > 0 {
+                self.failures_remaining.fetch_sub(1, Ordering::Relaxed);
+                anyhow::bail!(
+                    "💀 FlakySink says 'nah' ({} failures left). Like a vending machine \
+                     that eats your dollar — try again, sucker.",
+                    remaining - 1
+                );
+            }
+            self.successful_sends.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
 }
 
 #[async_trait]
@@ -52,6 +109,8 @@ impl Sink for SinkBackend {
             SinkBackend::InMemory(sink) => sink.send(payload).await,
             SinkBackend::File(sink) => sink.send(payload).await,
             SinkBackend::Elasticsearch(sink) => sink.send(payload).await,
+            #[cfg(test)]
+            SinkBackend::FlakyMock(sink) => sink.send(payload).await,
         }
     }
 
@@ -60,6 +119,8 @@ impl Sink for SinkBackend {
             SinkBackend::InMemory(sink) => sink.close().await,
             SinkBackend::File(sink) => sink.close().await,
             SinkBackend::Elasticsearch(sink) => sink.close().await,
+            #[cfg(test)]
+            SinkBackend::FlakyMock(sink) => sink.close().await,
         }
     }
 }

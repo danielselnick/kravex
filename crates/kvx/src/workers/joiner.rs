@@ -72,7 +72,7 @@ pub struct Joiner {
     /// When a PressureGauge is running, this value adjusts dynamically via PID.
     /// When no regulator is active, it stays at the initial max_request_size_bytes forever.
     /// Like a volume knob that someone else might be turning while you're listening. 🎚️
-    the_throttle_knob: FlowKnob,
+    the_regulator_knob: FlowKnob,
 }
 
 impl Joiner {
@@ -92,7 +92,7 @@ impl Joiner {
             tx,
             caster,
             manifold,
-            the_throttle_knob,
+            the_regulator_knob: the_throttle_knob,
         }
     }
 
@@ -125,7 +125,7 @@ impl Joiner {
                         // 🧮 Flush when buffer + epsilon approaches the throttle knob value.
                         // 🔧 Relaxed ordering — eventual consistency is fine for a throttle.
                         // We'll see the updated value within a few iterations at most. No rush. 🎚️
-                        let the_current_max = self.the_throttle_knob.load(Ordering::Relaxed);
+                        let the_current_max = self.the_regulator_knob.load(Ordering::Relaxed);
                         if the_running_byte_tab + BUFFER_EPSILON_BYTES
                             >= the_current_max
                         {
@@ -140,6 +140,7 @@ impl Joiner {
                                 &self.manifold,
                                 &self.caster,
                                 &self.tx,
+                                the_current_max,
                             )?;
                         }
                     }
@@ -151,12 +152,14 @@ impl Joiner {
                                 the_feed_buffer.len(),
                                 the_running_byte_tab
                             );
+                            // 🏁 Final flush — usize::MAX forces everything out, no carry-over
                             flush_and_forward(
                                 &mut the_feed_buffer,
                                 &mut the_running_byte_tab,
                                 &self.manifold,
                                 &self.caster,
                                 &self.tx,
+                                usize::MAX,
                             )?;
                         }
                         debug!("🏁 Joiner: ch1 closed. Dropping tx. Thread signing off. 💤");
@@ -171,12 +174,14 @@ impl Joiner {
     }
 }
 
-/// 🚿 Flush the feed buffer: manifold.join → send_blocking to ch2 → clear buffer.
+/// 🚿 Flush the feed buffer: manifold.join → send_blocking to ch2 → drain consumed feeds.
 ///
 /// The joiner equivalent of the drainer's old flush_buffer(), except:
 /// - Sync, not async (no `.await` needed — we're on a std::thread)
 /// - Sends to ch2 (another channel) instead of directly to the sink
 /// - The sink never sees this function. It only sees assembled payloads. Clean separation. 🧼
+/// - Now size-aware: manifold chunks output into payloads ≤ max_bytes,
+///   and only consumed feeds are drained from the buffer (carry-over for the rest) 📏
 ///
 /// 🧠 Extracted as a function because joiners flush from two places:
 /// 1. Buffer full enough (byte threshold hit)
@@ -188,26 +193,30 @@ fn flush_and_forward(
     manifold: &ManifoldBackend,
     caster: &DocumentCaster,
     tx: &Sender<String>,
+    max_bytes: usize,
 ) -> Result<()> {
-    // 🎼 Cast each feed + assemble wire-format payload via manifold
-    let the_assembled_payload = manifold.join(buffer, caster).context(
+    // 🎼 Cast each feed + assemble size-bounded payload chunks via manifold
+    let (the_payloads, the_feeds_consumed) = manifold.join(buffer, caster, max_bytes).context(
         "💀 Joiner manifold.join failed — the feeds went in and existential dread came out. \
          Check the cast logic and the source data quality. \
          Or just stare at the logs. The logs stare back.",
     )?;
 
-    // 📡 Send assembled payload to ch2 for drainers, unless it's empty/trivial
-    if !the_assembled_payload.is_empty() && the_assembled_payload != "[]" {
-        tx.send_blocking(the_assembled_payload).context(
-            "💀 Joiner failed to send payload to ch2 — the channel rejected our offering. \
-             Like sliding a note under the door and hearing it slide back. \
-             ch2 may be closed or full. Either way, the vibes are off.",
-        )?;
+    // 📡 Send each payload chunk to ch2 for drainers
+    for the_payload in the_payloads {
+        if !the_payload.is_empty() && the_payload != "[]" {
+            tx.send_blocking(the_payload).context(
+                "💀 Joiner failed to send payload to ch2 — the channel rejected our offering. \
+                 Like sliding a note under the door and hearing it slide back. \
+                 ch2 may be closed or full. Either way, the vibes are off.",
+            )?;
+        }
     }
 
-    // 🧹 Reset buffer state — a fresh start, like January 1st but for bytes
-    buffer.clear();
-    *buffer_bytes = 0;
+    // 🧹 Drain only consumed feeds — unconsumed ones carry over for next flush
+    // 📏 Recalculate buffer_bytes from remaining feeds (cheaper than tracking deltas)
+    buffer.drain(0..the_feeds_consumed);
+    *buffer_bytes = buffer.iter().map(|f| f.len()).sum();
 
     Ok(())
 }

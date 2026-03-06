@@ -4,19 +4,30 @@
 # and yet somehow still unpredictable. Like this codebase. 🌩️
 # 🦆
 
-# [runtime]
+[runtime]
 # joiner_parallelism = (num cpus) - 1
+#joiner_parallelism = 1
 # pumper_to_joiner_capacity = (joiner_parallelism) * 4
-#
+pumper_to_joiner_capacity = 2
 # # sink_parallelism = 8
+joiner_to_drainer_capacity = 2
+sink_parallelism = 8
+
+
+[regulator]
+target_cpu = 75
+poll_interval_secs = 1
+min_request_size_bytes = 128000
+initial_output_bytes = 4194304
+# max_request_size_bytes = sink_config.max_request_size_bytes
 
 [source_config.File]
 file_name = "benchmark/data/geonames.json"
 
 [source_config.File.common_config]
-max_batch_size_bytes = 33554432 # 128 * 1024 is a single read chunk * 256 read Kibibyte
+max_batch_size_bytes = 4194304 # 128 * 1024 is a single read chunk * 256 read Kibibyte
 max_batch_size_docs = 1000000
-
+# when source bytes > sink bytes - joiner chunks?
 [sink_config.Elasticsearch]
 url = "http://localhost:9200"
 index = "test-123"

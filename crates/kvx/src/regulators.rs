@@ -8,25 +8,36 @@
 //!
 //! 🧠 Knowledge graph:
 //! ```text
-//! PressureGauge (tokio, reads _nodes/stats/os every Ns)
-//!   → Regulator.regulate(cpu_reading, dt_ms) → new flow rate (bytes)
-//!     → FlowKnob: Arc<AtomicUsize> (effective max_request_size_bytes)
-//!       → Joiner reads flow knob on every flush check
+//! Manometer (tokio, reads _nodes/stats/os every Ns)
+//!   → PipelineSignal::CpuReading ──┐
+//!                                    ├──→ mpsc rx ──→ FlowMaster ──→ FlowKnob
+//! Drainer(s) → PipelineSignal::*  ──┘     (PID + emergency 429/timeout logic)
+//!                                                          ↑
+//! Joiner(s) ← reads FlowKnob via load(Relaxed) ──────────┘
 //! ```
 //!
 //! - `Regulate` trait: `fn regulate(&mut self, reading: f64, dt_ms: f64) -> f64`
 //! - `Regulators` enum: dispatches to CpuPressure (PID) or ByteValue (static)
 //! - `RegulatorConfig`: serde struct for TOML `[regulator]` section
-//! - `PressureGauge`: background tokio task that reads node stats and adjusts FlowKnob
+//! - `Manometer`: background tokio task that reads node stats, sends CpuReading signals
+//! - `FlowMaster`: signal consumer that runs PID + emergency logic, adjusts FlowKnob
+//! - `PipelineSignal`: feedback enum (CpuReading, TooManyRequests, DrainSuccess, DrainError)
+//! - `PressureGauge` (legacy): HTTP + parsing logic reused by Manometer
 //!
 //! ⚠️ The singularity will self-regulate. We're just practicing.
 
 pub mod cpu_pressure;
+pub mod flow_master;
+pub mod manometer;
 pub mod pressure_gauge;
+pub mod signals;
 pub mod static_regulator;
 
 pub use cpu_pressure::CpuPressure;
-pub use pressure_gauge::{FlowKnob, SinkAuth, spawn_pressure_gauge};
+pub use flow_master::spawn_flow_master;
+pub use manometer::spawn_manometer;
+pub use pressure_gauge::{CpuGauge, FlowKnob, SinkAuth};
+pub use signals::{DrainErrorKind, PipelineSignal};
 pub use static_regulator::ByteValue;
 
 use serde::Deserialize;

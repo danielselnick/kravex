@@ -26,10 +26,11 @@ use crate::foreman::Foreman;
 use crate::app_config::{RuntimeConfig, SinkConfig, SourceConfig};
 use crate::manifolds::ManifoldBackend;
 use crate::casts::DocumentCaster;
-use crate::regulators::pressure_gauge::{FlowKnob, SinkAuth, spawn_pressure_gauge};
+use crate::regulators::pressure_gauge::{CpuGauge, FlowKnob, SinkAuth};
+use crate::regulators::{spawn_flow_master, spawn_manometer, Regulators};
 use anyhow::{Context, Result};
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::time::SystemTime;
 use tracing::info;
 
@@ -38,10 +39,33 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     let start_time = SystemTime::now();
     info!("🚀 KRAVEX IS BLASTING OFF — hold onto your indices, we are MIGRATING, baby!");
 
-    // Build the backends from config
-    // Note: We currently don't have implementations, so this will panic or fail when we add them.
-    // We are passing an unimplemented mock mapping for now.
-    let source_backend = from_source_config(&app_config)
+    // 📏 Extract max request size from sink config — the hard ceiling for payload size.
+    let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
+
+    // 🔧 Create the FlowKnob — shared atomic valve between pressure gauge and joiners.
+    // 🧠 When regulator is present, init to regulator's initial_output_bytes (PID starting point).
+    // When absent, init to sink's max_request_size_bytes (static, never changes). 🎚️
+    let the_initial_flow = match &app_config.regulator {
+        Some(reg) => reg.initial_output_bytes,
+        None => max_request_size_bytes,
+    };
+    let the_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(the_initial_flow));
+
+    // 🌡️ Create the CpuGauge — shared atomic for cluster CPU %, written by FlowMaster.
+    // Initialized to 0.0 (stored as f64 bits). Only meaningful when a regulator is active.
+    // Like a heart rate monitor at a hospital — useless if nobody's hooked up. 💓
+    let the_cpu_gauge: CpuGauge = Arc::new(AtomicU64::new(0.0_f64.to_bits()));
+
+    // 📊 Decide which gauges to show in the progress display.
+    // When a regulator is configured, pass the gauges so ProgressMetrics renders them.
+    // When static, pass None — no gauges to show. Clean TUI. No noise. 🤫
+    let (the_progress_flow_knob, the_progress_cpu_gauge) = match &app_config.regulator {
+        Some(_) => (Some(the_flow_knob.clone()), Some(the_cpu_gauge.clone())),
+        None => (None, None),
+    };
+
+    // 🏗️ Build the backends from config
+    let source_backend = from_source_config(&app_config, the_progress_flow_knob, the_progress_cpu_gauge)
         .await
         .context("Failed to create source backend")?;
 
@@ -66,45 +90,64 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     // The Manifold casts raw feeds AND joins them into wire format. Two birds, one Cow. 🐄
     let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
 
-    // 📏 Extract max request size from sink config — the hard ceiling for payload size.
-    let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
-
-    // 🔧 Create the FlowKnob — shared atomic valve between pressure gauge and joiners.
-    // 🧠 When regulator is present, init to regulator's initial_output_bytes (PID starting point).
-    // When absent, init to sink's max_request_size_bytes (static, never changes). 🎚️
-    let the_initial_flow = match &app_config.regulator {
-        Some(reg) => reg.initial_output_bytes,
-        None => max_request_size_bytes,
-    };
-    let the_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(the_initial_flow));
-
-    // 🔬 Optionally spawn the pressure gauge — but only for cluster sinks (ES).
-    // File/InMemory sinks have no cluster to monitor. If someone puts [regulator] in a
-    // File→File config, we warn and skip rather than spam HTTP errors to localhost. 📡
-    let the_gauge_handle = match (&app_config.regulator, &app_config.sink_config) {
+    // 🔬 Optionally spawn the regulator feedback loop:
+    // Manometer (CPU poller) → signal channel → FlowMaster (PID + emergency) → FlowKnob
+    // Only for cluster sinks (ES). File/InMemory sinks have no cluster to monitor. 📡
+    //
+    // 🧠 Topology when regulator is configured:
+    // 1. Create signal channel (mpsc, bounded 256)
+    // 2. Spawn Manometer (gets tx.clone()) — polls _nodes/stats/os → CpuReading signals
+    // 3. Create Regulators instance (PID controller)
+    // 4. Spawn FlowMaster (gets rx, Regulators, FlowKnob) — consumes all signals, adjusts knob
+    // 5. Drainers get tx.clone() — report DrainSuccess/429/Error signals
+    // 6. Shutdown cascade: drainers drop tx → manometer aborted (tx drops) → channel closes → FlowMaster exits
+    let (the_gauge_handle, the_signal_horn) = match (&app_config.regulator, &app_config.sink_config) {
         (Some(regulator_config), SinkConfig::Elasticsearch(_)) => {
             let (the_sink_url, the_sink_auth) = extract_sink_url_and_auth(&app_config.sink_config);
+
+            // 📡 Create the signal channel — bounded 256, producers use try_send (never block)
+            let (the_signal_tx, the_signal_rx) =
+                tokio::sync::mpsc::channel::<crate::regulators::PipelineSignal>(256);
+
+            // 🔬 Spawn the manometer — reads CPU, sends CpuReading signals
             info!(
-                "🔬 Regulator configured — spawning pressure gauge (target CPU: {}%, poll: {}s)",
+                "🔬 Regulator configured — spawning manometer + FlowMaster (target CPU: {}%, poll: {}s)",
                 regulator_config.target_cpu, regulator_config.poll_interval_secs
             );
-            Some(spawn_pressure_gauge(
+            let the_manometer_handle = spawn_manometer(
                 regulator_config.clone(),
                 the_sink_url,
                 the_sink_auth,
+                the_signal_tx.clone(),
+            );
+
+            // 🎛️ Create the PID regulator and spawn the FlowMaster
+            let the_regulator = Regulators::from_config(regulator_config, max_request_size_bytes);
+            let the_flow_master_handle = spawn_flow_master(
+                the_regulator,
                 the_flow_knob.clone(),
-                max_request_size_bytes,
-            ))
+                the_cpu_gauge.clone(),
+                the_signal_rx,
+                regulator_config.min_request_size_bytes,
+            );
+
+            // 🧠 We store the manometer handle for abort, but the FlowMaster exits via RAII
+            // (channel closes when all senders drop). We still need to await/abort it after pipeline.
+            // Bundle both handles: abort manometer first (kills its tx), then FlowMaster exits naturally.
+            (
+                Some((the_manometer_handle, the_flow_master_handle)),
+                Some(the_signal_tx),
+            )
         }
         (Some(_), _) => {
             info!(
                 "⚠️ Regulator configured but sink is not a cluster backend — \
-                 pressure gauge not spawned. FlowKnob stays at initial value. \
+                 feedback loop not spawned. FlowKnob stays at initial value. \
                  Like buying a thermostat for a tent. 🏕️"
             );
-            None
+            (None, None)
         }
-        (None, _) => None,
+        (None, _) => (None, None),
     };
 
     let foreman = Foreman::new(app_config.clone());
@@ -115,9 +158,21 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
             caster,
             manifold,
             the_flow_knob,
-            the_gauge_handle,
+            the_signal_horn,
         )
         .await?;
+
+    // 🔬 Abort the manometer and await FlowMaster if they were running.
+    // Shutdown cascade: drainers already exited (tx clones dropped),
+    // abort manometer (its tx drops) → all senders gone → channel closes → FlowMaster exits.
+    // Like dominoes, but for async tasks. 🎲🦆
+    if let Some((the_manometer, the_flow_master)) = the_gauge_handle {
+        the_manometer.abort();
+        info!("🔬 Manometer aborted — pipeline complete, no more CPU polling needed");
+        // ⏳ FlowMaster should exit quickly once all senders are gone
+        let _ = the_flow_master.await;
+        info!("🎛️ FlowMaster exited — feedback loop closed. The knob rests. 🎚️");
+    }
 
     info!(
         "🎉 MIGRATION COMPLETE! Took: {:#?} — not bad for a Rust crate that was \"almost done\" six sprints ago 🦆",
@@ -153,12 +208,16 @@ fn extract_sink_url_and_auth(sink_config: &SinkConfig) -> (String, SinkAuth) {
     }
 }
 
-async fn from_source_config(config: &AppConfig) -> Result<SourceBackend> {
+async fn from_source_config(
+    config: &AppConfig,
+    the_flow_knob: Option<FlowKnob>,
+    the_cpu_gauge: Option<CpuGauge>,
+) -> Result<SourceBackend> {
     match &config.source_config {
         // -- 📂 The File arm: ancient, reliable, and smells faintly of 2003.
         // -- Like a filing cabinet that somehow learned async/await.
         SourceConfig::File(file_cfg) => {
-            let src = FileSource::new(file_cfg.clone()).await?;
+            let src = FileSource::new(file_cfg.clone(), the_flow_knob, the_cpu_gauge).await?;
             Ok(SourceBackend::File(src))
         }
         // -- 🧠 The InMemory arm: blazing fast, lives and dies with the process.
@@ -170,7 +229,7 @@ async fn from_source_config(config: &AppConfig) -> Result<SourceBackend> {
         // -- 📡 The Elasticsearch arm: HTTP calls, JSON parsing, and the constant
         // -- fear of a 429 response that ruins your Thursday afternoon.
         SourceConfig::Elasticsearch(es_cfg) => {
-            let src = ElasticsearchSource::new(es_cfg.clone()).await?;
+            let src = ElasticsearchSource::new(es_cfg.clone(), the_flow_knob, the_cpu_gauge).await?;
             Ok(SourceBackend::Elasticsearch(src))
         }
     }
@@ -263,6 +322,7 @@ mod tests {
         foreman
             .start_workers(source, vec![sink], caster, manifold, the_test_flow_knob, None)
             .await?;
+        // 🧠 No signal horn (None) — no regulator in tests. Drainers run silently. 🤫🦆
 
         // 📦 Joiner received 1 feed (4 docs newline-delimited), passthrough-cast and joined into JSON array.
         // Joiner buffers raw feeds → manifold.join(buffer, caster) → payload on ch2 → Drainer relays to sink.

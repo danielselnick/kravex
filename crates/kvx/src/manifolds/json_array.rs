@@ -39,36 +39,7 @@ pub struct JsonArrayManifold;
 impl Manifold for JsonArrayManifold {
     #[inline]
     fn join(&self, feeds: &[String], caster: &DocumentCaster) -> Result<String> {
-        // -- 📦 First, cast all feeds and collect results
-        let mut all_items: Vec<String> = Vec::with_capacity(feeds.len());
-        for feed in feeds {
-            let cast_result = caster.cast(feed)?;
-            all_items.push(cast_result);
-        }
-
-        // -- 🧮 Pre-allocate: brackets(2) + sum of items + commas(max n-1).
-        // -- This is exact capacity — no growth, no realloc, no drama.
-        // -- No cap this capacity math slaps fr fr 🎯
-        let commas = if all_items.is_empty() {
-            0
-        } else {
-            all_items.len() - 1
-        };
-        let estimated_size: usize =
-            2 + all_items.iter().map(|s| s.len()).sum::<usize>() + commas;
-        let mut payload = String::with_capacity(estimated_size);
-        payload.push('[');
-        for (i, item) in all_items.iter().enumerate() {
-            if i > 0 {
-                // -- 🔗 The comma: JSON's way of saying "and there's more where that came from."
-                // -- Without this comma, the JSON validator weeps. With it, it beams with pride.
-                payload.push(',');
-            }
-            payload.push_str(item);
-        }
-        payload.push(']');
-        // -- ✅ Valid JSON array. No serde was harmed in the making of this string.
-        Ok(payload)
+       
     }
 }
 

@@ -11,6 +11,7 @@ use tracing::trace;
 use crate::backends::{Sink, Source};
 use crate::progress::ProgressMetrics;
 use crate::backends::{CommonSinkConfig, CommonSourceConfig};
+use crate::regulators::pressure_gauge::{CpuGauge, FlowKnob};
 
 // -- 📂 FileSourceConfig — "It's just a file", said no sysadmin ever before the disk filled up.
 // -- Lives here now, close to the FileSource that actually uses it. Ethos pattern, baby. 🎯
@@ -103,7 +104,11 @@ impl FileSource {
     /// No cap: `File::open` is async here because we're in tokio-land. This is not your
     /// grandfather's `std::fs::File::open`. This is `std::fs::File::open`'s cooler younger sibling
     /// who got into the async runtime scene and never looked back.
-    pub async fn new(source_config: FileSourceConfig) -> Result<Self> {
+    pub async fn new(
+        source_config: FileSourceConfig,
+        the_flow_knob: Option<FlowKnob>,
+        the_cpu_gauge: Option<CpuGauge>,
+    ) -> Result<Self> {
         // -- 💀 The door. It's locked. Or it doesn't exist. Or the filesystem lied to you.
         // -- In any case, the source file refused to open — like a very stubborn bouncer
         // -- at an exclusive club where the club is just a text file and we are very small data.
@@ -126,7 +131,7 @@ impl FileSource {
         // 🚀 spin up the progress metrics — source name is the file path, honest and boring.
         // KNOWLEDGE GRAPH: file_name is used as the "source name" label in the progress table.
         // It's the human-readable handle. Keep it meaningful — it shows up in the TUI.
-        let progress = ProgressMetrics::new(source_config.file_name.clone(), file_size);
+        let progress = ProgressMetrics::new(source_config.file_name.clone(), file_size, the_flow_knob, the_cpu_gauge);
 
         Ok(Self {
             file: file_handle,
@@ -323,7 +328,7 @@ mod tests {
                 max_batch_size_bytes: max_bytes,
             },
         };
-        let source = FileSource::new(config)
+        let source = FileSource::new(config, None, None)
             .await
             .expect("💀 FileSource::new failed on a temp file. That's a new low.");
         (source, tmp)

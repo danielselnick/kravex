@@ -10,10 +10,13 @@
 //! 🦆 The duck has nothing to do with this module. It's just vibing.
 
 use std::collections::VecDeque;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use comfy_table::{Cell, CellAlignment, ContentArrangement, Table, presets::NOTHING};
 use indicatif::{ProgressBar, ProgressStyle};
+
+use crate::regulators::pressure_gauge::{CpuGauge, FlowKnob};
 
 // -- 📏 one mebibyte — not a megabyte, pedants. there's a difference and I will die on this hill.
 const MIB: u64 = 1024 * 1024;
@@ -98,6 +101,12 @@ pub struct ProgressMetrics {
     rate_samples: VecDeque<(Instant, u64, u64)>,
     /// ⏱️ when did this whole adventure start? hopefully not too long ago.
     start_time: Instant,
+    /// 🎚️ the FlowKnob — current max payload size in bytes, adjusted by PID regulator.
+    /// None when no regulator is active (static mode). Read via load(Relaxed).
+    the_flow_knob: Option<FlowKnob>,
+    /// 🌡️ the CpuGauge — latest cluster CPU % from the manometer, stored as f64 bits.
+    /// None when no regulator is active. Read via load(Relaxed) + f64::from_bits().
+    the_cpu_gauge: Option<CpuGauge>,
 }
 
 impl std::fmt::Debug for ProgressMetrics {
@@ -121,7 +130,12 @@ impl ProgressMetrics {
     ///
     /// # No cap
     /// This function slaps. fr fr. The progress bar will look sick in your terminal.
-    pub fn new(source_name: String, total_size: u64) -> Self {
+    pub fn new(
+        source_name: String,
+        total_size: u64,
+        the_flow_knob: Option<FlowKnob>,
+        the_cpu_gauge: Option<CpuGauge>,
+    ) -> Self {
         // -- 🎨 build the progress bar — cyan because it's classy, blue because it's calm
         let progress_bar = ProgressBar::new(total_size);
         progress_bar.set_style(
@@ -145,6 +159,8 @@ impl ProgressMetrics {
             progress_bar,
             rate_samples,
             start_time,
+            the_flow_knob,
+            the_cpu_gauge,
         }
     }
 
@@ -304,6 +320,31 @@ impl ProgressMetrics {
             Cell::new(format!("{} elapsed", elapsed_fmt)).set_alignment(CellAlignment::Right),
             Cell::new(format!("{} remaining", remaining)).set_alignment(CellAlignment::Right),
         ]);
+
+        // 🎚️ row 5: regulator gauges — max payload size + cluster CPU %
+        // Only rendered when a regulator is active. Static pipelines don't get this row.
+        // Like a dashboard light that only turns on when the engine is turbocharged. 🏎️
+        if self.the_flow_knob.is_some() || self.the_cpu_gauge.is_some() {
+            let the_payload_cell = match &self.the_flow_knob {
+                Some(knob) => {
+                    let the_max_bytes = knob.load(Ordering::Relaxed) as u64;
+                    format!("🎚️ {}", format_bytes(the_max_bytes, the_max_bytes.max(MIB)))
+                }
+                None => "-- ".to_string(),
+            };
+            let the_cpu_cell = match &self.the_cpu_gauge {
+                Some(gauge) => {
+                    let the_cpu_bits = gauge.load(Ordering::Relaxed);
+                    let the_cpu_percent = f64::from_bits(the_cpu_bits);
+                    format!("🌡️ {:.1}% CPU", the_cpu_percent)
+                }
+                None => "-- ".to_string(),
+            };
+            table.add_row(vec![
+                Cell::new(the_payload_cell).set_alignment(CellAlignment::Right),
+                Cell::new(the_cpu_cell).set_alignment(CellAlignment::Right),
+            ]);
+        }
 
         // -- 🎨 slam it all into the progress bar message
         // indicatif will handle the terminal magic (cursor positioning, redraw, etc.)
