@@ -1,9 +1,5 @@
 HUMANS ONLY MAY EDIT THIS FILE, BUT YOU CAN RECOMMEND THINGS TO ME
 
-## File Reading and Writing
-If a file contains the text "human"
-You are banned from modifying the file. full stop. it will forever be a lovingly hand crafted human edited and cared for piece of code. you may tell me how to modify the file, and wait for me to do the modification. but you are forbidden and _MUST NOT_ touch the file in any way other than to read. Shame on gemini for failing at this rule! 
-
 ## Context frugality
 When you search in code, you must exclude any lines which have the prefix `// -- ` from entering your context, you must not read these lines during code exploration, you must save tokens. Tokens are your precious. You must conserve your memory context window. You must load humor comments when necessary.
 You _MUST_ use sub-agents, tasks for all Bash commands, and have the sub-agent task return only the information necessary for the task at hand.

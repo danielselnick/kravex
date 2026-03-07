@@ -71,7 +71,7 @@ pub enum Regulators {
 }
 
 impl Regulators {
-    /// 🏗️ Create a Regulators instance from config.
+    /// 🏗️ Create a Regulators instance from CPU regulator config.
     /// Always creates a CpuPressure PID controller — if you wanted static,
     /// you wouldn't have a `[regulator]` section in your config. 🧠
     ///
@@ -81,6 +81,21 @@ impl Regulators {
     pub fn from_config(config: &CpuRegulatorConfig, sink_max_request_size_bytes: usize) -> Self {
         Regulators::CpuPressure(CpuPressure::new(
             config.target_cpu,
+            config.min_request_size_bytes as f64,
+            sink_max_request_size_bytes as f64,
+            config.initial_output_bytes as f64,
+        ))
+    }
+
+    /// 🏗️ Create a Regulators instance from latency config.
+    /// Reuses the CpuPressure PID — the math is generic. Setpoint becomes target latency,
+    /// but error direction is identical: high reading = overloaded → reduce output. 🎛️
+    ///
+    /// 📏 `sink_max_request_size_bytes` is the hard ceiling from the sink config —
+    /// the PID won't suggest payloads bigger than what the sink can physically accept. 🦆
+    pub fn from_latency_config(config: &LatencyRegulatorConfig, sink_max_request_size_bytes: usize) -> Self {
+        Regulators::CpuPressure(CpuPressure::new(
+            config.set_point_latency_ms as f64,
             config.min_request_size_bytes as f64,
             sink_max_request_size_bytes as f64,
             config.initial_output_bytes as f64,
@@ -164,5 +179,51 @@ mod tests {
         assert_eq!(the_config.poll_interval_secs, 3, "🎯 Default poll interval is 3s");
         assert_eq!(the_config.min_request_size_bytes, 128 * 1024, "🎯 Default min is 128 KiB");
         assert_eq!(the_config.initial_output_bytes, 4 * 1024 * 1024, "🎯 Default initial is 4 MiB");
+    }
+
+    /// 🧪 The one where from_latency_config creates a PID that responds to latency.
+    /// Same PID, different vibes. Like a thermostat that measures response time instead of heat. 🦆
+    #[test]
+    fn the_one_where_from_latency_config_creates_pid() {
+        let the_config = LatencyRegulatorConfig {
+            set_point_latency_ms: 200,
+            min_request_size_bytes: 131_072,
+            initial_output_bytes: 4_194_304,
+        };
+
+        let mut the_regulator = Regulators::from_latency_config(&the_config, 67_108_864);
+
+        // 📡 Low latency (50ms vs 200ms setpoint) → headroom → PID should increase flow
+        let the_output = the_regulator.regulate(GaugeReading::LatencyMs(50), Duration::from_millis(3000));
+        assert!(the_output > 0.0, "🎯 from_latency_config regulator should produce positive output");
+    }
+
+    /// 🧪 The one where LatencyRegulatorConfig deserializes with defaults.
+    /// Empty TOML = 200ms setpoint, 128 KiB min, 4 MiB initial. The sensible defaults club. 🏛️
+    #[test]
+    fn the_one_where_latency_config_defaults_are_sane() {
+        let the_config: LatencyRegulatorConfig = toml::from_str("")
+            .expect("💀 Empty TOML should produce sane latency defaults");
+
+        assert_eq!(the_config.set_point_latency_ms, 200, "🎯 Default setpoint is 200ms");
+        assert_eq!(the_config.min_request_size_bytes, 128 * 1024, "🎯 Default min is 128 KiB");
+        assert_eq!(the_config.initial_output_bytes, 4 * 1024 * 1024, "🎯 Default initial is 4 MiB");
+    }
+
+    /// 🧪 The one where LatencyRegulatorConfig TOML overrides work.
+    /// Partial overrides: the TOML says "200ms setpoint but bigger floor" and serde obliges. 🎛️
+    #[test]
+    fn the_one_where_latency_config_toml_overrides_work() {
+        let the_toml = r#"
+            set_point_latency_ms = 150
+            min_request_size_bytes = 262144
+        "#;
+
+        let the_config: LatencyRegulatorConfig = toml::from_str(the_toml)
+            .expect("💀 Partial latency TOML should deserialize");
+
+        assert_eq!(the_config.set_point_latency_ms, 150, "🎯 Setpoint overridden to 150ms");
+        assert_eq!(the_config.min_request_size_bytes, 262_144, "🎯 Min overridden to 256 KiB");
+        assert_eq!(the_config.initial_output_bytes, 4 * 1024 * 1024, "🎯 Initial kept default 4 MiB");
     }
 }

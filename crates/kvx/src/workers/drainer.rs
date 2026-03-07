@@ -23,6 +23,7 @@
 
 use super::Worker;
 use super::DrainerConfig;
+use crate::GaugeReading;
 use crate::Payload;
 use crate::backends::{Sink, SinkBackend};
 use anyhow::{Context, Result};
@@ -52,15 +53,25 @@ pub struct Drainer {
     sink: SinkBackend,
     /// 🔄 Retry configuration — how persistent are we when the sink says "nah"?
     retry_config: DrainerConfig,
+    /// 📡 Optional gauge channel — sends latency readings to FlowMaster after each drain.
+    /// None when running in static mode (no regulation). try_send: non-blocking, drops
+    /// readings if channel full — acceptable for a throttle signal. Like shouting your
+    /// blood pressure at a nurse who's already dealing with 6 patients. 🏥🦆
+    gauge_tx: Option<async_channel::Sender<GaugeReading>>,
 }
 
 impl Drainer {
-    /// 🏗️ Construct a Drainer — a receiver, a sink, and the patience of a retry config. 🚰
+    /// 🏗️ Construct a Drainer — a receiver, a sink, retries, and an optional gauge channel. 🚰
     ///
     /// "Give a drainer a payload, it sends for a millisecond.
     ///  Give a drainer retries, it sends until the heat death of the universe." — Ancient proverb 🦆
-    pub fn new(rx: Receiver<Payload>, sink: SinkBackend, retry_config: DrainerConfig) -> Self {
-        Self { rx, sink, retry_config }
+    pub fn new(
+        rx: Receiver<Payload>,
+        sink: SinkBackend,
+        retry_config: DrainerConfig,
+        gauge_tx: Option<async_channel::Sender<GaugeReading>>,
+    ) -> Self {
+        Self { rx, sink, retry_config, gauge_tx }
     }
 }
 
@@ -140,6 +151,9 @@ impl Worker for Drainer {
                         // 📡 Send the assembled payload to the sink, with retries.
                         // Skip empty payloads — the joiner should filter these, but belt AND suspenders 🩳
                         if !the_payload.is_empty() && *the_payload != "[]" {
+                            // ⏱️ Time the drain — FlowMaster needs to know how long the sink took
+                            let the_stopwatch = std::time::Instant::now();
+
                             drain_with_retry(&mut self.sink, the_payload, &self.retry_config)
                                 .await
                                 .context(
@@ -147,6 +161,12 @@ impl Worker for Drainer {
                                      said 'nah' repeatedly. Like asking someone out multiple times. \
                                      At some point you have to take the hint.",
                                 )?;
+
+                            // 📡 Report latency to FlowMaster — non-blocking, drops if channel full
+                            if let Some(tx) = &self.gauge_tx {
+                                let the_latency_ms = the_stopwatch.elapsed().as_millis() as usize;
+                                let _ = tx.try_send(GaugeReading::LatencyMs(the_latency_ms));
+                            }
                         }
                     }
                     Err(_) => {
@@ -209,6 +229,46 @@ mod tests {
         async fn close(&mut self) -> Result<()> {
             Ok(())
         }
+    }
+
+    /// 🧪 The one where the drainer sends latency to the gauge channel after a successful drain.
+    /// Like a runner hitting the lap button on their watch — every drain gets timed. ⏱️🦆
+    #[tokio::test]
+    async fn the_one_where_drainer_reports_latency_to_flow_master() {
+        let mut the_sink = FlakyTestSink::new(0);
+        let the_payload = Payload::from("timed payload".to_string());
+        let the_config = test_config(3);
+
+        let (gauge_tx, gauge_rx) = async_channel::bounded(16);
+
+        // ⏱️ Time the drain and send latency
+        let the_stopwatch = std::time::Instant::now();
+        drain_with_retry(&mut the_sink, the_payload, &the_config).await.unwrap();
+        let the_latency_ms = the_stopwatch.elapsed().as_millis() as usize;
+        let _ = gauge_tx.try_send(GaugeReading::LatencyMs(the_latency_ms));
+
+        // 📡 Verify the gauge channel received a reading
+        let the_reading = gauge_rx.try_recv().unwrap();
+        match the_reading {
+            GaugeReading::LatencyMs(ms) => {
+                assert!(ms < 1000, "🎯 Latency should be under 1s for an in-memory sink — got {}ms", ms);
+            }
+            _ => panic!("💀 Expected LatencyMs reading, got something else entirely"),
+        }
+    }
+
+    /// 🧪 The one where the drainer works fine without a gauge channel.
+    /// None means no regulation — the drainer doesn't care, it just drains. 🚰🦆
+    #[tokio::test]
+    async fn the_one_where_drainer_works_without_gauge_channel() {
+        let mut the_sink = FlakyTestSink::new(0);
+        let the_payload = Payload::from("ungauged payload".to_string());
+        let the_config = test_config(3);
+
+        // 📡 No gauge_tx — None path. Drain should work identically.
+        let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
+        assert!(honestly_who_knows.is_ok(), "🎯 Drain should succeed without gauge channel");
+        assert_eq!(the_sink.the_survivors[0], "ungauged payload");
     }
 
     /// 🧪 A sink that ALWAYS fails — like applying to FAANG with a 2-week bootcamp cert. 🦆

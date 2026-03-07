@@ -34,9 +34,9 @@
 #   num_joiner_workers             → joiner_parallelism
 
  [runtime]
- joiner_parallelism = 4
- pumper_to_joiner_capacity = 4
- joiner_to_drainer_capacity = 8
+ joiner_parallelism = 2
+ pumper_to_joiner_capacity = 2
+ joiner_to_drainer_capacity = 2
  sink_parallelism = 8
 
 # ============================================================
@@ -73,11 +73,16 @@ max_request_size_bytes = 4194304        # 4 MiB — benchmark override (serde de
 # Present → spawns manometer + flow_master, dynamically adjusts payload size
 # based on sink cluster CPU pressure.
 
-[regulator]
- target_cpu = 75.0                     # 🎯 Target CPU % for sink cluster
- poll_interval_secs = 1               # ⏱️  Node stats poll interval (seconds)
- min_request_size_bytes = 131072       # 📏 PID floor: 128 KiB
- initial_output_bytes = 1024000        # 📊 Starting flow rate: 4 MiB
+#[flow_master.CPU]
+# target_cpu = 75.0                     # 🎯 Target CPU % for sink cluster
+# poll_interval_secs = 1               # ⏱️  Node stats poll interval (seconds)
+# min_request_size_bytes = 131072       # 📏 PID floor: 128 KiB
+# initial_output_bytes = 1024000        # 📊 Starting flow rate: 4 MiB
+[flow_master.Latency]
+set_point_latency_ms = 2000
+min_output = 128000
+max_output = 8000000
+initial_output = 512000
 
 # ============================================================
 # 📡 Source — Elasticsearch (commented-out reference)

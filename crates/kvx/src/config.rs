@@ -7,7 +7,6 @@
 //! self-harm that even the borrow checker wouldn't approve of.
 
 use anyhow::Context;
-use crate::regulators::CpuRegulatorConfig;
 use crate::workers::DrainerConfig;
 use crate::workers::FlowMasterConfig;
 use serde::Deserialize;
@@ -112,16 +111,14 @@ pub struct AppConfig {
     pub sink_config: SinkConfig,
     #[serde(default)]
     pub runtime: RuntimeConfig,
-    /// 🔬 Optional regulator config — if present, spawns a PID-controlled pressure gauge
-    /// that dynamically adjusts payload size based on sink cluster CPU pressure.
-    /// If absent, pipeline runs at fixed max_request_size_bytes. Business as usual. 🎚️
-    pub regulator: Option<CpuRegulatorConfig>,
     /// 🔄 Drainer retry config — exponential backoff knobs for when the sink says "not now".
     /// Defaults to 3 retries, 1s initial, 2x multiplier, 30s cap. Optional section in TOML. 🦆
     #[serde(default)]
     pub drainer: DrainerConfig,
+    /// 🎛️ FlowMaster config — the unified regulator. Static = fixed flow, Latency = PID from
+    /// drain latency, CPU = PID from cluster CPU stats. Replaces the old `regulator` field. 🔧
     #[serde(default)]
-    pub flow_master: FlowMasterConfig
+    pub flow_master: FlowMasterConfig,
 }
 
 /// 🚀 Load the config — from a file, from env vars, or from the sheer power of hoping.
