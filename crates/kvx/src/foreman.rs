@@ -31,12 +31,14 @@
 use crate::config::AppConfig;
 use crate::casts::PageToEntriesCaster;
 use crate::manifolds::ManifoldBackend;
+use crate::progress::{DrainMetrics, spawn_progress_reporter};
 use crate::regulators::pressure_gauge::FlowKnob;
 use crate::regulators::Regulators;
 use crate::workers;
 use crate::workers::{FlowMasterConfig, Worker};
 use crate::GaugeReading;
 use anyhow::{Context, Result};
+use std::sync::Arc;
 use tracing::info;
 
 /// 📦 The Foreman: because even async tasks need someone hovering over them
@@ -96,6 +98,8 @@ impl Foreman {
         the_flow_knob: FlowKnob,
         the_flow_master_config: &FlowMasterConfig,
         the_sink_max_request_size_bytes: usize,
+        pipeline_name: String,
+        total_expected_bytes: u64,
     ) -> Result<()> {
         let the_joiner_count = self.app_config.runtime.joiner_parallelism;
 
@@ -183,6 +187,11 @@ impl Foreman {
         drop(tx2);
         drop(rx1);
 
+        // 📊 Create shared drain metrics — N drainers write, 1 reporter reads.
+        // Arc<DrainMetrics> is the FlowKnob pattern applied to progress reporting.
+        // No channels, no Mutex, no shutdown cascade — just atomics and vibes. 🧘
+        let the_drain_metrics = Arc::new(DrainMetrics::new());
+
         // 🚰 Spawn N drainers on tokio — thin async relays from ch2 to sinks.
         // Each drainer gets its own sink, a clone of rx2, and optionally a clone of tx3.
         let the_gauge_tx = the_gauge_channel.as_ref().map(|(tx, _, _)| tx.clone());
@@ -193,6 +202,7 @@ impl Foreman {
                 sink_backend,
                 self.app_config.drainer.clone(),
                 the_gauge_tx.clone(),
+                the_drain_metrics.clone(),
             );
             the_async_worker_handles.push(drainer.start());
         }
@@ -221,11 +231,26 @@ impl Foreman {
         let pumper = workers::Pumper::new(tx1, source_backend);
         the_async_worker_handles.push(pumper.start());
 
+        // 📊 Spawn the progress reporter — a leaf display task that ticks every 500ms.
+        // It reads DrainMetrics atomics, renders a comfy-table, and sleeps. Safe to abort.
+        // Like a screensaver — decorative, informative, entirely expendable. 🖥️🦆
+        let the_progress_reporter = spawn_progress_reporter(
+            pipeline_name,
+            the_drain_metrics.clone(),
+            total_expected_bytes,
+        );
+
         // ⏳ Wait for all async workers (pumper + drainers + optional FlowMaster).
         // The cascade: pumper done → ch1 closes → joiners drain+exit → ch2 closes
         //   → drainers exit → ch3 closes → FlowMaster exits.
         // So by the time join_all returns, everyone's done. 🏁
         let the_async_results = futures::future::join_all(the_async_worker_handles).await;
+
+        // 🗑️ Abort the progress reporter — all real workers are done, no more data to display.
+        // One final tick to show the end state, then goodnight. 🌙
+        the_progress_reporter.abort();
+        let _ = the_progress_reporter.await;
+
         for result in the_async_results {
             // 🤯 result?? — outer `?` unwraps JoinHandle, inner `?` unwraps the work
             result??;

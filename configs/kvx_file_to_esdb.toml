@@ -64,7 +64,7 @@ index = "test-123"                      # Optional — each doc can carry its ow
 # username = "elastic"                  # 🔒 Basic auth username
 # password = "changeme"                # 🔒 Basic auth password
 # api_key = "base64-encoded-api-key"   # 🔒 API key auth (preferred over basic)
-max_request_size_bytes = 4194304        # 4 MiB — benchmark override (serde default: 10,485,760 / 10 MiB)
+max_request_size_bytes = 8000000        # 4 MiB — benchmark override (serde default: 10,485,760 / 10 MiB)
 
 # ============================================================
 # 🎚️  Regulator — PID-controlled adaptive throttling (optional)

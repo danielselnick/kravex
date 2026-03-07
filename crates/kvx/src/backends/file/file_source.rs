@@ -9,7 +9,6 @@ use tracing::trace;
 
 use crate::Page;
 use crate::backends::{CommonSourceConfig, Source};
-use crate::progress::ProgressMetrics;
 use super::config::FileSourceConfig;
 // 📏 128 KiB per OS read — the Goldilocks zone between "too many syscalls" and "too much RAM".
 // BufReader's default is 8 KiB. We're 16x that. Fewer context switches, happier kernel.
@@ -29,7 +28,6 @@ const CHUNK_SIZE: usize = 128 * 1024;
 /// checker. We are at an impasse.
 ///
 /// 🧵 Async, non-blocking. Raw tokio `File` — we ARE the buffer now. No middleman. No BufReader.
-/// 📊 Tracks progress via `ProgressMetrics` — bytes read, docs read, reported to a progress table.
 /// ⚠️  If the file is being written to while we read it, the size estimate will be wrong.
 ///     This is fine. We are fine. Everything is fine. 🐛
 ///
@@ -48,23 +46,17 @@ pub struct FileSource {
     // KNOWLEDGE GRAPH: this is the key to correctness across page boundaries.
     // Without it, lines that span two chunks would get split into two incomplete docs.
     remainder: Vec<u8>,
-    source_config: FileSourceConfig,
-    // -- 📊 progress tracker — because "it's running" is not a status update.
-    // -- This feeds the fancy progress table in the supervisor. Without it, you'd be flying blind
-    // -- in a storm with no instruments. With it, you're flying blind in a storm, but at least
-    // -- you have a very attractive progress bar.
-    progress: ProgressMetrics,
+    pub(crate) source_config: FileSourceConfig,
+    /// 📏 total file size in bytes — used by Foreman for progress bar total_expected_bytes
+    pub(crate) file_size: u64,
 }
 
-// 🐛 NOTE: progress is intentionally excluded from this Debug impl.
-// ProgressMetrics contains internal counters and spinners that don't format cleanly,
-// and more importantly, nobody debugging a FileSource wants to read a wall of atomic integers.
-// -- "Perfection is achieved not when there is nothing more to add, but when there is nothing
-// -- left to add" — Antoine de Saint-Exupéry, who never had to impl Debug for a progress bar.
 impl std::fmt::Debug for FileSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // -- 🎭 "Perfection is achieved not when there is nothing more to add, but when there is nothing left to Debug" — Antoine de Saint-Exupéry
         f.debug_struct("FileSource")
             .field("source_config", &self.source_config)
+            .field("file_size", &self.file_size)
             .finish()
     }
 }
@@ -93,23 +85,18 @@ impl FileSource {
                 source_config.file_name
             ))?;
 
-        // 📏 grab file size for the progress bar — if metadata fails, we fly blind (0 = unknown).
+        // 📏 grab file size — passed to Foreman for progress bar total_expected_bytes.
         // ⚠️  known edge case: if the file is being written to while we read, size may be stale/wrong.
         // --    This is fine. We will not panic. We are calm. The borrow checker, however, is not calm.
         // --    The borrow checker is never calm. The borrow checker has seen things.
         let file_size = file_handle.metadata().await.map(|m| m.len()).unwrap_or(0);
-
-        // 🚀 spin up the progress metrics — source name is the file path, honest and boring.
-        // KNOWLEDGE GRAPH: file_name is used as the "source name" label in the progress table.
-        // It's the human-readable handle. Keep it meaningful — it shows up in the TUI.
-        let progress = ProgressMetrics::new(source_config.file_name.clone(), file_size);
 
         Ok(Self {
             file: file_handle,
             read_buf: vec![0u8; CHUNK_SIZE],
             remainder: Vec::new(),
             source_config,
-            progress,
+            file_size,
         })
     }
 }
@@ -219,7 +206,7 @@ impl Source for FileSource {
                         feed.push(b'\n');
                     }
                     feed.extend_from_slice(&fragment[..content_end]);
-                    doc_count += 1;
+                    // doc_count not incremented here — EOF fragment, loop exits next
                 }
                 break;
             }
@@ -239,16 +226,10 @@ impl Source for FileSource {
             "📖 hauled {} bytes out of the file like a digital fishing trip — catch of the day",
             total_bytes_from_file
         );
-        self.progress
-            .update(total_bytes_from_file as u64, doc_count as u64);
 
         // 📄 Empty feed = EOF. The well is dry. Return None. 🏁
         if feed.is_empty() {
             // -- 🏁 "That's all folks!" — Porky Pig, and also this file source
-            // ✅ Finish the progress bar so indicatif's render thread exits cleanly.
-            // Without this, the ProgressBar drops unfinished → background thread lingers
-            // → process hangs until Ctrl+C. Like a guest who won't leave the party. 🎉💀
-            self.progress.finish();
             Ok(None)
         } else {
             // ✅ convert bytes to String — this validates UTF-8 in one pass at the end

@@ -26,8 +26,10 @@ use super::DrainerConfig;
 use crate::GaugeReading;
 use crate::Payload;
 use crate::backends::{Sink, SinkBackend};
+use crate::progress::DrainMetrics;
 use anyhow::{Context, Result};
 use async_channel::Receiver;
+use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
@@ -58,6 +60,9 @@ pub struct Drainer {
     /// readings if channel full — acceptable for a throttle signal. Like shouting your
     /// blood pressure at a nurse who's already dealing with 6 patients. 🏥🦆
     gauge_tx: Option<async_channel::Sender<GaugeReading>>,
+    /// 📊 Shared atomic drain metrics — N drainers increment, 1 reporter reads.
+    /// Like a shared whiteboard in an office, but nobody erases it. Ever. 📋🦆
+    drain_metrics: Arc<DrainMetrics>,
 }
 
 impl Drainer {
@@ -70,8 +75,9 @@ impl Drainer {
         sink: SinkBackend,
         retry_config: DrainerConfig,
         gauge_tx: Option<async_channel::Sender<GaugeReading>>,
+        drain_metrics: Arc<DrainMetrics>,
     ) -> Self {
-        Self { rx, sink, retry_config, gauge_tx }
+        Self { rx, sink, retry_config, gauge_tx, drain_metrics }
     }
 }
 
@@ -153,6 +159,7 @@ impl Worker for Drainer {
                         if !the_payload.is_empty() && *the_payload != "[]" {
                             // ⏱️ Time the drain — FlowMaster needs to know how long the sink took
                             let the_stopwatch = std::time::Instant::now();
+                            let the_payload_bytes = the_payload.len() as u64;
 
                             drain_with_retry(&mut self.sink, the_payload, &self.retry_config)
                                 .await
@@ -162,10 +169,14 @@ impl Worker for Drainer {
                                      At some point you have to take the hint.",
                                 )?;
 
+                            let the_latency_ms = the_stopwatch.elapsed().as_millis() as u64;
+
+                            // 📊 Record drain metrics — atomics, no lock, no drama
+                            self.drain_metrics.record_drain(the_payload_bytes, the_latency_ms);
+
                             // 📡 Report latency to FlowMaster — non-blocking, drops if channel full
                             if let Some(tx) = &self.gauge_tx {
-                                let the_latency_ms = the_stopwatch.elapsed().as_millis() as usize;
-                                let _ = tx.try_send(GaugeReading::LatencyMs(the_latency_ms));
+                                let _ = tx.try_send(GaugeReading::LatencyMs(the_latency_ms as usize));
                             }
                         }
                     }

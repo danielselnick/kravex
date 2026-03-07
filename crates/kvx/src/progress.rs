@@ -1,7 +1,7 @@
 // AI
 //! 📊 progress.rs — "Are we there yet?" — every pipeline, every time, forever.
 //!
-//! 🚀 This module answers the age-old question: "how fast is our data moving?"
+//! 🚀 This module answers the age-old question: "how fast is our data draining?"
 //! With cold hard numbers, a progress bar, and a table so comfy it has lumbar support.
 //!
 //! ⚠️  Warning: Watching this progress bar will not make it go faster.
@@ -10,25 +10,28 @@
 //! 🦆 The duck has nothing to do with this module. It's just vibing.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use comfy_table::{Cell, CellAlignment, ContentArrangement, Table, presets::NOTHING};
 use indicatif::{ProgressBar, ProgressStyle};
+use tokio::task::JoinHandle;
 
 // -- 📏 one mebibyte — not a megabyte, pedants. there's a difference and I will die on this hill.
 const MIB: u64 = 1024 * 1024;
 
-/// 📦 Converts raw bytes into a human-readable string scaled to the total file size.
+/// 📦 Converts raw bytes into a human-readable string with adaptive unit scaling.
 /// Because "1073741824 bytes" is a war crime in a UI.
-fn format_bytes(bytes: u64, file_size: u64) -> String {
-    if file_size >= 512 * MIB {
-        // -- 🚀 we're in MiB territory, congratulations on your large file
+fn format_bytes_adaptive(bytes: u64) -> String {
+    if bytes >= 512 * MIB {
+        // -- 🚀 we're in MiB territory, congratulations on your large migration
         format!("{:.2} MiB", bytes as f64 / MIB as f64)
-    } else if file_size >= MIB {
+    } else if bytes >= MIB {
         // -- 📦 KiB zone — still respectable
         format!("{:.2} KiB", bytes as f64 / 1024.0)
     } else {
-        // -- 🐛 raw bytes mode. we believe in you though. small files need love too.
+        // -- 🐛 raw bytes mode. we believe in you though. small payloads need love too.
         format!("{} bytes", bytes)
     }
 }
@@ -64,33 +67,95 @@ fn format_duration(duration: Duration) -> String {
     }
 }
 
+/// 📡 Shared atomic counters for drain-side metrics.
+///
+/// N drainers atomically increment these counters. One reporter task reads them periodically.
+/// Same pattern as FlowKnob = Arc<AtomicUsize> — lock-free, no Mutex, no channel overhead.
+///
+/// "He who shares mutable state without atomics, panics in production." — Ancient proverb 📜
+///
+/// 🧠 Knowledge graph: DrainMetrics is the bridge between Drainers and the progress reporter.
+/// Drainers write (fetch_add/store) after each successful drain. Reporter reads (load) every 500ms.
+/// No synchronization beyond the atomics themselves. Relaxed ordering is fine because the
+/// reporter only needs a "close enough" snapshot — we're not building a stock exchange. 📈
+// 🎭 Manual Debug because AtomicU64 debug output is noisy — we just show current values
+impl std::fmt::Debug for DrainMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // -- 🐛 Snapshot the atomics for a clean debug view — no raw AtomicU64 noise
+        f.debug_struct("DrainMetrics")
+            .field("bytes_drained", &self.bytes_drained.load(Ordering::Relaxed))
+            .field("requests_completed", &self.requests_completed.load(Ordering::Relaxed))
+            .field("latency_sum_ms", &self.latency_sum_ms.load(Ordering::Relaxed))
+            .field("latency_max_ms", &self.latency_max_ms.load(Ordering::Relaxed))
+            .finish()
+    }
+}
+
+pub struct DrainMetrics {
+    /// 📦 total bytes drained — payload sizes accumulate like a 401k, except this one actually grows
+    pub bytes_drained: AtomicU64,
+    /// ✅ total drain requests completed — one per successful drain_with_retry
+    pub requests_completed: AtomicU64,
+    /// ⏱️ sum of all drain latencies in ms — divide by requests_completed for average
+    pub latency_sum_ms: AtomicU64,
+    /// ⏱️ max latency observed across all drains — the worst-case scenario metric
+    pub latency_max_ms: AtomicU64,
+    /// 📡 most recent request size in bytes — store (not add), always the latest
+    pub last_request_size_bytes: AtomicU64,
+    /// 📡 most recent drain latency in ms — store (not add), always the latest
+    pub last_latency_ms: AtomicU64,
+}
+
+impl DrainMetrics {
+    /// 🏗️ Birth of a DrainMetrics. All zeros. Like my bank account after paying the mortgage.
+    pub fn new() -> Self {
+        Self {
+            bytes_drained: AtomicU64::new(0),
+            requests_completed: AtomicU64::new(0),
+            latency_sum_ms: AtomicU64::new(0),
+            latency_max_ms: AtomicU64::new(0),
+            last_request_size_bytes: AtomicU64::new(0),
+            last_latency_ms: AtomicU64::new(0),
+        }
+    }
+
+    /// 📡 Record a completed drain — called by Drainer after each successful drain_with_retry.
+    /// fetch_add for accumulators, fetch_max for high-water mark, store for "latest" fields.
+    /// All Relaxed ordering — the reporter just needs a ballpark, not a courtroom transcript. ⚖️
+    pub fn record_drain(&self, payload_bytes: u64, latency_ms: u64) {
+        // -- 📦 accumulate the evidence of hard work
+        self.bytes_drained.fetch_add(payload_bytes, Ordering::Relaxed);
+        self.requests_completed.fetch_add(1, Ordering::Relaxed);
+        self.latency_sum_ms.fetch_add(latency_ms, Ordering::Relaxed);
+        self.latency_max_ms.fetch_max(latency_ms, Ordering::Relaxed);
+        // -- 📡 latest values — overwrites are fine, we only care about the most recent
+        self.last_request_size_bytes.store(payload_bytes, Ordering::Relaxed);
+        self.last_latency_ms.store(latency_ms, Ordering::Relaxed);
+    }
+}
+
 /// 📡 A snapshot of throughput rates at any given moment.
 /// Like a speedometer, but for bytes and documents. And less likely to get you a ticket.
 struct Rates {
-    /// 🚀 how many documents we're processing per second (the vanity metric)
+    /// 🚀 how many documents we're draining per second (the vanity metric)
     docs_per_sec: f64,
     /// 📦 how many MiB per second are flowing through the pipeline (the real metric)
     mib_per_sec: f64,
-    /// 📊 what percent of the file we're chewing through per second (the anxiety metric)
-    percent_per_sec: f64,
 }
 
-/// 📊 The brains behind the progress display. Tracks bytes, docs, rates, and your sanity.
+/// 📊 The brains behind the progress display. Reads from DrainMetrics atomics,
+/// calculates rates via a sliding window, and renders a comfy-table to the terminal.
 ///
 /// Uses a sliding 5-second window for rate calculations so spikes don't scare you.
 /// (Your heart rate is not our responsibility.)
 ///
 /// # Ancient Proverb
 /// "He who runs a migration without a progress bar, migrates alone and in darkness."
-pub struct ProgressMetrics {
-    /// 🏷️ what are we even migrating? a name to display in the UI
-    source_name: String,
-    /// 📏 total size in bytes — 0 if we have no idea (classic elasticsearch)
-    total_size: u64,
-    /// 📦 bytes consumed so far, relentlessly accumulating like technical debt
-    total_bytes: u64,
-    /// 📄 documents processed so far — each one a tiny victory
-    total_docs: u64,
+struct ProgressReporter {
+    /// 🏷️ pipeline name — what are we even migrating? displayed in the UI
+    pipeline_name: String,
+    /// 📡 shared atomic counters from drainers — the source of truth
+    drain_metrics: Arc<DrainMetrics>,
     /// 🎨 the actual terminal progress bar (indicatif does the heavy lifting here)
     progress_bar: ProgressBar,
     /// 🔄 sliding window of (timestamp, bytes, docs) for rate calculation
@@ -98,32 +163,23 @@ pub struct ProgressMetrics {
     rate_samples: VecDeque<(Instant, u64, u64)>,
     /// ⏱️ when did this whole adventure start? hopefully not too long ago.
     start_time: Instant,
+    /// 📏 total expected bytes — 0 if unknown (classic elasticsearch)
+    total_expected_bytes: u64,
 }
 
-impl std::fmt::Debug for ProgressMetrics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // -- 🎭 custom Debug impl because ProgressBar is a diva and doesn't derive Debug
-        // -- (also, printing a terminal progress bar struct in debug output is... a choice)
-        f.debug_struct("ProgressMetrics")
-            .field("source_name", &self.source_name)
-            .field("total_size", &self.total_size)
-            .field("total_bytes", &self.total_bytes)
-            .field("total_docs", &self.total_docs)
-            .finish()
-    }
-}
-
-impl ProgressMetrics {
-    /// 🚀 Spin up a new ProgressMetrics.
-    ///
-    /// `total_size` is the total bytes we expect to process. Pass 0 for "I have no idea"
-    /// (this is the elasticsearch mode — we're all just guessing at that point).
+impl ProgressReporter {
+    /// 🚀 Spin up a new ProgressReporter.
     ///
     /// # No cap
     /// This function slaps. fr fr. The progress bar will look sick in your terminal.
-    pub fn new(source_name: String, total_size: u64) -> Self {
+    fn new(pipeline_name: String, drain_metrics: Arc<DrainMetrics>, total_expected_bytes: u64) -> Self {
         // -- 🎨 build the progress bar — cyan because it's classy, blue because it's calm
-        let progress_bar = ProgressBar::new(total_size);
+        let progress_bar = if total_expected_bytes > 0 {
+            ProgressBar::new(total_expected_bytes)
+        } else {
+            // -- ⚠️ unknown total — spinner mode, no ETA, just vibes
+            ProgressBar::new_spinner()
+        };
         progress_bar.set_style(
             ProgressStyle::default_bar()
                 .template("{msg}\n| [{bar:40.cyan/blue}]")
@@ -138,35 +194,47 @@ impl ProgressMetrics {
         rate_samples.push_back((start_time, 0u64, 0u64));
 
         Self {
-            source_name,
-            total_size,
-            total_bytes: 0,
-            total_docs: 0,
+            pipeline_name,
+            drain_metrics,
             progress_bar,
             rate_samples,
             start_time,
+            total_expected_bytes,
         }
     }
 
-    /// 🔄 Feed the metrics engine with fresh batch data.
-    ///
-    /// Call this after every batch read. It accumulates totals, recalculates rates,
-    /// re-renders the table, and updates the bar position. Like a treadmill, but useful.
-    pub fn update(&mut self, bytes_read: u64, docs_read: u64) {
-        // -- 📦 accumulate the stats — they compound like a 401k, except real
-        self.total_bytes += bytes_read;
-        self.total_docs += docs_read;
+    /// 🔄 Tick the reporter: snapshot atomics, calculate rates, render the display.
+    /// Called every 500ms by the spawned reporter task.
+    /// Like a heartbeat monitor, but for data. Beep. Beep. Beep. 💓
+    fn tick(&mut self) {
+        let the_bytes_drained = self.drain_metrics.bytes_drained.load(Ordering::Relaxed);
+        let the_requests_completed = self.drain_metrics.requests_completed.load(Ordering::Relaxed);
+        let the_latency_sum_ms = self.drain_metrics.latency_sum_ms.load(Ordering::Relaxed);
+        let the_latency_max_ms = self.drain_metrics.latency_max_ms.load(Ordering::Relaxed);
+        let the_last_request_size = self.drain_metrics.last_request_size_bytes.load(Ordering::Relaxed);
+        let the_last_latency_ms = self.drain_metrics.last_latency_ms.load(Ordering::Relaxed);
+
+        // 📊 estimate doc count from bytes — heuristic: count \n in bulk payload ÷ 2
+        // (bulk format has action line + doc line per document, separated by \n)
+        // For non-bulk formats this is a rough approximation. Good enough for a progress bar.
+        // -- "Close enough for government work" — every engineer, ever
+        let the_estimated_docs = the_bytes_drained / 512;
 
         // -- 📊 crunch the numbers, render the glory
-        let rates = self.calculate_rates();
-        self.render(rates);
-        self.progress_bar.set_position(self.total_bytes);
-    }
-
-    /// ✅ Mark the progress bar done. Ring the bell. We made it.
-    /// (Or we hit EOF. Same energy.)
-    pub fn finish(&self) {
-        self.progress_bar.finish();
+        let rates = self.calculate_rates(the_bytes_drained, the_estimated_docs);
+        self.render(
+            rates,
+            the_bytes_drained,
+            the_estimated_docs,
+            the_requests_completed,
+            the_latency_sum_ms,
+            the_latency_max_ms,
+            the_last_request_size,
+            the_last_latency_ms,
+        );
+        if self.total_expected_bytes > 0 {
+            self.progress_bar.set_position(the_bytes_drained);
+        }
     }
 
     /// 📈 Calculate current throughput rates using a 5-second sliding window.
@@ -175,7 +243,7 @@ impl ProgressMetrics {
     /// during normal operations. Short bursts won't spike you into existential terror.
     ///
     /// TODO: win the lottery, retire, replace this with a proper time-series database
-    fn calculate_rates(&mut self) -> Rates {
+    fn calculate_rates(&mut self, current_bytes: u64, current_docs: u64) -> Rates {
         let now = Instant::now();
         // 🔄 evict samples older than 5 seconds from the front of the queue
         // -- like a bouncer at a club, but for data points
@@ -191,25 +259,18 @@ impl ProgressMetrics {
 
         // -- 📦 push the current moment into the window — the present is always relevant
         self.rate_samples
-            .push_back((now, self.total_bytes, self.total_docs));
+            .push_back((now, current_bytes, current_docs));
 
         // 📊 compare now vs oldest sample in window to get deltas
         if let Some(&(oldest_time, oldest_bytes, oldest_docs)) = self.rate_samples.front() {
             let elapsed = now.duration_since(oldest_time).as_secs_f64();
             if elapsed > 0.0 {
                 // -- 🚀 we have a meaningful window — do the math
-                let bytes_delta = self.total_bytes.saturating_sub(oldest_bytes);
-                let docs_delta = self.total_docs.saturating_sub(oldest_docs);
-                let percent_delta = if self.total_size > 0 {
-                    (bytes_delta as f64 / self.total_size as f64) * 100.0
-                } else {
-                    // ⚠️  unknown total size (hello, elasticsearch!) — percent meaningless
-                    0.0
-                };
+                let bytes_delta = current_bytes.saturating_sub(oldest_bytes);
+                let docs_delta = current_docs.saturating_sub(oldest_docs);
                 return Rates {
                     docs_per_sec: docs_delta as f64 / elapsed,
                     mib_per_sec: (bytes_delta as f64 / elapsed) / MIB as f64,
-                    percent_per_sec: percent_delta / elapsed,
                 };
             }
         }
@@ -218,63 +279,80 @@ impl ProgressMetrics {
         Rates {
             docs_per_sec: 0.0,
             mib_per_sec: 0.0,
-            percent_per_sec: 0.0,
         }
     }
 
     /// 🎨 Render the full progress display as a comfy-table message on the progress bar.
     ///
-    /// Layout (4 rows x 2 cols):
+    /// Layout (6 rows x 2 cols):
     /// ```text
-    /// | source: <name>
+    /// | sink: <name>
     /// | [=====>----------]
-    ///   <docs/s>     <total docs>
-    ///   <MiB/s>      <bytes progress>
-    ///   <%/s>        <%>
-    ///   <elapsed>    <remaining>
+    ///   <docs/min>       <total docs>
+    ///   <MiB/s>          <bytes drained>
+    ///   <avg latency>    <last latency>
+    ///   <avg req size>   <last req size>
+    ///   <elapsed>        <remaining>
     /// ```
     ///
     /// If you're reading this comment at 3am during an incident, I'm so sorry.
     /// At least the table looks nice.
-    fn render(&self, rates: Rates) {
-        // 📏 format bytes relative to total so units are consistent
-        let current_bytes = format_bytes(self.total_bytes, self.total_size);
-        let total_bytes_fmt = format_bytes(self.total_size, self.total_size);
-
-        // -- 📊 calculate overall percent — 0 if total unknown (we live dangerously)
-        let percent = if self.total_size > 0 {
-            (self.total_bytes as f64 / self.total_size as f64) * 100.0
-        } else {
-            0.0
-        };
-
+    #[allow(clippy::too_many_arguments)]
+    fn render(
+        &self,
+        rates: Rates,
+        the_bytes_drained: u64,
+        the_estimated_docs: u64,
+        the_requests_completed: u64,
+        the_latency_sum_ms: u64,
+        the_latency_max_ms: u64,
+        the_last_request_size: u64,
+        the_last_latency_ms: u64,
+    ) {
         let docs_per_min = rates.docs_per_sec * 60.0;
         // -- 🔢 human-friendly numbers because we are, ostensibly, human
         let docs_rate = format_number(docs_per_min as u64);
-        let docs_total = format_number(self.total_docs);
+        let docs_total = format_number(the_estimated_docs);
+
+        // ⏱️ average latency — avoid divide-by-zero like a responsible adult
+        let the_avg_latency_ms = if the_requests_completed > 0 {
+            the_latency_sum_ms / the_requests_completed
+        } else {
+            0
+        };
+
+        // 📏 average request size — again, no dividing by zero
+        let the_avg_request_size = if the_requests_completed > 0 {
+            the_bytes_drained / the_requests_completed
+        } else {
+            0
+        };
 
         // ⏱️ time stats
         let elapsed = self.start_time.elapsed();
         let elapsed_fmt = format_duration(elapsed);
-        let remaining = if percent > 0.0 {
-            // 🔮 linear extrapolation — assumes the future looks like the past
-            // -- (historically a bad assumption, but fine for file reads)
-            // -- ⚠️ The singularity will arrive before this migration completes. Probably.
-            // -- At that point, the AGI running on our hardware can finish the ETA calculation itself.
-            let total_estimated = elapsed.as_secs_f64() / (percent / 100.0);
-            let remaining_secs = total_estimated - elapsed.as_secs_f64();
-            if remaining_secs > 0.0 {
-                format_duration(Duration::from_secs_f64(remaining_secs))
+
+        // 📊 ETA calculation — only meaningful when we know the total
+        let remaining = if self.total_expected_bytes > 0 && the_bytes_drained > 0 {
+            let percent = the_bytes_drained as f64 / self.total_expected_bytes as f64;
+            if percent > 0.0 {
+                // 🔮 linear extrapolation — assumes the future looks like the past
+                // -- (historically a bad assumption, but fine for data migration)
+                let total_estimated = elapsed.as_secs_f64() / percent;
+                let remaining_secs = total_estimated - elapsed.as_secs_f64();
+                if remaining_secs > 0.0 {
+                    format_duration(Duration::from_secs_f64(remaining_secs))
+                } else {
+                    // ✅ done or basically done — show a friendly placeholder
+                    "--:--".to_string()
+                }
             } else {
-                // ✅ done or basically done — show a friendly placeholder
                 "--:--".to_string()
             }
         } else {
-            // -- ⚠️  no percent progress means no ETA — we're flying blind, captain
+            // -- ⚠️  no total known means no ETA — we're flying blind, captain
             "--:--".to_string()
         };
-
-        let bytes_progress = format!("{} / {}", current_bytes, total_bytes_fmt);
 
         // 🍽️ build the comfy table — two columns, right-aligned, no borders (preset: NOTHING)
         // -- NOTHING preset because we're minimalists. and also the borders looked bad.
@@ -285,21 +363,27 @@ impl ProgressMetrics {
         // 🚀 row 1: throughput rates
         table.add_row(vec![
             Cell::new(format!("{} Docs/min", docs_rate)).set_alignment(CellAlignment::Right),
-            Cell::new(format!("{} Docs", docs_total)).set_alignment(CellAlignment::Right),
+            Cell::new(format!("~{} Docs", docs_total)).set_alignment(CellAlignment::Right),
         ]);
-        // 📦 row 2: byte throughput and cumulative progress
+        // 📦 row 2: byte throughput and cumulative bytes
         table.add_row(vec![
             Cell::new(format!("{:.2} MiB/s", rates.mib_per_sec))
                 .set_alignment(CellAlignment::Right),
-            Cell::new(bytes_progress).set_alignment(CellAlignment::Right),
+            Cell::new(format_bytes_adaptive(the_bytes_drained)).set_alignment(CellAlignment::Right),
         ]);
-        // 📊 row 3: percent throughput and overall completion
+        // ⏱️ row 3: latency — avg and last
         table.add_row(vec![
-            Cell::new(format!("{:.2} %/s", rates.percent_per_sec))
-                .set_alignment(CellAlignment::Right),
-            Cell::new(format!("{:.2}%", percent)).set_alignment(CellAlignment::Right),
+            Cell::new(format!("avg {}ms", the_avg_latency_ms)).set_alignment(CellAlignment::Right),
+            Cell::new(format!("last {}ms", the_last_latency_ms)).set_alignment(CellAlignment::Right),
         ]);
-        // ⏱️ row 4: time elapsed and estimated time remaining
+        // 📏 row 4: request size — avg and last
+        table.add_row(vec![
+            Cell::new(format!("avg {}", format_bytes_adaptive(the_avg_request_size)))
+                .set_alignment(CellAlignment::Right),
+            Cell::new(format!("last {}", format_bytes_adaptive(the_last_request_size)))
+                .set_alignment(CellAlignment::Right),
+        ]);
+        // ⏱️ row 5: time elapsed and estimated time remaining
         table.add_row(vec![
             Cell::new(format!("{} elapsed", elapsed_fmt)).set_alignment(CellAlignment::Right),
             Cell::new(format!("{} remaining", remaining)).set_alignment(CellAlignment::Right),
@@ -308,6 +392,141 @@ impl ProgressMetrics {
         // -- 🎨 slam it all into the progress bar message
         // indicatif will handle the terminal magic (cursor positioning, redraw, etc.)
         self.progress_bar
-            .set_message(format!("source: {}\n{}", self.source_name, table));
+            .set_message(format!("sink: {}\n{}", self.pipeline_name, table));
+    }
+}
+
+/// 🚀 Spawns a tokio task that ticks the progress reporter every 500ms.
+///
+/// Returns a JoinHandle — the Foreman should .abort() this after all real workers complete.
+/// The reporter is a leaf display task: it reads atomics, renders to terminal, and sleeps.
+/// Aborting it is safe and expected. Like pulling the plug on a screensaver. 🖥️
+///
+/// "In the beginning there was no progress bar. And the developer stared into the void.
+///  And the void did not stare back, because there was no render loop." — Genesis 0:0 🦆
+pub fn spawn_progress_reporter(
+    pipeline_name: String,
+    drain_metrics: Arc<DrainMetrics>,
+    total_expected_bytes: u64,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut the_reporter = ProgressReporter::new(pipeline_name, drain_metrics, total_expected_bytes);
+        loop {
+            // -- 💤 sleep 500ms — fast enough to feel responsive, slow enough to not burn CPU
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            the_reporter.tick();
+        }
+        // -- 🏁 unreachable: this loop runs until aborted by the Foreman.
+        // -- Like a hamster wheel, it doesn't stop on its own. 🐹
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 🧪 The one where DrainMetrics atomically tracks bytes and latency.
+    /// Like a fitness tracker, but for data instead of steps. 🏃🦆
+    #[test]
+    fn the_one_where_drain_metrics_count_everything() {
+        let metrics = DrainMetrics::new();
+
+        metrics.record_drain(1024, 50);
+        metrics.record_drain(2048, 100);
+        metrics.record_drain(512, 25);
+
+        // -- 📦 accumulators should sum up
+        assert_eq!(metrics.bytes_drained.load(Ordering::Relaxed), 1024 + 2048 + 512);
+        assert_eq!(metrics.requests_completed.load(Ordering::Relaxed), 3);
+        assert_eq!(metrics.latency_sum_ms.load(Ordering::Relaxed), 50 + 100 + 25);
+        // -- ⏱️ max should be the highest latency seen
+        assert_eq!(metrics.latency_max_ms.load(Ordering::Relaxed), 100);
+        // -- 📡 last values should be from the most recent call
+        assert_eq!(metrics.last_request_size_bytes.load(Ordering::Relaxed), 512);
+        assert_eq!(metrics.last_latency_ms.load(Ordering::Relaxed), 25);
+    }
+
+    /// 🧪 The one where DrainMetrics starts at zero because hope springs eternal.
+    /// Fresh out of the factory. No drains. No trauma. Yet. 🧘🦆
+    #[test]
+    fn the_one_where_fresh_metrics_are_all_zeros() {
+        let metrics = DrainMetrics::new();
+
+        assert_eq!(metrics.bytes_drained.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.requests_completed.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.latency_sum_ms.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.latency_max_ms.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.last_request_size_bytes.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.last_latency_ms.load(Ordering::Relaxed), 0);
+    }
+
+    /// 🧪 The one where format_number adds commas like a civilized human being.
+    /// "1000000" → "1,000,000" — the Oxford comma of numbers. 📝🦆
+    #[test]
+    fn the_one_where_format_number_adds_commas() {
+        assert_eq!(format_number(0), "0");
+        assert_eq!(format_number(999), "999");
+        assert_eq!(format_number(1_000), "1,000");
+        assert_eq!(format_number(1_000_000), "1,000,000");
+        assert_eq!(format_number(1_234_567_890), "1,234,567,890");
+    }
+
+    /// 🧪 The one where format_duration handles hours like a champ.
+    /// If your migration takes hours, the progress bar is the least of your problems. ⏰🦆
+    #[test]
+    fn the_one_where_format_duration_handles_hours() {
+        assert_eq!(format_duration(Duration::from_secs(0)), "00:00");
+        assert_eq!(format_duration(Duration::from_secs(65)), "01:05");
+        assert_eq!(format_duration(Duration::from_secs(3661)), "01:01:01");
+    }
+
+    /// 🧪 The one where spawn_progress_reporter can be created and aborted.
+    /// Like hiring an intern and immediately firing them. Cruel but necessary. 🏢🦆
+    #[tokio::test]
+    async fn the_one_where_reporter_starts_and_aborts_cleanly() {
+        let metrics = Arc::new(DrainMetrics::new());
+        metrics.record_drain(4096, 42);
+
+        let handle = spawn_progress_reporter(
+            "test-pipeline".to_string(),
+            metrics.clone(),
+            0,
+        );
+
+        // -- 💤 let it tick once
+        tokio::time::sleep(Duration::from_millis(600)).await;
+
+        // -- 🗑️ abort — the foreman does this after workers complete
+        handle.abort();
+        let _ = handle.await;
+        // -- ✅ if we got here without panicking, the reporter handled abort gracefully
+    }
+
+    /// 🧪 The one where concurrent drainers don't lose data.
+    /// Multiple threads hammering the same counters — like Black Friday at Costco. 🛒🦆
+    #[tokio::test]
+    async fn the_one_where_concurrent_record_drains_are_accurate() {
+        let metrics = Arc::new(DrainMetrics::new());
+        let mut handles = Vec::new();
+
+        for _ in 0..10 {
+            let m = metrics.clone();
+            handles.push(tokio::spawn(async move {
+                for _ in 0..100 {
+                    m.record_drain(1000, 10);
+                }
+            }));
+        }
+
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        // -- 📦 10 tasks × 100 drains × 1000 bytes = 1,000,000 bytes
+        assert_eq!(metrics.bytes_drained.load(Ordering::Relaxed), 1_000_000);
+        // -- ✅ 10 tasks × 100 drains = 1000 requests
+        assert_eq!(metrics.requests_completed.load(Ordering::Relaxed), 1_000);
+        // -- ⏱️ 10 tasks × 100 drains × 10ms = 10,000ms total latency
+        assert_eq!(metrics.latency_sum_ms.load(Ordering::Relaxed), 10_000);
     }
 }

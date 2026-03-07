@@ -90,6 +90,14 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
         the_initial_flow
     );
 
+    // 📏 Extract pipeline name and total_expected_bytes for progress reporting.
+    // File sources know their size upfront; everything else is a mystery. 🎭
+    let (pipeline_name, total_expected_bytes) = match &source_backend {
+        SourceBackend::File(fs) => (fs.source_config.file_name.clone(), fs.file_size),
+        SourceBackend::Elasticsearch(_) => ("elasticsearch".to_string(), 0),
+        SourceBackend::InMemory(_) => ("in-memory".to_string(), 0),
+    };
+
     let foreman = Foreman::new(app_config.clone());
     foreman
         .start_workers(
@@ -100,6 +108,8 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
             the_flow_knob,
             &app_config.flow_master,
             max_request_size_bytes,
+            pipeline_name,
+            total_expected_bytes,
         )
         .await?;
 
@@ -289,7 +299,7 @@ mod tests {
         let the_flow_master_config = FlowMasterConfig::default();
         let foreman = Foreman::new(app_config);
         foreman
-            .start_workers(source, vec![sink], caster, manifold, the_test_flow_knob, &the_flow_master_config, max_request_size_bytes)
+            .start_workers(source, vec![sink], caster, manifold, the_test_flow_knob, &the_flow_master_config, max_request_size_bytes, "test-pipeline".to_string(), 0)
             .await?;
 
         // 📦 Joiner received 1 feed (4 docs newline-delimited), passthrough-cast and joined into JSON array.
