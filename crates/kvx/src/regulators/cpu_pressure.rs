@@ -128,6 +128,7 @@ impl Regulate for CpuPressure {
         // 🎰 Extract the number from the enum — or bail if it's an Error (hold steady, like a poker face)
         let reading_value = match reading {
             GaugeReading::CpuValue(v) | GaugeReading::LatencyMs(v) => v as f64,
+            GaugeReading::DrainResult { latency_ms, .. } => latency_ms as f64,
             GaugeReading::Error() => return self.output,
         };
 

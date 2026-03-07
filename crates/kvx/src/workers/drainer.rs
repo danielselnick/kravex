@@ -174,9 +174,12 @@ impl Worker for Drainer {
                             // 📊 Record drain metrics — atomics, no lock, no drama
                             self.drain_metrics.record_drain(the_payload_bytes, the_latency_ms);
 
-                            // 📡 Report latency to FlowMaster — non-blocking, drops if channel full
+                            // 📡 Report drain result to FlowMaster — non-blocking, drops if channel full
                             if let Some(tx) = &self.gauge_tx {
-                                let _ = tx.try_send(GaugeReading::LatencyMs(the_latency_ms as usize));
+                                let _ = tx.try_send(GaugeReading::DrainResult {
+                                    payload_bytes: the_payload_bytes,
+                                    latency_ms: the_latency_ms,
+                                });
                             }
                         }
                     }
@@ -252,19 +255,23 @@ mod tests {
 
         let (gauge_tx, gauge_rx) = async_channel::bounded(16);
 
-        // ⏱️ Time the drain and send latency
+        // ⏱️ Time the drain and send result
         let the_stopwatch = std::time::Instant::now();
+        let the_payload_bytes = the_payload.len() as u64;
         drain_with_retry(&mut the_sink, the_payload, &the_config).await.unwrap();
-        let the_latency_ms = the_stopwatch.elapsed().as_millis() as usize;
-        let _ = gauge_tx.try_send(GaugeReading::LatencyMs(the_latency_ms));
+        let the_latency_ms = the_stopwatch.elapsed().as_millis() as u64;
+        let _ = gauge_tx.try_send(GaugeReading::DrainResult {
+            payload_bytes: the_payload_bytes,
+            latency_ms: the_latency_ms,
+        });
 
-        // 📡 Verify the gauge channel received a reading
+        // 📡 Verify the gauge channel received a DrainResult reading
         let the_reading = gauge_rx.try_recv().unwrap();
         match the_reading {
-            GaugeReading::LatencyMs(ms) => {
-                assert!(ms < 1000, "🎯 Latency should be under 1s for an in-memory sink — got {}ms", ms);
+            GaugeReading::DrainResult { latency_ms, .. } => {
+                assert!(latency_ms < 1000, "🎯 Latency should be under 1s for an in-memory sink — got {}ms", latency_ms);
             }
-            _ => panic!("💀 Expected LatencyMs reading, got something else entirely"),
+            _ => panic!("💀 Expected DrainResult reading, got something else entirely"),
         }
     }
 

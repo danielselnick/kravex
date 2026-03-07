@@ -130,6 +130,14 @@ impl Foreman {
                 );
                 Some((tx3, rx3, the_regulator))
             }
+            FlowMasterConfig::Throughput(throughput_config) => {
+                let (tx3, rx3) = async_channel::bounded::<GaugeReading>(256);
+                let the_regulator = Regulators::from_throughput_config(
+                    throughput_config,
+                    the_sink_max_request_size_bytes,
+                );
+                Some((tx3, rx3, the_regulator))
+            }
             FlowMasterConfig::Static(_) => None,
         };
 

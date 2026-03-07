@@ -25,15 +25,18 @@ pub mod config;
 pub mod cpu_pressure;
 pub mod pressure_gauge;
 pub mod static_regulator;
+pub mod throughput_seeker;
 
 use std::time::Duration;
 
 pub use config::CpuRegulatorConfig;
 pub use config::StaticRegulatorConfig;
 pub use config::LatencyRegulatorConfig;
+pub use config::ThroughputSeekerConfig;
 pub use cpu_pressure::CpuPressure;
 pub use pressure_gauge::{FlowKnob, SinkAuth, spawn_pressure_gauge};
 pub use static_regulator::ByteValue;
+pub use throughput_seeker::ThroughputSeeker;
 
 use crate::GaugeReading;
 
@@ -68,6 +71,8 @@ pub enum Regulators {
     Static(ByteValue),
     /// 🎛️ PID-controlled CPU pressure regulation — the real deal
     CpuPressure(CpuPressure),
+    /// 🏔️ Throughput-seeking hill climber — directly optimizes bytes/sec
+    ThroughputSeeker(ThroughputSeeker),
 }
 
 impl Regulators {
@@ -101,6 +106,16 @@ impl Regulators {
             config.initial_output_bytes as f64,
         ))
     }
+
+    /// 🏗️ Create a Regulators instance from throughput seeker config.
+    /// No PID, no setpoints, no guessing — just climb toward peak throughput.
+    /// Like a GPS that optimizes for "fastest route" instead of "shortest distance." 🏔️🦆
+    pub fn from_throughput_config(config: &ThroughputSeekerConfig, sink_max_request_size_bytes: usize) -> Self {
+        Regulators::ThroughputSeeker(ThroughputSeeker::new(
+            config,
+            sink_max_request_size_bytes as f64,
+        ))
+    }
 }
 
 impl Regulate for Regulators {
@@ -108,6 +123,7 @@ impl Regulate for Regulators {
         match self {
             Regulators::Static(the_byte_value) => the_byte_value.regulate(reading, since_last_checked_ms),
             Regulators::CpuPressure(the_pid) => the_pid.regulate(reading, since_last_checked_ms),
+            Regulators::ThroughputSeeker(the_seeker) => the_seeker.regulate(reading, since_last_checked_ms),
         }
     }
 }

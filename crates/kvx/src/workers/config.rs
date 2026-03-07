@@ -9,7 +9,7 @@
 
 use serde::Deserialize;
 
-use crate::regulators::{CpuRegulatorConfig, LatencyRegulatorConfig, StaticRegulatorConfig};
+use crate::regulators::{CpuRegulatorConfig, LatencyRegulatorConfig, StaticRegulatorConfig, ThroughputSeekerConfig};
 
 // ============================================================
 // 🔧 DrainerConfig — TOML-friendly retry configuration
@@ -79,7 +79,8 @@ fn default_max_backoff_ms() -> u64 { 30_000 }
 pub enum FlowMasterConfig {
     Static(StaticRegulatorConfig),
     CPU(CpuRegulatorConfig),
-    Latency(LatencyRegulatorConfig)
+    Latency(LatencyRegulatorConfig),
+    Throughput(ThroughputSeekerConfig),
 }
 
 impl Default for FlowMasterConfig {
@@ -126,5 +127,48 @@ mod tests {
             .expect("💀 Empty TOML should parse to defaults. Even Nothing is Something.");
         assert_eq!(the_config.max_retries, 3);
         assert_eq!(the_config.initial_backoff_ms, 1_000);
+    }
+
+    /// 🧪 The one where FlowMasterConfig deserializes the Throughput variant from TOML.
+    /// "[flow_master.Throughput]" — the future of regulation. No PIDs were harmed. 🏔️🦆
+    #[test]
+    fn the_one_where_throughput_config_deserializes_from_toml() {
+        let the_toml = r#"
+            [Throughput]
+            min_request_size_bytes = 262144
+            initial_output_bytes = 8388608
+        "#;
+
+        let the_config: FlowMasterConfig = toml::from_str(the_toml)
+            .expect("💀 Throughput FlowMasterConfig should deserialize from TOML");
+
+        match the_config {
+            FlowMasterConfig::Throughput(cfg) => {
+                assert_eq!(cfg.min_request_size_bytes, 262_144, "🎯 min should be 256 KiB");
+                assert_eq!(cfg.initial_output_bytes, 8_388_608, "🎯 initial should be 8 MiB");
+                assert_eq!(cfg.window_duration_secs, 5, "🎯 window_duration should default to 5s");
+                assert!((cfg.improvement_threshold_pct - 10.0).abs() < f64::EPSILON, "🎯 improvement default 10%");
+                assert!((cfg.degradation_threshold_pct - 35.0).abs() < f64::EPSILON, "🎯 degradation default 35%");
+                assert_eq!(cfg.re_explore_after_windows, 30, "🎯 re-explore default 30");
+            }
+            _ => panic!("💀 Expected Throughput variant, got {:?}", the_config),
+        }
+    }
+
+    /// 🧪 The one where Throughput defaults are all sane.
+    /// Empty [flow_master.Throughput] section = 128KiB floor, 4MiB start, 5s windows. 🏔️🦆
+    #[test]
+    fn the_one_where_throughput_defaults_are_not_insane() {
+        let the_toml = "[Throughput]";
+        let the_config: FlowMasterConfig = toml::from_str(the_toml)
+            .expect("💀 Empty Throughput section should use defaults");
+
+        match the_config {
+            FlowMasterConfig::Throughput(cfg) => {
+                assert_eq!(cfg.min_request_size_bytes, 128 * 1024, "🎯 Default min is 128 KiB");
+                assert_eq!(cfg.initial_output_bytes, 4 * 1024 * 1024, "🎯 Default initial is 4 MiB");
+            }
+            _ => panic!("💀 Expected Throughput variant"),
+        }
     }
 }

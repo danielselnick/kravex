@@ -81,6 +81,7 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
         FlowMasterConfig::Static(cfg) => cfg.output_bytes,
         FlowMasterConfig::Latency(cfg) => cfg.initial_output_bytes,
         FlowMasterConfig::CPU(cfg) => cfg.initial_output_bytes,
+        FlowMasterConfig::Throughput(cfg) => cfg.initial_output_bytes,
     };
     let the_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(the_initial_flow));
 
@@ -246,6 +247,7 @@ impl PartialEq<&str> for Entry {
 pub enum GaugeReading {
     CpuValue(usize),
     LatencyMs(usize),
+    DrainResult { payload_bytes: u64, latency_ms: u64 },
     Error()
 }
 
