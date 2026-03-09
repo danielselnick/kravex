@@ -21,7 +21,9 @@ Feed format transformation layer. A Caster converts raw feeds from a Source into
 |---|---|---|
 | `Passthrough` | Any → same format | Identity — feed passes through unchanged |
 | `NdJsonToBulk` | File → Elasticsearch | Wraps each NDJSON line with a `_bulk` action line |
+| `NdJsonSplit` | File → Meilisearch | Splits NDJSON lines into individual entries (no bulk headers) |
 | `PitToBulk` | Elasticsearch → Elasticsearch | Extracts hits from PIT search response, emits `_bulk` NDJSON |
+| `PitToJson` | Elasticsearch → Meilisearch | Extracts `_source` from PIT hits as raw JSON entries (no bulk headers) |
 
 ## Resolution
 
@@ -36,7 +38,7 @@ Caster selection is determined by the **source x sink config** combination at st
 ## Knowledge Graph
 
 ```
-Caster trait → DocumentCaster enum → Passthrough | NdJsonToBulk | PitToBulk
+Caster trait → PageToEntriesCaster enum → Passthrough | NdJsonToBulk | NdJsonSplit | PitToBulk | PitToJson
 DocumentCaster → resolved by from_configs(SourceConfig, SinkConfig)
 Caster → consumed by Manifold during join()
 lines_per_doc → used by Manifold for size-aware chunking

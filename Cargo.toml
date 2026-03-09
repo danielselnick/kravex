@@ -63,3 +63,6 @@ tempfile = "3"
 
 # 🍞 TOML parsing — because figment handles merging but sometimes you just want to parse a string
 toml = "0.8"
+
+# 🫁 gzip compression — because bandwidth is expensive and bytes are squishy
+flate2 = "1"

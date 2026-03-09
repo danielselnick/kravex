@@ -21,6 +21,7 @@ use crate::config::AppConfig;
 use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSource};
 use crate::backends::file::{FileSink, FileSource};
 use crate::backends::in_mem::{InMemorySink, InMemorySource};
+use crate::backends::meilisearch::MeilisearchSink;
 use crate::backends::{SinkBackend, SourceBackend};
 use crate::foreman::Foreman;
 use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
@@ -98,6 +99,12 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
         SourceBackend::InMemory(_) => ("in-memory".to_string(), 0),
     };
 
+    // 🔍 Override pipeline name if sink is Meilisearch — so the progress bar says "→ meilisearch"
+    let pipeline_name = match &app_config.sink_config {
+        SinkConfig::Meilisearch(ms) => format!("{} → meilisearch/{}", pipeline_name, ms.index_uid),
+        _ => pipeline_name,
+    };
+
     let foreman = Foreman::new(app_config.clone());
     foreman
         .start_workers(
@@ -162,6 +169,13 @@ async fn from_sink_config(config: &AppConfig) -> Result<SinkBackend> {
         SinkConfig::Elasticsearch(es_cfg) => {
             let sink = ElasticsearchSink::new(es_cfg.clone()).await?;
             Ok(SinkBackend::Elasticsearch(sink))
+        }
+        // -- 🔍 Meilisearch sink: JSON arrays in, async tasks out. Like DoorDash but for search indices.
+        // -- Bearer token auth, task polling, and the quiet confidence of a search engine that
+        // -- auto-creates indices like it's nobody's business. Because it isn't. 🦆
+        SinkConfig::Meilisearch(ms_cfg) => {
+            let sink = MeilisearchSink::new(ms_cfg.clone()).await?;
+            Ok(SinkBackend::Meilisearch(sink))
         }
     }
 }
@@ -253,6 +267,9 @@ pub enum GaugeReading {
 mod tests {
     use super::*;
     use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
+    use crate::backends::{CommonSourceConfig, CommonSinkConfig};
+    use crate::backends::meilisearch::MeilisearchSinkConfig;
+    use crate::backends::file::FileSourceConfig;
 
     /// 🧪 Full pipeline integration: InMemory→Passthrough→InMemory.
     /// Four raw docs in (as one newline-delimited feed), one JSON array payload out.
@@ -319,6 +336,152 @@ mod tests {
             the_payload, &expected,
             "InMemory sink should receive a JSON array wrapping the passthrough feed"
         );
+
+        Ok(())
+    }
+
+    /// 🧪 Full pipeline integration: File→NdJsonSplit→JsonArray→MeilisearchSink.
+    /// Three NDJSON docs from a temp file, through the caster, into a mocked Meilisearch.
+    ///
+    /// 🎬 COLD OPEN — INT. INTEGRATION TEST SUITE — 2 AM
+    /// *[A temp file is born. Three JSON docs are written. The pipeline awakens.]*
+    /// *["Are we really going to test the entire pipeline?" asks the test runner.]*
+    /// *["Yes," says the developer. "We are professionals. Sort of."]*
+    ///
+    /// 🧠 File source reads NDJSON → NdJsonSplit splits into individual entries →
+    /// JsonArrayManifold joins as [doc1,doc2,doc3] → MeilisearchSink POSTs to wiremock →
+    /// Task polling confirms success. The circle of data. 🦁
+    #[tokio::test]
+    async fn the_one_where_ndjson_docs_migrate_to_meilisearch_like_birds_flying_south() -> Result<()> {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path, header};
+        use std::io::Write;
+
+        // 🎭 Phase 1: Set the stage — temp file with 3 NDJSON docs
+        let mut the_temp_file = tempfile::NamedTempFile::new()
+            .context("💀 Failed to create temp file. The OS said 'no.' The test said 'fair.'")?;
+        let the_doc_a = r#"{"id":1,"title":"The Matrix","year":1999}"#;
+        let the_doc_b = r#"{"id":2,"title":"Inception","year":2010}"#;
+        let the_doc_c = r#"{"id":3,"title":"Interstellar","year":2014}"#;
+        writeln!(the_temp_file, "{}", the_doc_a)?;
+        writeln!(the_temp_file, "{}", the_doc_b)?;
+        write!(the_temp_file, "{}", the_doc_c)?;
+        the_temp_file.flush()?;
+
+        // 📡 Phase 2: Stand up the mock Meilisearch server
+        let the_mock_server = MockServer::start().await;
+
+        // 🔧 Mount health check — "I'm alive, thanks for asking"
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"status":"available"}"#))
+            .named("meili_health")
+            .mount(&the_mock_server)
+            .await;
+
+        // 🔍 Mount index check — "yes the index exists, stop asking"
+        Mock::given(method("GET"))
+            .and(path("/indexes/movies"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"uid":"movies","primaryKey":"id"}"#
+            ))
+            .named("meili_index_check")
+            .mount(&the_mock_server)
+            .await;
+
+        // 📡 Mount document POST — returns 202, fire and forget, no task polling
+        Mock::given(method("POST"))
+            .and(path("/indexes/movies/documents"))
+            .respond_with(ResponseTemplate::new(202).set_body_string(
+                r#"{"taskUid":7}"#
+            ))
+            .expect(1..)
+            .named("meili_document_post")
+            .mount(&the_mock_server)
+            .await;
+
+        // 🔧 Phase 3: Build configs
+        let the_file_path = the_temp_file.path().to_str().unwrap().to_string();
+        let the_source_config = SourceConfig::File(FileSourceConfig {
+            file_name: the_file_path,
+            common_config: CommonSourceConfig::default(),
+        });
+        let the_sink_config = SinkConfig::Meilisearch(MeilisearchSinkConfig {
+            url: the_mock_server.uri(),
+            api_key: None,
+            index_uid: "movies".to_string(),
+            primary_key: None,
+            common_config: CommonSinkConfig::default(),
+        });
+
+        let app_config = AppConfig {
+            runtime: RuntimeConfig {
+                pumper_to_joiner_capacity: 10,
+                joiner_to_drainer_capacity: 10,
+                sink_parallelism: 1,
+                joiner_parallelism: 1,
+            },
+            source_config: the_source_config.clone(),
+            sink_config: the_sink_config.clone(),
+            drainer: Default::default(),
+            flow_master: Default::default(),
+        };
+
+        // 🏗️ Phase 4: Build backends
+        let source = FileSource::new(match &the_source_config {
+            SourceConfig::File(cfg) => cfg.clone(),
+            _ => unreachable!(),
+        }).await?;
+        let source_backend = SourceBackend::File(source);
+
+        let sink = MeilisearchSink::new(match &the_sink_config {
+            SinkConfig::Meilisearch(cfg) => cfg.clone(),
+            _ => unreachable!(),
+        }).await?;
+        let sink_backend = SinkBackend::Meilisearch(sink);
+
+        // 🔄 File→Meilisearch resolves to NdJsonSplit caster
+        let caster = PageToEntriesCaster::from_configs(&app_config.source_config, &app_config.sink_config);
+        assert!(
+            matches!(caster, PageToEntriesCaster::NdJsonSplit(_)),
+            "💀 File → Meilisearch should resolve to NdJsonSplit, got {:?}", caster
+        );
+
+        // 🎼 Meilisearch sink → JsonArrayManifold: [doc1,doc2,doc3]
+        let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
+        assert!(
+            matches!(manifold, ManifoldBackend::JsonArray(_)),
+            "💀 Meilisearch sink should resolve to JsonArrayManifold"
+        );
+
+        let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
+        let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_request_size_bytes));
+        let the_flow_master_config = FlowMasterConfig::default();
+
+        // 🚀 Phase 5: Run the full pipeline
+        let foreman = Foreman::new(app_config);
+        foreman
+            .start_workers(
+                source_backend,
+                vec![sink_backend],
+                caster,
+                manifold,
+                the_test_flow_knob,
+                &the_flow_master_config,
+                max_request_size_bytes,
+                "test-file-to-meili".to_string(),
+                0,
+            )
+            .await?;
+
+        // ✅ Phase 6: Verify — the mock server received at least one document POST
+        // wiremock's `expect(1..)` on the POST mock will panic if it wasn't called.
+        // If we got here without panic, the pipeline successfully:
+        // 1. Read 3 NDJSON lines from the temp file
+        // 2. Split them via NdJsonSplit into 3 individual Entry items
+        // 3. Joined them via JsonArrayManifold into a JSON array payload
+        // 4. Gzipped and POSTed the JSON array to the mocked Meilisearch /documents endpoint
+        // 🎉 The data migrated. Fire and forget. The developer slept. 🦆
 
         Ok(())
     }

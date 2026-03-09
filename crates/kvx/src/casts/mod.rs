@@ -20,9 +20,13 @@
 
 pub mod passthrough;
 pub mod ndjson_to_bulk;
+pub mod ndjson_split;
 pub mod pit_to_bulk;
+pub mod pit_to_json;
 use ndjson_to_bulk::NdJsonToBulk;
+use ndjson_split::NdJsonSplit;
 use pit_to_bulk::PitToBulk;
+use pit_to_json::PitToJson;
 
 use crate::config::{SourceConfig, SinkConfig};
 use anyhow::Result;
@@ -50,10 +54,14 @@ pub trait Caster: std::fmt::Debug {
 pub enum PageToEntriesCaster {
     // -- 📡 NDJSON raw docs → ES bulk action+source pairs
     NdJsonToBulk(ndjson_to_bulk::NdJsonToBulk),
+    // -- 🔪 NDJSON raw docs → individual JSON entries (no bulk headers, for Meilisearch)
+    NdJsonSplit(ndjson_split::NdJsonSplit),
     // -- 🚶 Identity cast — feed passes through unchanged, like TSA PreCheck for data
     Passthrough(passthrough::Passthrough),
     // -- 📡🎭 ES _search PIT response → _bulk NDJSON (extracts hits from envelope)
     PitToBulk(pit_to_bulk::PitToBulk),
+    // -- 🔍🎭 ES _search PIT response → raw JSON entries (for Meilisearch, no bulk headers)
+    PitToJson(pit_to_json::PitToJson),
 }
 
 impl Caster for PageToEntriesCaster {
@@ -62,8 +70,10 @@ impl Caster for PageToEntriesCaster {
         // -- 🎭 Dispatch to the concrete caster — "choose your fighter" but for data formats
         match self {
             Self::NdJsonToBulk(t) => t.cast(page),
+            Self::NdJsonSplit(t) => t.cast(page),
             Self::Passthrough(t) => t.cast(page),
             Self::PitToBulk(t) => t.cast(page),
+            Self::PitToJson(t) => t.cast(page),
         }
     }
 }
@@ -80,9 +90,12 @@ impl PageToEntriesCaster {
     ///
     /// The (SourceConfig, SinkConfig) pair determines which caster to use:
     /// - File → Elasticsearch = NdJsonToBulk (the flagship pair)
+    /// - File → Meilisearch = NdJsonSplit (split NDJSON lines, no bulk headers)
     /// - File → File = Passthrough
     /// - InMemory → InMemory = Passthrough (testing)
+    /// - InMemory → Meilisearch = Passthrough (testing)
     /// - Elasticsearch → File = Passthrough (ES dump to file)
+    /// - Elasticsearch → Meilisearch = PitToJson (extract _source, no bulk headers)
     ///
     /// # Panics
     /// 💀 Panics if the `(source, sink)` pair has no caster implementation.
@@ -96,10 +109,17 @@ impl PageToEntriesCaster {
                 Self::NdJsonToBulk(NdJsonToBulk {})
             }
 
+            // -- 🔍🔪 File source → Meilisearch sink: split NDJSON lines into individual entries.
+            // -- No bulk headers. Just the raw docs. Meilisearch likes its JSON naked.
+            (SourceConfig::File(_), SinkConfig::Meilisearch(_)) => {
+                Self::NdJsonSplit(NdJsonSplit)
+            }
+
             // -- 🚶 Passthrough pairs: same format, no conversion needed.
-            // -- File→File, InMemory→InMemory, ES→File — just move the bytes.
+            // -- File→File, InMemory→InMemory, InMemory→Meilisearch, ES→File — just move the bytes.
             (SourceConfig::File(_), SinkConfig::File(_))
             | (SourceConfig::InMemory(_), SinkConfig::InMemory(_))
+            | (SourceConfig::InMemory(_), SinkConfig::Meilisearch(_))
             | (SourceConfig::Elasticsearch(_), SinkConfig::File(_)) => {
                 Self::Passthrough(passthrough::Passthrough)
             }
@@ -108,6 +128,12 @@ impl PageToEntriesCaster {
             // -- "One does not simply walk into Elasticsearch without a bulk action line." — Boromir, probably
             (SourceConfig::Elasticsearch(_), SinkConfig::Elasticsearch(_)) => {
                 Self::PitToBulk(PitToBulk)
+            }
+
+            // -- 🔍🎭 ES source → Meilisearch sink: PIT response → raw JSON entries (no bulk headers)
+            // -- "Do you ever feel like you're just extracting _source into the void?" — ES hit, in therapy
+            (SourceConfig::Elasticsearch(_), SinkConfig::Meilisearch(_)) => {
+                Self::PitToJson(PitToJson)
             }
 
             // -- 💀 Unimplemented pairs: panic with context.

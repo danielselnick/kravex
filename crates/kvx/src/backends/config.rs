@@ -127,6 +127,7 @@ impl Default for CommonSinkConfig {
 use crate::backends::elasticsearch::ElasticsearchSourceConfig;
 use crate::backends::elasticsearch::ElasticsearchSinkConfig;
 use crate::backends::file::{FileSourceConfig, FileSinkConfig};
+use crate::backends::meilisearch::MeilisearchSinkConfig;
 
 /// 🎭 SourceConfig: the velvet rope at the backend club.
 /// You are either a File, an Elasticsearch, or an InMemory.
@@ -157,6 +158,8 @@ pub enum SinkConfig {
     Elasticsearch(ElasticsearchSinkConfig),
     /// 📂 Write to a local file (NDJSON)
     File(FileSinkConfig),
+    /// 🔍 Write to a Meilisearch index via JSON array POST + async task polling
+    Meilisearch(MeilisearchSinkConfig),
     /// 🧪 In-memory test sink — captures payloads for assertion, no I/O
     InMemory(()),
 }
@@ -175,6 +178,8 @@ impl SinkConfig {
         match self {
             SinkConfig::Elasticsearch(es) => es.common_config.max_request_size_bytes,
             SinkConfig::File(f) => f.common_config.max_request_size_bytes,
+            // 🔍 Meilisearch sink carries its own common config, same as ES and File
+            SinkConfig::Meilisearch(ms) => ms.common_config.max_request_size_bytes,
             // 🧠 InMemory gets the default — it's testing, we don't limit 🦆
             SinkConfig::InMemory(_) => CommonSinkConfig::default().max_request_size_bytes,
         }

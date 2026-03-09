@@ -77,9 +77,32 @@ services:
       retries: 12
       start_period: 30s
 
+  # -- 🔍 Meilisearch v1.12 — The search engine that said "what if indexing was just... easy?"
+  meilisearch:
+    image: getmeili/meilisearch:v1.12
+    container_name: meilisearch
+    environment:
+      # -- 🧪 development mode: no auth required, like a house with no locks in a good neighborhood
+      - MEILI_ENV=development
+      # -- 🦆 telemetry off — we respect your privacy even if the NSA doesn't
+      - MEILI_NO_ANALYTICS=true
+    ports:
+      - "7700:7700"
+    volumes:
+      - meilisearch:/meili_data
+    healthcheck:
+      # -- ✅ "available" — the most reassuring JSON response since { "ok": true }
+      test: ["CMD-SHELL", "curl -sf http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
 # -- 📦 named volumes so your data survives a compose down (unlike my work-life balance)
 volumes:
   es8:
     driver: local
   os219:
+    driver: local
+  meilisearch:
     driver: local

@@ -17,6 +17,7 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 indicatif = { workspace = true }
 comfy-table = { workspace = true }
+flate2 = { workspace = true }
 
 [dev-dependencies]
 wiremock = { workspace = true }
