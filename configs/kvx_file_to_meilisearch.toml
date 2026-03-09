@@ -1,0 +1,38 @@
+# kvx_file_to_meilisearch.toml — File → Meilisearch pipeline
+# 🔧 For local dev: docker compose up meilisearch -d
+# 🦆 Meilisearch: because sometimes you just want search that works on the first try.
+
+# ============================================================
+# ⚙️  Runtime — worker counts and channel capacities
+# ============================================================
+[runtime]
+joiner_parallelism = 4
+pumper_to_joiner_capacity = 4
+joiner_to_drainer_capacity = 4
+sink_parallelism = 32
+
+# ============================================================
+# 📂 Source — File
+# ============================================================
+[source_config.File]
+file_name = "benchmark/data/geonames.json"
+
+[source_config.File.common_config]
+max_batch_size_bytes = 4000000    # 32 MiB
+max_batch_size_docs = 10000000      # 1M docs
+
+# ============================================================
+# 🚰 Sink — Meilisearch
+# ============================================================
+[sink_config.Meilisearch]
+url = "http://localhost:7700"
+index_uid = "geonames"
+# api_key = "your-master-key"      # 🔒 Not needed in development mode
+max_request_size_bytes = 4000000   # 8 MiB — Meilisearch handles JSON arrays well at this size
+
+# ============================================================
+# 🎚️  Regulator — Static (no flow_master, no drama)
+# ============================================================
+# Absent flow_master → runs at fixed max_request_size_bytes.
+# Add [flow_master.Latency] or [flow_master.Throughput] when you're feeling adventurous.
+#[flow_master.Static]

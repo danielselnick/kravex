@@ -47,13 +47,14 @@ pub struct MeilisearchSink {
 /// The rest is metadata we politely ignore like terms and conditions. 📜
 #[derive(serde::Deserialize, Debug)]
 struct MeilisearchTaskResponse {
-    #[serde(alias = "taskUid")]
+    // -- 🐛 POST /documents returns "taskUid", GET /tasks/{id} returns "uid" — Meilisearch has commitment issues with field naming
+    #[serde(alias = "taskUid", alias = "uid")]
     task_uid: u64,
     status: Option<String>,
 }
 
 // 💤 Poll interval for task status checks
-const THE_TASK_POLL_INTERVAL_MS: u64 = 250;
+const THE_TASK_POLL_INTERVAL_MS: u64 = 25;
 // 💀 Max poll attempts before we declare the task lost at sea
 const THE_MAX_POLL_ATTEMPTS: u64 = 240;
 
