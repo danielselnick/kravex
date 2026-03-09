@@ -34,10 +34,10 @@
 #   num_joiner_workers             → joiner_parallelism
 
  [runtime]
- joiner_parallelism = 2
+ joiner_parallelism = 4
  pumper_to_joiner_capacity = 2
  joiner_to_drainer_capacity = 2
- sink_parallelism = 8
+ sink_parallelism = 16
 
 # ============================================================
 # 📂 Source — File (active)
@@ -51,7 +51,7 @@ file_name = "benchmark/data/geonames.json"
 # Absent section → Default::default(): 1,000 docs / 1,048,576 bytes (1 MiB)
 # Present section with missing fields → serde defaults: 10,000 docs / 10,485,760 bytes (10 MiB)
 [source_config.File.common_config]
-max_batch_size_bytes = 33554432    # 32 MiB — benchmark override
+max_batch_size_bytes = 8000000    # 32 MiB — benchmark override
 max_batch_size_docs = 1000000      # 1M docs — benchmark override
 
 # ============================================================
@@ -64,7 +64,7 @@ index = "test-123"                      # Optional — each doc can carry its ow
 # username = "elastic"                  # 🔒 Basic auth username
 # password = "changeme"                # 🔒 Basic auth password
 # api_key = "base64-encoded-api-key"   # 🔒 API key auth (preferred over basic)
-max_request_size_bytes = 8000000        # 4 MiB — benchmark override (serde default: 10,485,760 / 10 MiB)
+max_request_size_bytes = 1000000        # 4 MiB — benchmark override (serde default: 10,485,760 / 10 MiB)
 
 # ============================================================
 # 🎚️  Regulator — PID-controlled adaptive throttling (optional)
@@ -78,12 +78,21 @@ max_request_size_bytes = 8000000        # 4 MiB — benchmark override (serde de
 # poll_interval_secs = 1               # ⏱️  Node stats poll interval (seconds)
 # min_request_size_bytes = 131072       # 📏 PID floor: 128 KiB
 # initial_output_bytes = 1024000        # 📊 Starting flow rate: 4 MiB
-[flow_master.Latency]
-set_point_latency_ms = 2000
-min_output = 128000
-max_output = 8000000
-initial_output = 512000
 
+#[flow_master.Latency]
+# set_point_latency_ms = 200            # 🎯 Target drain latency (ms)
+# min_request_size_bytes = 131072       # 📏 PID floor: 128 KiB
+# initial_output_bytes = 4194304        # 📊 Starting flow rate: 4 MiB
+
+#[flow_master.Throughput]
+#min_request_size_bytes = 131072         # 📏 Floor: 128 KiB
+#initial_output_bytes = 4194304          # 📊 Start at 4 MiB, hill climber finds the peak
+# window_duration_secs = 5             # ⏱️  Evaluation window (default: 5s)
+# improvement_threshold_pct = 10.0     # 📈 Step forward when median improves >10%
+# degradation_threshold_pct = 20.0     # 📉 Circuit breaker trips at 20% EMA drop
+# re_explore_after_windows = 30        # 🔍 Re-explore after 30 quiet windows
+[flow_master.Static]
+output_bytes = 10000000
 # ============================================================
 # 📡 Source — Elasticsearch (commented-out reference)
 # ============================================================
