@@ -136,6 +136,20 @@ impl PageToEntriesCaster {
                 Self::PitToJson(PitToJson)
             }
 
+            // -- 📡 OpenObserve sink: ES-compatible bulk format, same casters apply.
+            // -- "In a world where APIs were compatible... one sink reused all the casters." 🎬
+            (SourceConfig::File(_), SinkConfig::OpenObserve(_)) => {
+                Self::NdJsonToBulk(NdJsonToBulk {})
+            }
+            // -- 📡🎭 ES source → OpenObserve sink: same PIT-to-bulk dance, different venue
+            (SourceConfig::Elasticsearch(_), SinkConfig::OpenObserve(_)) => {
+                Self::PitToBulk(PitToBulk)
+            }
+            // -- 🧪 InMemory → OpenObserve: testing path, passthrough all the way
+            (SourceConfig::InMemory(_), SinkConfig::OpenObserve(_)) => {
+                Self::Passthrough(passthrough::Passthrough)
+            }
+
             // -- 💀 Unimplemented pairs: panic with context.
             // -- "Config not found: We looked everywhere. Under the couch. Behind the fridge.
             // -- In the junk drawer. Nothing."
@@ -275,6 +289,78 @@ mod tests {
         assert!(!the_output.is_empty(), "Cast output should not be empty for multi-doc feed 🎯");
 
         Ok(())
+    }
+
+    /// 🧪 File→OpenObserve resolves to NdJsonToBulk — same bulk format as ES, reuse all the things.
+    #[test]
+    fn the_one_where_file_to_openobserve_resolves_to_ndjson_to_bulk() -> Result<()> {
+        use crate::backends::open_observe::OpenObserveSinkConfig;
+        let source = SourceConfig::File(FileSourceConfig {
+            file_name: "rally_export.json".to_string(),
+            common_config: CommonSourceConfig::default(),
+        });
+        let sink = SinkConfig::OpenObserve(OpenObserveSinkConfig {
+            url: "http://localhost:5080".to_string(),
+            org: "default".to_string(),
+            stream: "rally".to_string(),
+            username: None,
+            password: None,
+            common_config: CommonSinkConfig::default(),
+        });
+
+        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
+        assert!(
+            matches!(the_caster, PageToEntriesCaster::NdJsonToBulk(_)),
+            "File → OpenObserve should resolve to NdJsonToBulk — same wire format as ES 🏎️"
+        );
+
+        Ok(())
+    }
+
+    /// 🧪 ES→OpenObserve resolves to PitToBulk — PIT response to bulk, different destination same dance.
+    #[test]
+    fn the_one_where_es_to_openobserve_resolves_to_pit_to_bulk() -> Result<()> {
+        use crate::backends::open_observe::OpenObserveSinkConfig;
+        let source = SourceConfig::Elasticsearch(ElasticsearchSourceConfig {
+            url: "http://source-cluster:9200".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            common_config: CommonSourceConfig::default(),
+        });
+        let sink = SinkConfig::OpenObserve(OpenObserveSinkConfig {
+            url: "http://localhost:5080".to_string(),
+            org: "default".to_string(),
+            stream: "migrated".to_string(),
+            username: None,
+            password: None,
+            common_config: CommonSinkConfig::default(),
+        });
+
+        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
+        assert!(
+            matches!(the_caster, PageToEntriesCaster::PitToBulk(_)),
+            "ES → OpenObserve should resolve to PitToBulk 🎭"
+        );
+
+        Ok(())
+    }
+
+    /// 🧪 InMemory→OpenObserve resolves to Passthrough — testing path, no conversion needed.
+    #[test]
+    fn the_one_where_inmemory_to_openobserve_resolves_to_passthrough() {
+        use crate::backends::open_observe::OpenObserveSinkConfig;
+        let source = SourceConfig::InMemory(());
+        let sink = SinkConfig::OpenObserve(OpenObserveSinkConfig {
+            url: "http://localhost:5080".to_string(),
+            org: "default".to_string(),
+            stream: "test".to_string(),
+            username: None,
+            password: None,
+            common_config: CommonSinkConfig::default(),
+        });
+        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
+        assert!(matches!(the_caster, PageToEntriesCaster::Passthrough(_)));
     }
 
     /// 🧪 ES→ES resolves to PitToBulk — the PIT response caster for cross-cluster migration.

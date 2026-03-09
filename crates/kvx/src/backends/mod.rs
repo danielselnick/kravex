@@ -18,6 +18,7 @@ pub mod elasticsearch;
 pub mod file;
 pub mod in_mem;
 pub mod meilisearch;
+pub mod open_observe;
 pub mod sink;
 pub mod source;
 
@@ -30,5 +31,6 @@ pub use config::{CommonSinkConfig, CommonSourceConfig, SinkConfig, SourceConfig}
 pub use elasticsearch::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
 pub use file::{FileSinkConfig, FileSourceConfig};
 pub use meilisearch::MeilisearchSinkConfig;
+pub use open_observe::OpenObserveSinkConfig;
 pub use sink::{Sink, SinkBackend};
 pub use source::{Source, SourceBackend};

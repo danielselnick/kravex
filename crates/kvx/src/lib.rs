@@ -22,6 +22,7 @@ use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSource};
 use crate::backends::file::{FileSink, FileSource};
 use crate::backends::in_mem::{InMemorySink, InMemorySource};
 use crate::backends::meilisearch::MeilisearchSink;
+use crate::backends::open_observe::OpenObserveSink;
 use crate::backends::{SinkBackend, SourceBackend};
 use crate::foreman::Foreman;
 use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
@@ -178,6 +179,12 @@ async fn from_sink_config(config: &AppConfig) -> Result<SinkBackend> {
             let sink = MeilisearchSink::new(ms_cfg.clone()).await?;
             Ok(SinkBackend::Meilisearch(sink))
         }
+        // -- 📡 OpenObserve sink: ES-compatible bulk API, but with more observability vibes.
+        // -- Like Elasticsearch's cool younger sibling who went to art school. 🎨
+        SinkConfig::OpenObserve(oo_cfg) => {
+            let sink = OpenObserveSink::new(oo_cfg.clone()).await?;
+            Ok(SinkBackend::OpenObserve(sink))
+        }
     }
 }
 
@@ -272,6 +279,7 @@ mod tests {
     use crate::backends::{CommonSourceConfig, CommonSinkConfig};
     use crate::backends::meilisearch::MeilisearchSinkConfig;
     use crate::backends::file::FileSourceConfig;
+    use crate::backends::open_observe::OpenObserveSinkConfig;
 
     /// 🧪 Full pipeline integration: InMemory→Passthrough→InMemory.
     /// Four raw docs in (as one newline-delimited feed), one JSON array payload out.
@@ -484,6 +492,95 @@ mod tests {
         // 3. Joined them via JsonArrayManifold into a JSON array payload
         // 4. Gzipped and POSTed the JSON array to the mocked Meilisearch /documents endpoint
         // 🎉 The data migrated. Fire and forget. The developer slept. 🦆
+
+        Ok(())
+    }
+
+    /// 🧪 Full pipeline integration: InMemory → Passthrough → NdjsonManifold → OpenObserve (wiremock).
+    /// Four raw docs in, one NDJSON payload POSTed to the mock OpenObserve bulk endpoint.
+    ///
+    /// 🧠 This test proves the full pipeline works end-to-end with the OpenObserve sink:
+    /// - InMemorySource emits one feed (4 docs newline-delimited)
+    /// - Passthrough caster returns feed as-is (InMemory → OpenObserve)
+    /// - NdjsonManifold joins entries with newlines (because OpenObserve needs NDJSON)
+    /// - OpenObserveSink POSTs to /api/{org}/_bulk on the mock server
+    ///
+    /// 🎬 "In a world where integration tests actually ran... one test dared to mock an entire platform."
+    #[tokio::test]
+    async fn the_one_where_docs_flow_into_open_observe() -> Result<()> {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // 🔧 Arrange — stand up a mock OpenObserve instance
+        let mock_server = MockServer::start().await;
+
+        // 📡 Mount connectivity ping — GET /api/default/
+        Mock::given(method("GET"))
+            .and(path("/api/default/"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+
+        // 📡 Mount bulk endpoint — POST /api/default/_bulk → 200
+        Mock::given(method("POST"))
+            .and(path("/api/default/_bulk"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // 🔧 Build AppConfig with InMemory source → OpenObserve sink
+        let the_oo_sink_config = OpenObserveSinkConfig {
+            url: mock_server.uri(),
+            org: "default".to_string(),
+            stream: "test-stream".to_string(),
+            username: None,
+            password: None,
+            common_config: CommonSinkConfig::default(),
+        };
+
+        let app_config = AppConfig {
+            runtime: RuntimeConfig {
+                pumper_to_joiner_capacity: 10,
+                joiner_to_drainer_capacity: 10,
+                sink_parallelism: 1,
+                joiner_parallelism: 1,
+            },
+            source_config: SourceConfig::InMemory(()),
+            sink_config: SinkConfig::OpenObserve(the_oo_sink_config.clone()),
+            drainer: Default::default(),
+            flow_master: Default::default(),
+        };
+
+        // 🏗️ Build backends directly (same pattern as the InMemory e2e test)
+        let source = SourceBackend::InMemory(InMemorySource::new().await?);
+        let sink = SinkBackend::OpenObserve(OpenObserveSink::new(the_oo_sink_config).await?);
+
+        // 🔄 InMemory → OpenObserve resolves to Passthrough caster
+        let caster = PageToEntriesCaster::from_configs(
+            &app_config.source_config,
+            &app_config.sink_config,
+        );
+
+        // 🎼 OpenObserve sink → NdjsonManifold: item\nitem\n
+        let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
+
+        // 📏 Max request size from sink config
+        let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
+
+        // 🔧 Static flow knob — no regulator for tests 🎚️
+        let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_request_size_bytes));
+
+        let the_flow_master_config = FlowMasterConfig::default();
+        let foreman = Foreman::new(app_config);
+        foreman
+            .start_workers(source, vec![sink], caster, manifold, the_test_flow_knob, &the_flow_master_config, max_request_size_bytes, "test-openobserve-pipeline".to_string(), 0)
+            .await?;
+
+        // 🎯 Assert — wiremock's expect(1) on the bulk endpoint confirms the pipeline
+        // successfully POSTed exactly one bulk request to OpenObserve. The docs made it home. ✅
+        // (wiremock auto-verifies expectations when MockServer drops — if expect(1) fails,
+        // this test will panic on drop with a clear "expected 1 request, got N" message)
 
         Ok(())
     }
