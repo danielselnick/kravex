@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::Payload;
-use crate::backends::{elasticsearch, file, in_mem};
+use crate::backends::{elasticsearch, file, in_mem, meilisearch};
 
 /// 🕳️ A sink that sends pre-rendered payloads — pure I/O, zero logic.
 ///
@@ -44,6 +44,7 @@ pub enum SinkBackend {
     InMemory(in_mem::InMemorySink),
     File(file::FileSink),
     Elasticsearch(elasticsearch::ElasticsearchSink),
+    Meilisearch(meilisearch::MeilisearchSink),
 }
 
 #[async_trait]
@@ -53,6 +54,7 @@ impl Sink for SinkBackend {
             SinkBackend::InMemory(sink) => sink.send(payload).await,
             SinkBackend::File(sink) => sink.send(payload).await,
             SinkBackend::Elasticsearch(sink) => sink.send(payload).await,
+            SinkBackend::Meilisearch(sink) => sink.send(payload).await,
         }
     }
 
@@ -61,6 +63,7 @@ impl Sink for SinkBackend {
             SinkBackend::InMemory(sink) => sink.close().await,
             SinkBackend::File(sink) => sink.close().await,
             SinkBackend::Elasticsearch(sink) => sink.close().await,
+            SinkBackend::Meilisearch(sink) => sink.close().await,
         }
     }
 }

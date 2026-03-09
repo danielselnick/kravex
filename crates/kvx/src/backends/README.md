@@ -16,7 +16,7 @@ I/O abstraction layer for sources (data readers) and sinks (data writers).
 | Enum | Variants | Purpose |
 |---|---|---|
 | `SourceBackend` | Elasticsearch, File, InMemory | Route to concrete Source impl |
-| `SinkBackend` | Elasticsearch, File, InMemory | Route to concrete Sink impl |
+| `SinkBackend` | Elasticsearch, File, Meilisearch, InMemory | Route to concrete Sink impl |
 
 ## Backend Implementations
 
@@ -24,6 +24,7 @@ I/O abstraction layer for sources (data readers) and sinks (data writers).
 |---|---|---|---|
 | **Elasticsearch** | PIT + search_after pagination | `_bulk` HTTP POST | `config.rs` |
 | **File** | NDJSON line reader | NDJSON file writer | `config.rs` |
+| **Meilisearch** | — | JSON array POST + task polling | `config.rs` |
 | **InMemory** | Vec-backed test source | Vec-backed test sink | Inline |
 
 ## Shared Config
@@ -43,5 +44,6 @@ backends/sink.rs → Sink trait + SinkBackend enum
 backends/config.rs → CommonSourceConfig, CommonSinkConfig
 backends/elasticsearch/ → ES-specific source, sink, config
 backends/file/ → File-specific source, sink, config
+backends/meilisearch/ → Meilisearch-specific sink, config (sink-only)
 backends/in_mem/ → In-memory source, sink (testing)
 ```

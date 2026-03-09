@@ -65,6 +65,7 @@ impl ManifoldBackend {
     /// |-----------------|-------------------|-----------------|
     /// | Elasticsearch   | NdjsonManifold    | `item\nitem\n`  |
     /// | File            | NdjsonManifold    | `item\nitem\n`  |
+    /// | Meilisearch     | JsonArrayManifold | `[item,item]`   |
     /// | InMemory        | JsonArrayManifold | `[item,item]`   |
     ///
     /// 🧠 Format follows the sink, not the source. The sink decides the wire format.
@@ -75,6 +76,8 @@ impl ManifoldBackend {
             SinkConfig::Elasticsearch(_) => Self::Ndjson(NdjsonManifold),
             // -- 📡 File sinks: NDJSON — one doc per line, trailing \n, everyone's happy
             SinkConfig::File(_) => Self::Ndjson(NdjsonManifold),
+            // -- 🔍 Meilisearch: JSON array — `POST /indexes/{uid}/documents` expects `[doc1,doc2]`
+            SinkConfig::Meilisearch(_) => Self::JsonArray(JsonArrayManifold),
             // -- 📦 InMemory: JSON array — test assertions want `[doc1,doc2]` not `doc1\ndoc2\n`
             SinkConfig::InMemory(_) => Self::JsonArray(JsonArrayManifold),
         }
