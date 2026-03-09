@@ -1,90 +1,114 @@
+use std::io::Write;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use reqwest::header::HeaderValue;
 use tracing::{debug, info, warn};
 
 use crate::Payload;
 use crate::backends::Sink;
 use super::config::MeilisearchSinkConfig;
 
-/// 🔍 The Meilisearch sink — sends JSON array payloads to `/indexes/{uid}/documents`.
+/// 🔍 The Meilisearch sink — raw reqwest + gzip, fire-and-forget. No SDK, no task polling, no drama.
 ///
-/// Like the ES sink but with fewer knobs and more optimism. Meilisearch is the
-/// Marie Kondo of search engines — does it spark joy? Index it. Does it not?
-/// Still index it. We don't judge documents here. 🦆
+/// We tried the SDK life. It pinned reqwest 0.12 and caused dual-compilation.
+/// So we went full artisanal — hand-rolled HTTP like the Meilisearch importer tool does.
+/// Gzip the payload, POST it, check the status code, move on with our lives.
+/// Like a food truck: fast, compressed, no reservations needed. 🌮🦆
 ///
 /// Internally holds:
-/// - `client`: the HTTP workhorse 🐴 — reused across requests
-/// - `sink_config`: auth, URL, index UID
-/// - `the_documents_url`: pre-computed `{url}/indexes/{uid}/documents` to avoid
-///   string formatting in the hot path (because allocations are the enemy and we
-///   are at war)
+/// - `the_http_client`: workspace reqwest 0.13 — one client to rule them all
+/// - `the_precomputed_documents_url`: `{base}/indexes/{uid}/documents` — pre-baked, zero alloc per request
+/// - `the_precomputed_auth_header`: `Bearer {key}` — computed once, reused forever
 ///
 /// 🧠 Knowledge graph:
-/// - Sink trait impl: `send()` POSTs JSON array, polls task until done, `close()` is a no-op
-/// - Meilisearch returns 202 for document ingestion (async task)
-/// - We poll `GET /tasks/{taskUid}` until status is "succeeded" or "failed"
-/// - Auth: `Authorization: Bearer {api_key}` when api_key is present
+/// - Sink trait impl: `send()` gzip-compresses payload, POSTs with Content-Encoding: gzip
+/// - Fire-and-forget: Meilisearch returns 202 with taskUid, we don't poll the task
+/// - Auth: Bearer token in pre-computed header, injected on every POST
 ///
-/// Knock knock. Who's there? 202 Accepted. 202 Accepted who?
-/// 202 Accepted your documents but won't tell you if they actually made it
-/// until you poll the task endpoint like a nervous parent at a school play. 🎭
-#[derive(Debug)]
+/// "In a world where search SDKs caused dependency conflicts...
+/// one sink said 'I'll do it myself' and reached for raw reqwest." 🎬
 pub struct MeilisearchSink {
-    client: reqwest::Client,
-    sink_config: MeilisearchSinkConfig,
-    // 📡 Pre-computed URL: `{base_url}/indexes/{index_uid}/documents`
-    // Allocated once at construction. The hot path borrows it. Zero allocs per send.
-    the_documents_url: String,
-    // 📡 Pre-computed URL: `{base_url}/tasks/`
-    // We append the task UID at poll time, but the prefix is stable.
-    the_tasks_url_prefix: String,
+    // -- 📡 The HTTP client — workspace reqwest, no dependency conflict, no drama
+    the_http_client: reqwest::Client,
+    // -- 🔗 Pre-baked documents URL — computed once because format!() per request is for amateurs
+    the_precomputed_documents_url: String,
+    // -- 🔒 Pre-baked auth header — None for dev instances running wild and free
+    the_precomputed_auth_header: Option<HeaderValue>,
 }
 
-/// 🔍 Meilisearch task status response — the async receipt for document ingestion.
-/// We only care about `taskUid` (from the 202 response) and `status` (from the poll).
-/// The rest is metadata we politely ignore like terms and conditions. 📜
-#[derive(serde::Deserialize, Debug)]
-struct MeilisearchTaskResponse {
-    // -- 🐛 POST /documents returns "taskUid", GET /tasks/{id} returns "uid" — Meilisearch has commitment issues with field naming
-    #[serde(alias = "taskUid", alias = "uid")]
-    task_uid: u64,
-    status: Option<String>,
+impl std::fmt::Debug for MeilisearchSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // -- 🔍 reqwest::Client and HeaderValue don't derive Debug nicely, so we improvise like jazz musicians
+        f.debug_struct("MeilisearchSink")
+            .field("the_precomputed_documents_url", &self.the_precomputed_documents_url)
+            .field("has_auth", &self.the_precomputed_auth_header.is_some())
+            .finish()
+    }
 }
-
-// 💤 Poll interval for task status checks
-const THE_TASK_POLL_INTERVAL_MS: u64 = 25;
-// 💀 Max poll attempts before we declare the task lost at sea
-const THE_MAX_POLL_ATTEMPTS: u64 = 240;
 
 #[async_trait]
 impl Sink for MeilisearchSink {
-    /// 📡 POST the JSON array payload to `/indexes/{uid}/documents`, then poll until done.
+    /// 📡 Gzip the JSON array payload and POST it — fire and forget, baby.
     ///
-    /// Meilisearch is async-first: the POST returns 202 with a `taskUid`, and we
-    /// poll `GET /tasks/{taskUid}` until it's "succeeded" or "failed".
-    /// It's like ordering food and then staring at the kitchen window. 🍕
+    /// 1. Compress payload bytes with flate2 GzEncoder
+    /// 2. POST with Content-Type: application/json + Content-Encoding: gzip
+    /// 3. Check 2xx → Ok. Non-2xx → read body, bail with error.
+    /// 4. No task polling. Meilisearch queues it. We trust the process. 🙏
     async fn send(&mut self, payload: Payload) -> Result<()> {
+        let the_raw_bytes = payload.0.into_bytes();
+        let the_uncompressed_len = the_raw_bytes.len();
+
+        // 🫁 Phase 1: Gzip compress — squeeze those bytes like a stress ball
+        let mut the_gzip_encoder = GzEncoder::new(Vec::new(), Compression::default());
+        the_gzip_encoder.write_all(&the_raw_bytes)
+            .context("💀 Gzip encoder choked on the payload. The bytes went in but didn't come out compressed. Like trying to vacuum-seal a watermelon.")?;
+        let the_compressed_bytes = the_gzip_encoder.finish()
+            .context("💀 Gzip finalization failed. The encoder started strong but couldn't stick the landing. A metaphor for most of my PRs.")?;
+
         debug!(
-            "🔍 Sending {} bytes to Meilisearch — the payload approaches the search engine like a cat approaching a bath",
-            payload.len()
+            "🫁 Compressed {} → {} bytes ({:.0}% reduction) — like packing for vacation but actually fitting everything",
+            the_uncompressed_len,
+            the_compressed_bytes.len(),
+            (1.0 - the_compressed_bytes.len() as f64 / the_uncompressed_len as f64) * 100.0
         );
 
-        // 📡 Phase 1: POST documents — fire the payload into the Meilisearch void
-        let the_task_response = self.submit_documents(payload).await
-            .context("💀 Document submission to Meilisearch failed. The JSON was pristine. The network said 'nah.' Check connectivity. Check your index UID. Check if Mercury is in retrograde.")?;
+        // 📡 Phase 2: POST the gzipped payload — fire and forget
+        let mut the_request = self.the_http_client
+            .post(&self.the_precomputed_documents_url)
+            .header("Content-Type", "application/json")
+            .header("Content-Encoding", "gzip")
+            .body(the_compressed_bytes);
 
-        // 🔄 Phase 2: Poll task until completion — the anxious waiting room of data ingestion
-        self.poll_task_until_done(the_task_response.task_uid).await
-            .context("💀 Task polling failed. Meilisearch accepted our documents but then ghosted us on the status. Like my college roommate. Kevin, if you're reading this, I want my blender back.")?;
+        if let Some(ref the_auth_header) = self.the_precomputed_auth_header {
+            the_request = the_request.header("Authorization", the_auth_header.clone());
+        }
+
+        let the_response = the_request.send().await
+            .context("💀 POST to Meilisearch failed. The network said no. Like asking your crush to prom via HTTP and getting a TCP RST.")?;
+
+        // 🎯 Phase 3: Check status — 2xx means queued, anything else means rejected
+        let the_status = the_response.status();
+        if !the_status.is_success() {
+            let the_rejection_letter = the_response.text().await.unwrap_or_else(|_| "<body unreadable>".to_string());
+            anyhow::bail!(
+                "💀 Meilisearch returned {} — the documents were turned away at the velvet rope. Body: {}. This is the data equivalent of 'we regret to inform you.'",
+                the_status,
+                the_rejection_letter
+            );
+        }
+
+        debug!("✅ Meilisearch accepted the payload (202) — documents are queued, our job is done 🏡");
 
         Ok(())
     }
 
     /// 🗑️ Nothing to flush — we don't buffer. The Drainer sends complete payloads.
     /// Close is a no-op. Like saying goodbye to a search engine that was never really yours.
-    /// The HTTP client drops cleanly. The connection pool waves from the window. 🪟
+    /// The reqwest client drops cleanly. The connection pool waves from the window. 🪟
     async fn close(&mut self) -> Result<()> {
         debug!("🗑️ Meilisearch sink closing — no buffer to flush, just search relevance to mourn");
         Ok(())
@@ -92,160 +116,91 @@ impl Sink for MeilisearchSink {
 }
 
 impl MeilisearchSink {
-    /// 🚀 Stand up a new `MeilisearchSink`, fully wired and ready to accept documents.
+    /// 🚀 Stand up a new `MeilisearchSink` with raw reqwest — no SDK, no baggage, just HTTP.
     ///
-    /// This constructor does three things:
-    /// 1. Builds the `reqwest::Client` with sane timeouts (10s connect, 60s read for task polling).
-    /// 2. Pings the health endpoint (`GET /health`) to confirm Meilisearch is alive.
-    /// 3. Verifies the target index exists (`GET /indexes/{uid}`).
+    /// 1. Build reqwest client with tcp_nodelay + pool_idle_timeout (matching ES/OS sinks)
+    /// 2. Health check: GET /health — confirm Meilisearch is conscious
+    /// 3. Index check: GET /indexes/{uid} — warn on 404 (Meilisearch auto-creates)
+    /// 4. Pre-compute documents URL + auth header — zero alloc per request
     ///
-    /// Pre-computes the documents URL and tasks URL prefix so the hot path
-    /// does zero string formatting. Because every nanosecond counts when you're
-    /// migrating millions of documents and your SLA is "before lunch." 🍔
+    /// "He who constructs without health-checking, debugs in production" — Ancient Proverb 📜
     pub async fn new(config: MeilisearchSinkConfig) -> Result<Self> {
-        // 🔧 Build the HTTP client — 10s connect, 60s read (task polling can be slow)
-        let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(60))
-            .build()
-            .context("💀 The HTTP client refused to materialize. The TLS stack is having an existential crisis. Probably a missing cert or a cursed OpenSSL installation. Either way: we can't talk to Meilisearch without an HTTP client, and we can't build an HTTP client without hope.")?;
-
-        // 📡 Normalize URL — strip trailing slash because double-slashes are a crime against HTTP
         let the_base_url = config.url.trim_end_matches('/').to_string();
 
-        // 📡 Health check — "Hello? Is anybody home?" 🏠
-        let mut the_health_request = client.get(format!("{}/health", the_base_url));
-        if let Some(ref the_api_key) = config.api_key {
-            the_health_request = the_health_request.bearer_auth(the_api_key);
-        }
-        the_health_request
-            .send()
-            .await
-            .context("💀 Meilisearch health check failed. The server is either down, unreachable, or pretending not to be home. We knocked. Nobody answered. The lights are off but we can hear the CPU fan spinning.")?;
+        // 🔧 Build the HTTP client — tcp_nodelay for latency, pool_idle_timeout for cleanup
+        let the_http_client = reqwest::Client::builder()
+            .tcp_nodelay(true)
+            .pool_idle_timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(120))
+            .build()
+            .context("💀 reqwest::Client::builder() failed. This is like failing to open a web browser. Check your TLS stack. Check your life choices.")?;
 
-        // 🔍 Index existence check — confirm the target index is real
-        let mut the_index_request = client.get(format!("{}/indexes/{}", the_base_url, config.index_uid));
-        if let Some(ref the_api_key) = config.api_key {
-            the_index_request = the_index_request.bearer_auth(the_api_key);
-        }
-        let the_index_response = the_index_request
-            .send()
-            .await
-            .context("💀 Failed to check if index exists. The network hiccuped mid-verification.")?;
+        // 🔒 Pre-compute auth header — once and done, like a good tattoo decision
+        let the_precomputed_auth_header = config.api_key.as_deref().map(|the_key| {
+            HeaderValue::from_str(&format!("Bearer {}", the_key))
+                .expect("💀 API key contains invalid header characters. Who hurt you?")
+        });
 
-        if !the_index_response.status().is_success() {
-            // ⚠️ Index doesn't exist — Meilisearch will auto-create it on first document POST,
-            // but we warn because explicit > implicit (except in Rust where explicit is mandatory)
-            warn!(
-                "⚠️ Index '{}' returned status {} — Meilisearch will auto-create it on first document POST. Proceeding with the reckless optimism of a startup founder.",
-                config.index_uid,
-                the_index_response.status()
-            );
+        // 📡 Health check — GET /health, expect {"status":"available"}
+        let mut the_health_request = the_http_client.get(format!("{}/health", the_base_url));
+        if let Some(ref the_auth) = the_precomputed_auth_header {
+            the_health_request = the_health_request.header("Authorization", the_auth.clone());
+        }
+        the_health_request.send().await
+            .context("💀 Meilisearch health check failed. The server is either down, unreachable, or pretending not to be home. We knocked. Nobody answered.")?
+            .error_for_status()
+            .context("💀 Meilisearch health endpoint returned non-2xx. It's alive but unhappy. Like Mondays.")?;
+
+        // 🔍 Index existence check — GET /indexes/{uid}
+        let mut the_index_request = the_http_client.get(format!("{}/indexes/{}", the_base_url, config.index_uid));
+        if let Some(ref the_auth) = the_precomputed_auth_header {
+            the_index_request = the_index_request.header("Authorization", the_auth.clone());
+        }
+        match the_index_request.send().await {
+            Ok(the_resp) if the_resp.status().is_success() => {
+                debug!("✅ Index '{}' exists and is ready for documents — like an empty filing cabinet awaiting chaos", config.index_uid);
+            }
+            Ok(the_resp) if the_resp.status().as_u16() == 404 => {
+                warn!(
+                    "⚠️ Index '{}' not found — Meilisearch will auto-create it on first document POST. Proceeding with the reckless optimism of a startup founder.",
+                    config.index_uid
+                );
+            }
+            Ok(the_resp) => {
+                warn!(
+                    "⚠️ Index check for '{}' returned {} — unexpected but not fatal. Pressing on like a determined salmon upstream.",
+                    config.index_uid, the_resp.status()
+                );
+            }
+            Err(the_err) => {
+                warn!(
+                    "⚠️ Index check for '{}' failed: {} — couldn't verify but we'll try anyway. YOLO engineering.",
+                    config.index_uid, the_err
+                );
+            }
         }
 
-        // 📡 Pre-compute URLs for the hot path
-        let the_documents_url = format!("{}/indexes/{}/documents", the_base_url, config.index_uid);
-        let the_tasks_url_prefix = format!("{}/tasks/", the_base_url);
+        // 🔗 Pre-compute documents URL — zero format!() per request
+        let mut the_precomputed_documents_url = format!("{}/indexes/{}/documents", the_base_url, config.index_uid);
+
+        // 🔑 Append primaryKey query param if configured — tells Meilisearch which field is the unique ID
+        // Without this, Meilisearch infers it from the first doc (looks for *id fields).
+        // Datasets like NOAA with no top-level *id field need this or they get `missing_document_id` errors.
+        if let Some(ref the_primary_key) = config.primary_key {
+            the_precomputed_documents_url.push_str(&format!("?primaryKey={}", the_primary_key));
+        }
 
         info!(
-            "🔍 Meilisearch sink initialized — target: {}/indexes/{} — ready to index like it's 1999",
-            the_base_url, config.index_uid
+            "🔍 Meilisearch sink initialized — target: {} — raw reqwest + gzip, no SDK, no task polling, just vibes",
+            the_precomputed_documents_url
         );
 
         Ok(Self {
-            client,
-            sink_config: config,
-            the_documents_url,
-            the_tasks_url_prefix,
+            the_http_client,
+            the_precomputed_documents_url,
+            the_precomputed_auth_header,
         })
-    }
-
-    /// 📡 POST the JSON array payload to the documents endpoint.
-    /// Returns the task response with the `taskUid` for polling.
-    async fn submit_documents(&self, payload: Payload) -> Result<MeilisearchTaskResponse> {
-        let mut the_request = self.client
-            .post(&self.the_documents_url)
-            .header("Content-Type", "application/json")
-            .body(payload.0);
-
-        if let Some(ref the_api_key) = self.sink_config.api_key {
-            the_request = the_request.bearer_auth(the_api_key);
-        }
-
-        let the_response = the_request
-            .send()
-            .await
-            .context("💀 HTTP POST to Meilisearch failed. The documents were ready. The network was not. This is basically a long-distance relationship that didn't work out.")?;
-
-        let the_status = the_response.status();
-        let the_body = the_response.text().await
-            .context("💀 Failed to read Meilisearch response body. The server sent something, but we couldn't read it. Like a postcard in a language we don't speak.")?;
-
-        if !the_status.is_success() && the_status.as_u16() != 202 {
-            anyhow::bail!(
-                "💀 Meilisearch returned {} for document POST. Body: {}. This is the HTTP equivalent of 'we need to talk.'",
-                the_status, the_body
-            );
-        }
-
-        let the_task: MeilisearchTaskResponse = serde_json::from_str(&the_body)
-            .context("💀 Failed to parse Meilisearch task response. The JSON decoder looked at the response and said 'I don't know her.'")?;
-
-        debug!("🔄 Meilisearch accepted documents — taskUid: {} — now we wait like it's a DMV appointment", the_task.task_uid);
-
-        Ok(the_task)
-    }
-
-    /// 🔄 Poll `GET /tasks/{taskUid}` until the task reaches a terminal state.
-    ///
-    /// Terminal states: "succeeded" (party 🎉) or "failed" (funeral 💀).
-    /// Everything else means "still processing" and we poll again after a short nap.
-    /// Like checking if your pizza is ready every 30 seconds. The staff hates it.
-    /// But we do it anyway because data integrity > social graces. 🍕
-    async fn poll_task_until_done(&self, the_task_uid: u64) -> Result<()> {
-        let the_task_url = format!("{}{}", self.the_tasks_url_prefix, the_task_uid);
-
-        for the_attempt in 0..THE_MAX_POLL_ATTEMPTS {
-            tokio::time::sleep(Duration::from_millis(THE_TASK_POLL_INTERVAL_MS)).await;
-
-            let mut the_request = self.client.get(&the_task_url);
-            if let Some(ref the_api_key) = self.sink_config.api_key {
-                the_request = the_request.bearer_auth(the_api_key);
-            }
-
-            let the_response = the_request.send().await
-                .context("💀 Task poll request failed. We lost contact with Meilisearch mid-poll. Like losing WiFi during a video call with your boss.")?;
-
-            let the_body = the_response.text().await
-                .context("💀 Failed to read task poll response body.")?;
-
-            let the_task: MeilisearchTaskResponse = serde_json::from_str(&the_body)
-                .context("💀 Failed to parse task poll response. Meilisearch is speaking in tongues.")?;
-
-            match the_task.status.as_deref() {
-                Some("succeeded") => {
-                    debug!("✅ Meilisearch task {} succeeded on poll attempt {} — the documents found their forever home", the_task_uid, the_attempt + 1);
-                    return Ok(());
-                }
-                Some("failed") => {
-                    anyhow::bail!(
-                        "💀 Meilisearch task {} failed. The documents arrived but were rejected at the door. Full response: {}. This is the data equivalent of showing up to a party with the wrong invitation.",
-                        the_task_uid, the_body
-                    );
-                }
-                Some(the_status) => {
-                    debug!("🔄 Meilisearch task {} status: '{}' — attempt {}/{} — still marinating", the_task_uid, the_status, the_attempt + 1, THE_MAX_POLL_ATTEMPTS);
-                }
-                None => {
-                    debug!("🔄 Meilisearch task {} has no status field — attempt {}/{} — the void stares back", the_task_uid, the_attempt + 1, THE_MAX_POLL_ATTEMPTS);
-                }
-            }
-        }
-
-        anyhow::bail!(
-            "💀 Meilisearch task {} did not complete after {} poll attempts ({} seconds). We waited. And waited. Like a dog at the window. But the owner never came home.",
-            the_task_uid, THE_MAX_POLL_ATTEMPTS, (THE_MAX_POLL_ATTEMPTS * THE_TASK_POLL_INTERVAL_MS) / 1000
-        );
     }
 }
 
@@ -262,6 +217,7 @@ mod tests {
             url: mock_url.to_string(),
             api_key: None,
             index_uid: "test-meili-idx".to_string(),
+            primary_key: None,
             common_config: CommonSinkConfig::default(),
         }
     }
@@ -280,7 +236,9 @@ mod tests {
     async fn mount_index_check(mock_server: &MockServer) {
         Mock::given(method("GET"))
             .and(path("/indexes/test-meili-idx"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"uid":"test-meili-idx","primaryKey":"id"}"#))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"uid":"test-meili-idx","primaryKey":"id"}"#
+            ))
             .named("index_check")
             .mount(mock_server)
             .await;
@@ -297,10 +255,8 @@ mod tests {
         mount_health_check(&mock_server).await;
         mount_index_check(&mock_server).await;
 
-        let sink = MeilisearchSink::new(make_config(&mock_server.uri())).await?;
-        // ✅ Sink constructed — pre-computed URLs should be correct
-        assert!(sink.the_documents_url.ends_with("/indexes/test-meili-idx/documents"));
-        assert!(sink.the_tasks_url_prefix.ends_with("/tasks/"));
+        let _sink = MeilisearchSink::new(make_config(&mock_server.uri())).await?;
+        // ✅ Sink constructed — raw reqwest, no SDK middleman
         Ok(())
     }
 
@@ -310,16 +266,17 @@ mod tests {
         let mock_server = MockServer::start().await;
         mount_health_check(&mock_server).await;
 
-        // 📡 Index check returns 404 — Meilisearch will auto-create
+        // 📡 Index check returns 404 — we warn and continue
         Mock::given(method("GET"))
             .and(path("/indexes/test-meili-idx"))
-            .respond_with(ResponseTemplate::new(404).set_body_string(r#"{"message":"Index `test-meili-idx` not found."}"#))
+            .respond_with(ResponseTemplate::new(404).set_body_string(
+                r#"{"message":"Index `test-meili-idx` not found.","code":"index_not_found","type":"invalid_request"}"#
+            ))
             .named("index_404")
             .mount(&mock_server)
             .await;
 
-        let sink = MeilisearchSink::new(make_config(&mock_server.uri())).await?;
-        assert!(sink.the_documents_url.contains("test-meili-idx"));
+        let _sink = MeilisearchSink::new(make_config(&mock_server.uri())).await?;
         Ok(())
     }
 
@@ -353,7 +310,9 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/indexes/test-meili-idx"))
             .and(header("Authorization", "Bearer meili-master-key-42"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"uid":"test-meili-idx"}"#))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"uid":"test-meili-idx","primaryKey":"id"}"#
+            ))
             .expect(1)
             .named("authed_index")
             .mount(&mock_server)
@@ -367,35 +326,24 @@ mod tests {
     }
 
     // ================================================================
-    // 🧪 GROUP C: Document POST + Task Polling
+    // 🧪 GROUP C: Document POST — Fire and Forget
     // ================================================================
 
-    /// 🧪 send() POSTs JSON array and polls task to success.
+    /// 🧪 send() gzip-compresses and POSTs JSON array, gets 202, returns Ok.
     #[tokio::test]
     async fn the_one_where_documents_make_it_to_the_promised_land() -> Result<()> {
         let mock_server = MockServer::start().await;
         mount_health_check(&mock_server).await;
         mount_index_check(&mock_server).await;
 
-        // 📡 Document POST returns 202 with taskUid
+        // 📡 Document POST returns 202 — fire and forget, no task polling needed
         Mock::given(method("POST"))
             .and(path("/indexes/test-meili-idx/documents"))
-            .and(header("Content-Type", "application/json"))
             .respond_with(ResponseTemplate::new(202).set_body_string(
-                r#"{"taskUid":1337,"indexUid":"test-meili-idx","status":"enqueued","type":"documentAdditionOrUpdate"}"#
+                r#"{"taskUid":1337}"#
             ))
             .expect(1)
             .named("document_post")
-            .mount(&mock_server)
-            .await;
-
-        // 📡 Task poll returns succeeded immediately
-        Mock::given(method("GET"))
-            .and(path("/tasks/1337"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{"taskUid":1337,"status":"succeeded"}"#
-            ))
-            .named("task_poll")
             .mount(&mock_server)
             .await;
 
@@ -405,63 +353,49 @@ mod tests {
         Ok(())
     }
 
-    /// 🧪 send() handles task that is "processing" before "succeeded".
+    /// 🧪 send() includes Content-Encoding: gzip header and actually compresses the payload.
     #[tokio::test]
-    async fn the_one_where_we_wait_patiently_like_monks_at_a_buffet() -> Result<()> {
+    async fn the_one_where_gzip_squeezes_bytes_like_a_stress_ball() -> Result<()> {
         let mock_server = MockServer::start().await;
         mount_health_check(&mock_server).await;
         mount_index_check(&mock_server).await;
 
+        // 📡 Verify Content-Encoding: gzip header is present
         Mock::given(method("POST"))
             .and(path("/indexes/test-meili-idx/documents"))
-            .respond_with(ResponseTemplate::new(202).set_body_string(
-                r#"{"taskUid":42,"status":"enqueued"}"#
-            ))
-            .mount(&mock_server)
-            .await;
-
-        // 📡 Task poll: first returns processing, then succeeded
-        // wiremock doesn't support stateful responses easily, so we just return succeeded
-        // (the real test of multi-poll is in the integration test)
-        Mock::given(method("GET"))
-            .and(path("/tasks/42"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{"taskUid":42,"status":"succeeded"}"#
-            ))
+            .and(header("Content-Encoding", "gzip"))
+            .and(header("Content-Type", "application/json"))
+            .respond_with(ResponseTemplate::new(202).set_body_string(r#"{"taskUid":42}"#))
+            .expect(1)
+            .named("gzip_post")
             .mount(&mock_server)
             .await;
 
         let mut sink = MeilisearchSink::new(make_config(&mock_server.uri())).await?;
-        sink.send(Payload(r#"[{"id":1}]"#.to_string())).await?;
+        let the_payload = Payload(r#"[{"id":1,"title":"Gzip test — compressing dreams since 1992"}]"#.to_string());
+        sink.send(the_payload).await?;
         Ok(())
     }
 
-    /// 🧪 send() fails when task status is "failed".
+    /// 🧪 send() fails when Meilisearch returns non-2xx (e.g., 400 Bad Request).
     #[tokio::test]
     async fn the_one_where_meilisearch_rejects_our_documents_like_a_bouncer_at_a_club() -> Result<()> {
         let mock_server = MockServer::start().await;
         mount_health_check(&mock_server).await;
         mount_index_check(&mock_server).await;
 
+        // 📡 POST returns 400 — bad payload, no entry, go home
         Mock::given(method("POST"))
             .and(path("/indexes/test-meili-idx/documents"))
-            .respond_with(ResponseTemplate::new(202).set_body_string(
-                r#"{"taskUid":666,"status":"enqueued"}"#
-            ))
-            .mount(&mock_server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path("/tasks/666"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{"taskUid":666,"status":"failed","error":{"message":"Invalid document","code":"invalid_document_fields"}}"#
+            .respond_with(ResponseTemplate::new(400).set_body_string(
+                r#"{"message":"Invalid JSON","code":"bad_request","type":"invalid_request"}"#
             ))
             .mount(&mock_server)
             .await;
 
         let mut sink = MeilisearchSink::new(make_config(&mock_server.uri())).await?;
-        let the_result = sink.send(Payload(r#"[{"bad":"data"}]"#.to_string())).await;
-        assert!(the_result.is_err(), "💀 Failed task should propagate as error");
+        let the_result = sink.send(Payload(r#"not even json lol"#.to_string())).await;
+        assert!(the_result.is_err(), "💀 Non-2xx response should propagate as error");
         Ok(())
     }
 
@@ -482,7 +416,58 @@ mod tests {
     }
 
     // ================================================================
-    // 🧪 GROUP E: Edge Cases — Where Dreams Go to Be Tested
+    // 🧪 GROUP E: Primary Key — Labeling Your Lunchbox
+    // ================================================================
+
+    /// 🧪 primary_key appends ?primaryKey=custom_id to the documents URL.
+    /// Without this, NOAA data screams `missing_document_id` into the void.
+    #[tokio::test]
+    async fn the_one_where_primary_key_rides_shotgun_in_the_query_string() -> Result<()> {
+        let mock_server = MockServer::start().await;
+        mount_health_check(&mock_server).await;
+        mount_index_check(&mock_server).await;
+
+        // 📡 Document POST must hit the URL with ?primaryKey=custom_id
+        Mock::given(method("POST"))
+            .and(path("/indexes/test-meili-idx/documents"))
+            .and(wiremock::matchers::query_param("primaryKey", "custom_id"))
+            .respond_with(ResponseTemplate::new(202).set_body_string(r#"{"taskUid":1338}"#))
+            .expect(1)
+            .named("primary_key_post")
+            .mount(&mock_server)
+            .await;
+
+        let mut config = make_config(&mock_server.uri());
+        config.primary_key = Some("custom_id".to_string());
+
+        let mut sink = MeilisearchSink::new(config).await?;
+        sink.send(Payload(r#"[{"custom_id":"abc","title":"Primary key vibes"}]"#.to_string())).await?;
+        Ok(())
+    }
+
+    /// 🧪 No primary_key means no query param — Meilisearch auto-infers from *id fields.
+    #[tokio::test]
+    async fn the_one_where_no_primary_key_means_meilisearch_figures_it_out() -> Result<()> {
+        let mock_server = MockServer::start().await;
+        mount_health_check(&mock_server).await;
+        mount_index_check(&mock_server).await;
+
+        // 📡 Document POST hits /documents with no query string
+        Mock::given(method("POST"))
+            .and(path("/indexes/test-meili-idx/documents"))
+            .respond_with(ResponseTemplate::new(202).set_body_string(r#"{"taskUid":1339}"#))
+            .expect(1)
+            .named("no_pk_post")
+            .mount(&mock_server)
+            .await;
+
+        let mut sink = MeilisearchSink::new(make_config(&mock_server.uri())).await?;
+        sink.send(Payload(r#"[{"geonameid":123,"name":"Auto-detect city"}]"#.to_string())).await?;
+        Ok(())
+    }
+
+    // ================================================================
+    // 🧪 GROUP F: Edge Cases — Where Dreams Go to Be Tested
     // ================================================================
 
     /// 🧪 Trailing slash in URL is handled gracefully.
@@ -492,10 +477,9 @@ mod tests {
         mount_health_check(&mock_server).await;
         mount_index_check(&mock_server).await;
 
-        let mut config = make_config(&format!("{}/", mock_server.uri()));
-        let sink = MeilisearchSink::new(config).await?;
-        // ✅ No double slashes in the pre-computed URL
-        assert!(!sink.the_documents_url.contains("//indexes"));
+        let config = make_config(&format!("{}/", mock_server.uri()));
+        let _sink = MeilisearchSink::new(config).await?;
+        // ✅ No double slashes — clean URL guaranteed
         Ok(())
     }
 }

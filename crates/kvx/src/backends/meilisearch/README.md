@@ -1,10 +1,10 @@
 # Meilisearch Backend
 
-Meilisearch-specific Sink implementation for document ingestion.
+Meilisearch-specific Sink implementation using raw `reqwest` + `flate2` gzip compression. Fire-and-forget — no SDK, no task polling.
 
 ## Sink
 
-Writes documents to Meilisearch via `POST /indexes/{index_uid}/documents` with JSON array payloads. Polls `GET /tasks/{taskUid}` until the async task reaches a terminal state ("succeeded" or "failed").
+Writes documents via `POST /indexes/{uid}/documents` with gzip-compressed JSON array payloads. Pre-computes the documents URL and Bearer auth header at construction time for zero per-request allocation.
 
 ## Config
 
@@ -12,20 +12,23 @@ Writes documents to Meilisearch via `POST /indexes/{index_uid}/documents` with J
 
 ## Key Concepts
 
-- **JSON Array Payload**: Meilisearch accepts `[doc1,doc2,...]` — no NDJSON, no bulk action lines
-- **Async Tasks**: Document POST returns 202 Accepted with a `taskUid`; actual indexing is asynchronous
-- **Task Polling**: Sink polls `GET /tasks/{taskUid}` until status is "succeeded" or "failed"
-- **Bearer Token Auth**: `Authorization: Bearer {api_key}` header when API key is configured
+- **Raw Reqwest**: Uses workspace `reqwest 0.13` directly — no SDK dependency conflicts, single reqwest compilation
+- **Gzip Compression**: `flate2::GzEncoder` compresses payload before POST — `Content-Encoding: gzip` header
+- **Fire-and-Forget**: Meilisearch returns 202 with `taskUid` — we don't poll, don't wait, don't look back
+- **Pre-computed URL + Auth**: Documents URL and Bearer header computed once in `new()`, reused on every `send()`
+- **Bearer Token Auth**: `Authorization: Bearer {api_key}` injected on all requests (health, index check, document POST)
+- **Primary Key**: Optional `primary_key` config field — appends `?primaryKey={field}` to documents URL. Required for datasets without a top-level `*id` field (e.g., NOAA). Omit for datasets with natural `*id` fields (e.g., geonames has `geonameid`)
 - **Auto-Create Index**: Meilisearch auto-creates indices on first document POST if they don't exist
-- **Pre-computed URLs**: Documents and tasks URLs are built once at construction for zero-alloc hot path
+- **JSON Array Payload**: Meilisearch accepts `[doc1,doc2,...]` — no NDJSON, no bulk action lines
+- **Health + Index Checks**: Constructor pings `/health` and `/indexes/{uid}` to validate connectivity
 
 ## Knowledge Graph
 
 ```
 MeilisearchSink → Sink trait → SinkBackend::Meilisearch
 MeilisearchSinkConfig → CommonSinkConfig (embedded)
-POST /indexes/{uid}/documents ← payloads (JSON arrays)
-GET /tasks/{taskUid} → poll until succeeded/failed
+reqwest::Client → health check, index check, document POST
+flate2::GzEncoder → gzip compression before POST
 JsonArrayManifold → joins entries as [doc1,doc2,...]
 NdJsonSplit caster → File→Meilisearch (splits NDJSON lines into entries)
 PitToJson caster → ES→Meilisearch (extracts _source from PIT hits)

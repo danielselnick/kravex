@@ -382,30 +382,21 @@ mod tests {
         // 🔍 Mount index check — "yes the index exists, stop asking"
         Mock::given(method("GET"))
             .and(path("/indexes/movies"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"uid":"movies","primaryKey":"id"}"#))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"uid":"movies","primaryKey":"id"}"#
+            ))
             .named("meili_index_check")
             .mount(&the_mock_server)
             .await;
 
-        // 📡 Mount document POST — returns 202 with taskUid
+        // 📡 Mount document POST — returns 202, fire and forget, no task polling
         Mock::given(method("POST"))
             .and(path("/indexes/movies/documents"))
-            .and(header("Content-Type", "application/json"))
             .respond_with(ResponseTemplate::new(202).set_body_string(
-                r#"{"taskUid":7,"indexUid":"movies","status":"enqueued","type":"documentAdditionOrUpdate"}"#
+                r#"{"taskUid":7}"#
             ))
             .expect(1..)
             .named("meili_document_post")
-            .mount(&the_mock_server)
-            .await;
-
-        // 🔄 Mount task poll — returns succeeded immediately (we're not monsters)
-        Mock::given(method("GET"))
-            .and(path("/tasks/7"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{"taskUid":7,"status":"succeeded"}"#
-            ))
-            .named("meili_task_poll")
             .mount(&the_mock_server)
             .await;
 
@@ -419,6 +410,7 @@ mod tests {
             url: the_mock_server.uri(),
             api_key: None,
             index_uid: "movies".to_string(),
+            primary_key: None,
             common_config: CommonSinkConfig::default(),
         });
 
@@ -488,9 +480,8 @@ mod tests {
         // 1. Read 3 NDJSON lines from the temp file
         // 2. Split them via NdJsonSplit into 3 individual Entry items
         // 3. Joined them via JsonArrayManifold into a JSON array payload
-        // 4. POSTed the JSON array to the mocked Meilisearch /documents endpoint
-        // 5. Polled the task status and confirmed success
-        // 🎉 The data migrated. The test passed. The developer slept. 🦆
+        // 4. Gzipped and POSTed the JSON array to the mocked Meilisearch /documents endpoint
+        // 🎉 The data migrated. Fire and forget. The developer slept. 🦆
 
         Ok(())
     }

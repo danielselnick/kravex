@@ -45,6 +45,12 @@ pub struct MeilisearchSinkConfig {
     /// 📦 The target index UID — required, because Meilisearch doesn't do per-doc routing.
     /// One sink, one index. Monogamous data. Wholesome. 💍
     pub index_uid: String,
+    /// 🔑 The primary key field name — tells Meilisearch which document field is the unique ID.
+    /// Optional: if omitted, Meilisearch infers it from the first doc (looks for `*id` fields).
+    /// If your docs have no top-level `*id` field, you MUST set this or face `missing_document_id` errors.
+    /// Like labeling your lunchbox in the office fridge — optional until someone steals it.
+    #[serde(default)]
+    pub primary_key: Option<String>,
     /// 🔧 Common sink config: max request size in bytes and other load-bearing bureaucracy.
     #[serde(flatten, default)]
     pub common_config: CommonSinkConfig,

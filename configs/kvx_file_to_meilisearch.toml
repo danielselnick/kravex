@@ -6,9 +6,9 @@
 # ⚙️  Runtime — worker counts and channel capacities
 # ============================================================
 [runtime]
-joiner_parallelism = 4
-pumper_to_joiner_capacity = 4
-joiner_to_drainer_capacity = 4
+joiner_parallelism = 8
+pumper_to_joiner_capacity = 8
+joiner_to_drainer_capacity = 8
 sink_parallelism = 32
 
 # ============================================================
@@ -18,8 +18,8 @@ sink_parallelism = 32
 file_name = "benchmark/data/geonames.json"
 
 [source_config.File.common_config]
-max_batch_size_bytes = 4000000    # 32 MiB
-max_batch_size_docs = 10000000      # 1M docs
+max_batch_size_bytes =8000000    # 32 MiB
+max_batch_size_docs = 1000000      # 1M docs
 
 # ============================================================
 # 🚰 Sink — Meilisearch
@@ -28,7 +28,7 @@ max_batch_size_docs = 10000000      # 1M docs
 url = "http://localhost:7700"
 index_uid = "geonames"
 # api_key = "your-master-key"      # 🔒 Not needed in development mode
-max_request_size_bytes = 4000000   # 8 MiB — Meilisearch handles JSON arrays well at this size
+max_request_size_bytes = 8000000   # 8 MiB — Meilisearch handles JSON arrays well at this size
 
 # ============================================================
 # 🎚️  Regulator — Static (no flow_master, no drama)
