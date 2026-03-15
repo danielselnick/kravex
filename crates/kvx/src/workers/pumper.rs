@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Kravex, Inc.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file and at www.mariadb.com/bsl11.
 //! 🎬 *[a vast index stretches to the horizon, billions of documents, blissfully unaware]*
 //! *[a Pumper cracks its knuckles]*
 //! *["Don't worry," it says. "I'll be gentle."]*

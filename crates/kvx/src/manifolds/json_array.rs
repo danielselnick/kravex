@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Kravex, Inc.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
 //! 🎬 *[the items arrive. they are many. they need brackets. they need commas.]*
 //! *[serde was not invited. it doesn't even know this function exists.]*

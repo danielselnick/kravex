@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Kravex, Inc.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
 //! 🎬 *[a payload arrives on ch2. the drainer doesn't flinch.]*
 //! *[it sends. if rejected, it waits. it tries again. patience of a saint with a retry budget.]*

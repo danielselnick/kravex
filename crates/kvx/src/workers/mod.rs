@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Kravex, Inc.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file and at www.mariadb.com/bsl11.
 //! 🧵 Workers: the backbone of kravex, the unsung heroes, the ones who actually
 //! do the work while the Foreman takes all the credit in the sprint retro.
 //!

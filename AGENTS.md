@@ -40,10 +40,6 @@ Nested backend directories (e.g., `backends/elasticsearch/`) follow the same pat
   4) Implementation files (e.g., `elasticsearch_sink.rs`, `pumper.rs`)
    
 # Context Saving
-You are explicitly forbidden from loading these files:
-LICENSE
-LICENSE-EE
-LICENSE-MIT
 You are hesitant to load, operate upon these files and directories, unless you explicitly deem that it is absolutely necessary for the task at hand:
 *.gitignore
 *.Cargo.lock

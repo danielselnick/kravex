@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Kravex, Inc.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
 //! 🎬 *[INT. CONTROL TOWER — DAWN BREAKS]*
 //! *[Below, the pipeline roars. Data flows like a river. But rivers flood.]*

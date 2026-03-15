@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Kravex, Inc.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
 //! 🎬 *[INT. VALVE CONTROL ROOM — THE DIALS SPIN]*
 //! *[A single entity sits at the controls. It receives readings. It adjusts the flow.]*
