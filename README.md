@@ -37,6 +37,10 @@ Kravex automatically optimizes search migrations — no knobs, no guesswork. Sma
 - **Debug kvx-cli** (`F5`) — LLDB debugger attached
 - **Run kvx-cli (no debug)** (`Ctrl+F5`)
 
+# Benchmark Data
+
+Sample JSON corpora (NOAA weather, Geonames, PubMed Central) are used for benchmarking. See [benchmark/DATA_ATTRIBUTION.md](benchmark/DATA_ATTRIBUTION.md) for licensing and attribution.
+
 # Notes
 
 - POC/MVP stage — API surface is unstable
