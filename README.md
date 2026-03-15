@@ -212,10 +212,12 @@ POC/MVP — API surface is unstable. Dependency footprint is kept minimal.
 
 ## License
 
-This project is licensed under the [Business Source License 1.1](LICENSE) (BSL 1.1).
+[Business Source License 1.1](LICENSE) (BSL 1.1).
 
-**What you can do**: Use, modify, and distribute Kravex for any purpose — internal tooling, migrations, CI pipelines, whatever you need — **except** offering it as a competing commercial data-migration service.
+**Free to use** — run Kravex for your own migrations, internal tooling, CI pipelines, side projects, whatever. No limits.
 
-**Change License**: On **2029-03-15**, the license automatically converts to [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0), making all current code fully open source.
+**Not free to resell** — you can't use Kravex as part of a product or service you sell to others. That means no hosting it as a competing migration platform, and no using it as the engine behind paid consulting or managed migration services. If that's your use case, [reach out](mailto:daniel@kravex.net) for a commercial license.
 
-Enterprise features under `/ee/` require a separate commercial license. Contact [daniel@kravex.net](mailto:daniel@kravex.net) for details.
+**Goes fully open source** — on **2029-03-15**, this version automatically converts to [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+
+Enterprise features under `/ee/` require a separate license. Contact [daniel@kravex.net](mailto:daniel@kravex.net).
