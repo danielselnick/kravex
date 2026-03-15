@@ -53,7 +53,7 @@ impl Worker for Pumper {
             loop {
                 match self
                     .source
-                    .next_page()
+                    .pump()
                     .await
                     .context("💀 Pumper failed to get next feed — the well collapsed")?
                 {

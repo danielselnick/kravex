@@ -36,7 +36,7 @@ Pumper completes → ch1 closes → Joiners flush and exit → ch2 closes → Dr
 
 ## Retry & Backoff
 
-Drainer retries failed `sink.send()` calls with configurable exponential backoff.
+Drainer retries failed `sink.drain()` calls with configurable exponential backoff.
 
 | Config Field | Default | Description |
 |---|---|---|
@@ -64,7 +64,7 @@ Total attempts = 1 (initial) + max_retries. All errors are retried; error classi
 Foreman → spawns Pumper (1) + Joiner (N) + Drainer (N)
 Pumper → Source.pump() → ch1
 Joiner → ch1 → Caster + Manifold → ch2
-Drainer → ch2 → Sink.send() with exponential backoff retry
+Drainer → ch2 → Sink.drain() with exponential backoff retry
 Drainer → Arc<DrainMetrics> (progress reporting, atomic counters)
 Drainer → gauge_tx (FlowMaster latency feedback, separate concern)
 Drainer config → DrainerConfig (workers/config.rs)

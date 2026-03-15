@@ -25,7 +25,7 @@ use super::config::MeilisearchSinkConfig;
 /// - `the_precomputed_auth_header`: `Bearer {key}` — computed once, reused forever
 ///
 /// 🧠 Knowledge graph:
-/// - Sink trait impl: `send()` gzip-compresses payload, POSTs with Content-Encoding: gzip
+/// - Sink trait impl: `drain()` gzip-compresses payload, POSTs with Content-Encoding: gzip
 /// - Fire-and-forget: Meilisearch returns 202 with taskUid, we don't poll the task
 /// - Auth: Bearer token in pre-computed header, injected on every POST
 ///
@@ -58,7 +58,7 @@ impl Sink for MeilisearchSink {
     /// 2. POST with Content-Type: application/json + Content-Encoding: gzip
     /// 3. Check 2xx → Ok. Non-2xx → read body, bail with error.
     /// 4. No task polling. Meilisearch queues it. We trust the process. 🙏
-    async fn send(&mut self, payload: Payload) -> Result<()> {
+    async fn drain(&mut self, payload: Payload) -> Result<()> {
         let the_raw_bytes = payload.0.into_bytes();
         let the_uncompressed_len = the_raw_bytes.len();
 
@@ -349,7 +349,7 @@ mod tests {
 
         let mut sink = MeilisearchSink::new(make_config(&mock_server.uri())).await?;
         let the_payload = Payload(r#"[{"id":1,"title":"Test Doc"}]"#.to_string());
-        sink.send(the_payload).await?;
+        sink.drain(the_payload).await?;
         Ok(())
     }
 
@@ -373,7 +373,7 @@ mod tests {
 
         let mut sink = MeilisearchSink::new(make_config(&mock_server.uri())).await?;
         let the_payload = Payload(r#"[{"id":1,"title":"Gzip test — compressing dreams since 1992"}]"#.to_string());
-        sink.send(the_payload).await?;
+        sink.drain(the_payload).await?;
         Ok(())
     }
 
@@ -394,7 +394,7 @@ mod tests {
             .await;
 
         let mut sink = MeilisearchSink::new(make_config(&mock_server.uri())).await?;
-        let the_result = sink.send(Payload(r#"not even json lol"#.to_string())).await;
+        let the_result = sink.drain(Payload(r#"not even json lol"#.to_string())).await;
         assert!(the_result.is_err(), "💀 Non-2xx response should propagate as error");
         Ok(())
     }
@@ -441,7 +441,7 @@ mod tests {
         config.primary_key = Some("custom_id".to_string());
 
         let mut sink = MeilisearchSink::new(config).await?;
-        sink.send(Payload(r#"[{"custom_id":"abc","title":"Primary key vibes"}]"#.to_string())).await?;
+        sink.drain(Payload(r#"[{"custom_id":"abc","title":"Primary key vibes"}]"#.to_string())).await?;
         Ok(())
     }
 
@@ -462,7 +462,7 @@ mod tests {
             .await;
 
         let mut sink = MeilisearchSink::new(make_config(&mock_server.uri())).await?;
-        sink.send(Payload(r#"[{"geonameid":123,"name":"Auto-detect city"}]"#.to_string())).await?;
+        sink.drain(Payload(r#"[{"geonameid":123,"name":"Auto-detect city"}]"#.to_string())).await?;
         Ok(())
     }
 

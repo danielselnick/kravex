@@ -30,7 +30,7 @@ use serde::Deserialize;
 
 /// 📦 Shared configuration embedded by every source backend config.
 ///
-/// Controls how large a "feed" the source emits per `next_page()` call.
+/// Controls how large a "feed" the source emits per `pump()` call.
 /// Sources are ignorant of downstream concerns — they just pour raw feeds
 /// at whatever batch size the config allows. 🚰
 ///

@@ -13,7 +13,7 @@ use crate::backends::Source;
 /// but feed it custom pages via [`with_pages`] and it'll replay whatever you want —
 /// ES PIT responses, NDJSON feeds, your diary entries, anything.
 ///
-/// Pages are stored in a `VecDeque` and popped front on each `next_page()` call.
+/// Pages are stored in a `VecDeque` and popped front on each `pump()` call.
 /// When the queue is empty, it returns `None`. Like a vending machine that's been
 /// cleaned out at a developer conference. Nothing left. Not even the weird flavors. 🍿
 ///
@@ -25,7 +25,7 @@ use crate::backends::Source;
 /// for integration tests that exercise specific caster paths (PitToBulk, NdJsonToBulk). 🦆
 #[derive(Debug)]
 pub struct InMemorySource {
-    // 📬 The mailbox — pages waiting to be delivered, one per next_page() call.
+    // 📬 The mailbox — pages waiting to be delivered, one per pump() call.
     // VecDeque because pop_front() is O(1) and we're not savages.
     pages: VecDeque<Page>,
 }
@@ -56,7 +56,7 @@ impl InMemorySource {
     /// 🏗️ Constructs an `InMemorySource` with custom pages — the choose-your-own-adventure constructor.
     ///
     /// Feed it ES PIT search responses, NDJSON feeds, base64-encoded cat photos — whatever.
-    /// Each page is yielded once per `next_page()` call, in order, then it's gone forever.
+    /// Each page is yielded once per `pump()` call, in order, then it's gone forever.
     /// Like Snapchat but for data pipelines. And less regrettable. Probably.
     ///
     /// 🧠 Knowledge graph: enables integration tests that exercise specific caster paths
@@ -79,7 +79,7 @@ impl Source for InMemorySource {
     /// 🧠 Knowledge graph: pages are popped front (FIFO order preserved).
     /// The Manifold+Caster downstream will split and process them.
     /// Source is ignorant. Source is bliss. Source is a faucet. 🚰
-    async fn next_page(&mut self) -> Result<Option<Page>> {
+    async fn pump(&mut self) -> Result<Option<Page>> {
         // 🎰 Pop front — O(1), preserves insertion order, returns None when empty.
         // No booleans. No state machines. Just a queue doing queue things.
         Ok(self.pages.pop_front())

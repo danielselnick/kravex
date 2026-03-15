@@ -6,7 +6,7 @@ In-memory Source and Sink implementations for testing.
 
 ## Source
 
-Vec-backed source that yields pre-loaded pages via a `VecDeque<Page>`. Pages are popped front on each `next_page()` call (FIFO). When the queue is empty, returns `None`.
+Vec-backed source that yields pre-loaded pages via a `VecDeque<Page>`. Pages are popped front on each `pump()` call (FIFO). When the queue is empty, returns `None`.
 
 ### Constructors
 
