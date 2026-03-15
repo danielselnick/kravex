@@ -23,6 +23,7 @@ You _MUST_ utilize tools in such a way that the tools usage results in the least
 - You must embed knowledge graph information into README.md updates.
 - You must update README.md files as you complete any given piece of work.
 - You must update README.md at least once for every 50,000 tokens.
+- **EXCEPTION — root `/README.md`**: The root README is a public-facing onboarding document (technical quickstart, project overview, config reference). It does NOT follow the module-level README pattern above. It is exempt from knowledge-graph embedding, keyword-only constraints, and the "no implementation details" rule. Update it when user-facing behavior changes (new backends, config keys, CLI flags, quickstart steps).
 
 # Module Structure Convention
 Every directory under `/crates/kvx/src/` follows this pattern:
