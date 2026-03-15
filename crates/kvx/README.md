@@ -37,10 +37,10 @@ Separating CPU work onto OS threads prevents starving tokio's async I/O workers.
 - **Sources return `Option<String>`**: one raw page per call, content uninterpreted. `None` = EOF
 - **Sinks are I/O-only**: accept a fully rendered payload `String`, send it
 - **Joiner buffers raw pages** by byte size, flushes via Manifold when buffer approaches `max_request_size_bytes`
-- **Caster** (`DocumentCaster`): per-page format conversion (NdJsonToBulk, Passthrough)
+- **Caster** (`PageToEntriesCaster`): per-page format conversion (NdJsonToBulk, Passthrough)
 - **Manifold** (`ManifoldBackend`): cast + assemble in one shot:
-  - ES/File → `NdjsonManifold`: items joined with `\n`, trailing `\n`
-  - InMemory → `JsonArrayManifold`: `[item,item,item]`, zero serde
+  - ES/File/OpenObserve → `NdjsonManifold`: items joined with `\n`, trailing `\n`
+  - InMemory/Meilisearch → `JsonArrayManifold`: `[item,item,item]`, zero serde
 - **All abstractions follow the same pattern**: trait → concrete impls → enum dispatcher → from_config resolver
 - **Joiner threads**: CPU-bound work on `std::thread`, not tokio. Uses `recv_blocking()`/`send_blocking()` on async_channel
 - **Drainer is thin**: just recv from ch2, send to sink. No buffering, no casting, no manifold

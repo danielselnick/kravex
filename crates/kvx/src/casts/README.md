@@ -13,7 +13,7 @@ Feed format transformation layer. A Caster converts raw feeds from a Source into
 
 ## Dispatcher Enum
 
-`DocumentCaster` — routes to concrete caster based on source/sink config combination.
+`PageToEntriesCaster` — routes to concrete caster based on source/sink config combination.
 
 ## Concrete Casters
 
@@ -42,7 +42,7 @@ Caster selection is determined by the **source x sink config** combination at st
 
 ```
 Caster trait → PageToEntriesCaster enum → Passthrough | NdJsonToBulk | NdJsonSplit | PitToBulk | PitToJson
-DocumentCaster → resolved by from_configs(SourceConfig, SinkConfig)
+PageToEntriesCaster → resolved by from_configs(SourceConfig, SinkConfig)
 OpenObserve sink → reuses NdJsonToBulk, PitToBulk, Passthrough (ES-compatible bulk API)
 Caster → consumed by Manifold during join()
 lines_per_doc → used by Manifold for size-aware chunking

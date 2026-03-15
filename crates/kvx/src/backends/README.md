@@ -47,5 +47,5 @@ backends/elasticsearch/ → ES-specific source, sink, config
 backends/file/ → File-specific source, sink, config
 backends/meilisearch/ → Meilisearch-specific sink, config (sink-only)
 backends/in_mem/ → In-memory source, sink (testing)
-backends/openobserve/ → OpenObserve-specific sink, config
+backends/open_observe/ → OpenObserve-specific sink, config
 ```

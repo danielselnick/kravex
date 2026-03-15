@@ -8,7 +8,7 @@ Core library source for kravex — the zero-config search migration engine.
 
 | Module | Purpose |
 |---|---|
-| `app_config` | Configuration hierarchy — AppConfig, RuntimeConfig, SourceConfig, SinkConfig |
+| `config` | Configuration hierarchy — AppConfig, RuntimeConfig, SourceConfig, SinkConfig |
 | `backends` | I/O abstraction — Source/Sink traits, backend-specific implementations |
 | `casts` | Feed transformation — Caster trait, format conversion between source and sink |
 | `manifolds` | Payload assembly — cast feeds into docs, buffer and flush as wire-format payloads |

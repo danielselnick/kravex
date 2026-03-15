@@ -34,3 +34,14 @@ Sink-only backend for [OpenObserve](https://openobserve.ai), an observability pl
 - `mod.rs` — Module root, re-exports
 - `config.rs` — `OpenObserveSinkConfig` serde struct
 - `open_observe_sink.rs` — `OpenObserveSink` implementation + unit tests
+
+## Knowledge Graph
+
+```
+OpenObserveSink → Sink trait → SinkBackend::OpenObserve
+OpenObserveSinkConfig → CommonSinkConfig (embedded)
+reqwest::Client → health check, bulk POST to /api/{org}/_bulk
+NdjsonManifold → joins entries as NDJSON action+data line pairs
+NdJsonToBulk caster → File→OpenObserve (wraps NDJSON lines with bulk action)
+PitToBulk caster → ES→OpenObserve (extracts _source, emits bulk action+doc)
+```
