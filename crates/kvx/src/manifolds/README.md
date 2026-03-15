@@ -41,6 +41,16 @@
 6. On the next call, carried-over state is processed first, then new feeds
 7. When the source is exhausted, the Joiner triggers a final flush — all remaining docs drain as one last payload
 
+## Resolution (SinkConfig → ManifoldBackend)
+
+| Sink | Manifold | Wire Format |
+|---|---|---|
+| Elasticsearch | NdjsonManifold | `item\nitem\n` |
+| OpenObserve | NdjsonManifold | `item\nitem\n` |
+| File | NdjsonManifold | `item\nitem\n` |
+| InMemory | JsonArrayManifold | `[item, item]` |
+| Meilisearch | JsonArrayManifold | `[item, item]` |
+
 ## Key Concepts
 
 - **Two-level buffering:** Joiner buffers feeds, Manifold buffers docs
