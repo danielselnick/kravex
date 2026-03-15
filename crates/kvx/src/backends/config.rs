@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Kravex, Inc.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
 //! 🎬 *[two configs walk into a struct. one limits batch size. one limits request size.]*
 //! *["We belong together," they said. "In the backends module." The module system nodded.]*

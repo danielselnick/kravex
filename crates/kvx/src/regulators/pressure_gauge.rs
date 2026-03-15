@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Kravex, Inc.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
 //! 🎬 *[INT. ENGINE ROOM — THE GAUGES FLICKER]*
 //! *[A tokio task awakens in the background. Its mission: read the pressure.]*

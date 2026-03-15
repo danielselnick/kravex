@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Kravex, Inc.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
 //! 🎬 *[a dark and stormy deploy. the sink demands newlines. the caster obliges.]*
 //! *[every line, alone. no brackets. no comfort. just `\n`. this is NDJSON.]*

@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Kravex, Inc.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file and at www.mariadb.com/bsl11.
 //! 🚀 kvx — the core library crate, the beating heart, the engine room
 //! where dreams of zero-config search migration become mildly-configured reality.
 //!

@@ -80,17 +80,56 @@ cargo run -p kvx-cli -- --config kvx.toml
 curl -s "http://localhost:9201/employees/_count" | jq .count
 ```
 
-## Project structure
+## Architecture
+
+Kravex uses a plumbing metaphor throughout. The entire pipeline is modeled as water flowing through pipes — sources are faucets, sinks are drains, and everything in between controls the flow.
 
 ```
-kravex/
-├── crates/
-│   ├── kvx/          # Core library — throttling, cutover logic, retry/recovery, adaptive throughput
-│   └── kvx-cli/      # CLI binary — user-facing entry point wrapping kvx
-├── configs/           # Example TOML configurations
-├── benchmark/         # Benchmark data and attribution
-└── docker-compose.yml # Local ES + OpenSearch + Meilisearch for development
+Pumper (async) → ch1 → Joiner pool (std::thread) → ch2 → Drainer pool (async) → Sink
+                            ↑                                    |
+                        FlowKnob ← Regulator ← PressureGauge ← ch3
 ```
+
+### Terminology
+
+| Component | Plumbing analogy | What it does |
+|-----------|-----------------|--------------|
+| **Source** | Faucet | Produces raw data one page at a time. Maximally ignorant of format — just emits bytes. |
+| **Pumper** | The handle you turn | Async tokio worker. Calls `source.pump()` in a loop, feeds raw pages into ch1 until EOF. |
+| **Caster** | Pipe fitting | Stateless transformer. Takes a raw page and casts it into the format the sink expects (e.g., PIT response → bulk NDJSON). |
+| **Manifold** | Collector pipe | Orchestrates cast-and-join. Buffers individual entries from the Caster and assembles them into wire-format payloads sized to the current flow rate. |
+| **Joiner** | The junction | CPU-bound `std::thread` worker. Sits between Pumper and Drainer. Receives raw pages from ch1, casts via Caster, buffers via Manifold, flushes assembled payloads to ch2. |
+| **Drainer** | The drain | Async tokio worker. Receives assembled payloads from ch2 and writes them to the Sink with retry logic and exponential backoff. |
+| **Sink** | Drain pipe | Pure I/O, zero logic. Accepts a fully rendered payload and sends it. Does not buffer, does not transform. |
+| **Foreman** | The plumber | Pipeline orchestrator. Wires up all channels, spawns all workers, and waits for completion. |
+| **Regulator** | Pressure valve | Dynamically adjusts payload sizing based on feedback. Variants: `ThroughputSeeker` (hill-climbing optimizer), `CpuPressure` (PID controller), `Static` (fixed value). |
+| **PressureGauge** | Pressure meter | Background tokio task. Polls the sink cluster's `_nodes/stats` endpoint, feeds readings to the active Regulator. |
+| **FlowKnob** | The valve handle | `Arc<AtomicUsize>` shared between PressureGauge (writes) and Joiners (reads). Controls how large each payload gets before flushing. |
+
+### Channels
+
+| Channel | Carries | From → To |
+|---------|---------|-----------|
+| **ch1** | Raw pages (`Page`) | Pumper → Joiner pool |
+| **ch2** | Assembled payloads (`Payload`) | Joiner pool → Drainer pool |
+| **ch3** | Latency/error readings (`GaugeReading`) | Drainers → PressureGauge |
+
+### Why the thread split?
+
+Joiners run on `std::thread` (not tokio) because casting and payload assembly are CPU-bound. Pumpers and Drainers are async because they do network I/O. This keeps the tokio runtime free for I/O and prevents CPU work from starving network operations.
+
+## A note on the code
+
+The codebase follows a set of comedy conventions. This is intentional.
+
+- **Comments** prefixed with `// --` are humor comments. They're there for humans reading the source.
+- **Variable names** are deliberately expressive — `let my_therapist_says_move_on` instead of `retry_count`, `fn send_it_and_pray()` instead of `fn submit()`.
+- **Error messages** are written as micro-fiction, designed to be informative and entertaining at 3am during an incident.
+- **Module doc comments** open like TV show cold opens — set the scene, create tension, then explain what the module does.
+- **Test names** read like episode titles — `the_one_where_the_config_file_doesnt_exist`, `sink_worker_survives_the_apocalypse`.
+- **Emojis** are used functionally in log output and comments (🚀 info, ⚠️ warn, 💀 error, 🦆 no reason whatsoever).
+
+The comedy is part of the project's identity. If you're reading the source and something makes you laugh, that's working as intended.
 
 ## Supported backends
 
@@ -99,7 +138,28 @@ kravex/
 | Elasticsearch 5–8 | Yes | Yes |
 | OpenSearch 1–3 | Yes | Yes |
 | Meilisearch | — | Yes |
-| File (JSON) | Yes | — |
+| OpenObserve | — | Yes |
+| File (JSON/NDJSON) | Yes | — |
+| InMemory | Yes | Yes |
+
+## Project structure
+
+```
+kravex/
+├── crates/
+│   ├── kvx/          # Core library
+│   │   └── src/
+│   │       ├── backends/       # Source + Sink implementations
+│   │       ├── casts/          # Page-to-Entry transformers
+│   │       ├── manifolds/      # Entry-to-Payload assemblers
+│   │       ├── regulators/     # Adaptive throttle controllers
+│   │       ├── workers/        # Pumper, Joiner, Drainer
+│   │       └── foreman.rs      # Pipeline orchestrator
+│   └── kvx-cli/      # CLI binary wrapping kvx
+├── configs/           # Example TOML configurations
+├── benchmark/         # Benchmark data and attribution
+└── docker-compose.yml # Local ES + OpenSearch + Meilisearch
+```
 
 ## Configuration reference
 
@@ -109,8 +169,8 @@ All configuration lives in a single TOML file.
 
 | Key | Description |
 |-----|-------------|
-| `pumper_to_joiner_capacity` | Internal queue capacity between source reader and sink writer |
-| `sink_parallelism` | Number of concurrent sink workers |
+| `pumper_to_joiner_capacity` | Channel capacity (ch1) between Pumper and Joiner pool |
+| `sink_parallelism` | Number of concurrent Drainer workers |
 
 ### `[source_config]`
 
@@ -152,4 +212,10 @@ POC/MVP — API surface is unstable. Dependency footprint is kept minimal.
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE).
+This project is licensed under the [Business Source License 1.1](LICENSE) (BSL 1.1).
+
+**What you can do**: Use, modify, and distribute Kravex for any purpose — internal tooling, migrations, CI pipelines, whatever you need — **except** offering it as a competing commercial data-migration service.
+
+**Change License**: On **2029-03-15**, the license automatically converts to [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0), making all current code fully open source.
+
+Enterprise features under `/ee/` require a separate commercial license. Contact [daniel@kravex.net](mailto:daniel@kravex.net) for details.

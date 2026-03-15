@@ -8,6 +8,9 @@
 resolver = "3"
 members = ["crates/kvx-cli", "crates/kvx"]
 
+[workspace.package]
+license = "BUSL-1.1"
+
 [workspace.dependencies]
 
 # 😬 because panic is not a personality trait. well, actually...

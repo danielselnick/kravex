@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Kravex, Inc.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file and at www.mariadb.com/bsl11.
 //! 🔌 Backends — where the real I/O happens.
 //!
 //! 🚰 Source backends pour the data, Sink backends slurp it up.
