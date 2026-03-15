@@ -39,7 +39,7 @@ impl Sink for OpenObserveSink {
     /// 📡 POST the fully rendered NDJSON payload to /api/{org}/_bulk.
     /// Pure I/O. No buffering. No existential questions about data formats.
     /// "I came, I POST'd, I returned Ok(())." — Julius Sink
-    async fn send(&mut self, payload: Payload) -> Result<()> {
+    async fn drain(&mut self, payload: Payload) -> Result<()> {
         debug!(
             "📡 Sending {} bytes to OpenObserve /_bulk — the payload departs on its final journey",
             payload.len()
@@ -277,7 +277,7 @@ mod tests {
     }
 
     // ┌──────────────────────────────────────────────────────────────────────┐
-    // │  GROUP B: Bulk POST — send() / submit_bulk_request()                │
+    // │  GROUP B: Bulk POST — drain() / submit_bulk_request()               │
     // │  "You miss 100% of the bulk requests you don't POST." — Wayne HTTP  │
     // └──────────────────────────────────────────────────────────────────────┘
 
@@ -299,12 +299,12 @@ mod tests {
 
         // 🚀 Act — fire the payload into the observability void
         let the_ndjson = Payload::from("{\"index\":{\"_index\":\"test-stream\"}}\n{\"id\":1}\n".to_string());
-        let the_result = the_eager_sink.send(the_ndjson).await;
+        let the_result = the_eager_sink.drain(the_ndjson).await;
 
         // 🎯 Assert — OpenObserve accepted our offering ✅
         assert!(
             the_result.is_ok(),
-            "💀 Bulk request returned 200 but send() still failed. The vibes are deeply off."
+            "💀 Bulk request returned 200 but drain() still failed. The vibes are deeply off."
         );
 
         Ok(())
@@ -331,10 +331,10 @@ mod tests {
 
         // 🚀 Act — submit docs that OpenObserve will roast
         let the_rejected_payload = Payload::from("{\"index\":{}}\n{\"bad\":\"doc\"}\n".to_string());
-        let the_harsh_verdict = the_judged_sink.send(the_rejected_payload).await;
+        let the_harsh_verdict = the_judged_sink.drain(the_rejected_payload).await;
 
         // 🎯 Assert — should fail, error chain should contain status info
-        assert!(the_harsh_verdict.is_err(), "💀 400 response should cause send() to fail");
+        assert!(the_harsh_verdict.is_err(), "💀 400 response should cause drain() to fail");
         let the_full_error_chain = format!("{:?}", the_harsh_verdict.unwrap_err());
         assert!(
             the_full_error_chain.contains("400"),
@@ -365,7 +365,7 @@ mod tests {
         let mut the_unlucky_sink = OpenObserveSink::new(config).await?;
 
         // 🚀 Act
-        let the_500_result = the_unlucky_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
+        let the_500_result = the_unlucky_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
 
         // 🎯 Assert — 500 is not 200. Math checks out.
         assert!(
@@ -395,7 +395,7 @@ mod tests {
         let mut the_proper_sink = OpenObserveSink::new(config).await?;
 
         // 🚀 Act
-        the_proper_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_proper_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock's header matcher confirms Content-Type ✅
 
@@ -431,7 +431,7 @@ mod tests {
         let mut the_basic_sink = OpenObserveSink::new(config).await?;
 
         // 🚀 Act
-        the_basic_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_basic_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock confirms Basic auth was sent ✅
 
@@ -458,7 +458,7 @@ mod tests {
         let mut the_naked_sink = OpenObserveSink::new(config).await?;
 
         // 🚀 Act
-        the_naked_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_naked_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — request was received, no auth configured = no auth sent ✅
 
@@ -487,7 +487,7 @@ mod tests {
         let mut the_faithful_sink = OpenObserveSink::new(config).await?;
 
         // 🚀 Act
-        the_faithful_sink.send(Payload::from(the_sacred_payload.to_string())).await?;
+        the_faithful_sink.drain(Payload::from(the_sacred_payload.to_string())).await?;
 
         // 🎯 Assert — wiremock's body_string matcher confirms byte-perfect delivery ✅
 
@@ -546,7 +546,7 @@ mod tests {
         let mut the_slash_aware_sink = OpenObserveSink::new(config).await?;
 
         // 🚀 Act
-        the_slash_aware_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_slash_aware_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock's path matcher + expect(1) confirms correct URL ✅
 
@@ -570,7 +570,7 @@ mod tests {
         let mut the_yolo_sink = OpenObserveSink::new(config).await?;
 
         // 🚀 Act — send the void
-        let the_existential_result = the_yolo_sink.send(Payload::from(String::new())).await;
+        let the_existential_result = the_yolo_sink.drain(Payload::from(String::new())).await;
 
         // 🎯 Assert — the sink sent nothing, OpenObserve accepted nothing. Balance.
         assert!(
@@ -609,7 +609,7 @@ mod tests {
         let mut the_corporate_sink = OpenObserveSink::new(config).await?;
 
         // 🚀 Act
-        the_corporate_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_corporate_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock confirms the custom org path was used ✅
 

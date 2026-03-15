@@ -48,7 +48,7 @@ impl Sink for InMemorySink {
     ///
     /// 🎯 I/O-only: the Drainer already cast and binary-collected the payload.
     /// We just stash it for test assertions. No parsing. No judgment. Just storage.
-    async fn send(&mut self, payload: Payload) -> Result<()> {
+    async fn drain(&mut self, payload: Payload) -> Result<()> {
         // 🔒 The Mutex is load-bearing. Do not remove. I know it looks optional. It isn't.
         self.received.lock().await.push(payload.0);
         Ok(())

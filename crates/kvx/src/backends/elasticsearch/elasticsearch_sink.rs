@@ -38,7 +38,7 @@ impl Sink for ElasticsearchSink {
     /// The Drainer upstream already cast each doc and binary-collected them into
     /// a single NDJSON payload string. We just fire it into the elastic void.
     /// "In a world where sinks had too many responsibilities... one refactor dared to simplify."
-    async fn send(&mut self, payload: Payload) -> Result<()> {
+    async fn drain(&mut self, payload: Payload) -> Result<()> {
         debug!(
             "📡 Sending {} bytes to /_bulk — the payload has left the building, Elvis-style",
             payload.len()
@@ -511,7 +511,7 @@ mod tests {
     }
 
     // ┌──────────────────────────────────────────────────────────────────────┐
-    // │  GROUP C: Bulk POST — send() / submit_bulk_request()                │
+    // │  GROUP C: Bulk POST — drain() / submit_bulk_request()               │
     // │  "You miss 100% of the bulk requests you don't send." — Wayne HTTP  │
     // └──────────────────────────────────────────────────────────────────────┘
 
@@ -533,12 +533,12 @@ mod tests {
 
         // 🚀 Act — fire the payload into the elastic void
         let the_ndjson = Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string());
-        let the_result = the_eager_sink.send(the_ndjson).await;
+        let the_result = the_eager_sink.drain(the_ndjson).await;
 
         // 🎯 Assert — the void accepted our offering ✅
         assert!(
             the_result.is_ok(),
-            "💀 Bulk request returned 200 but send() still failed. The vibes are off."
+            "💀 Bulk request returned 200 but drain() still failed. The vibes are off."
         );
 
         Ok(())
@@ -565,12 +565,12 @@ mod tests {
 
         // 🚀 Act — submit docs that ES will roast
         let the_rejected_payload = Payload::from("{\"index\":{}}\n{\"bad\":\"doc\"}\n".to_string());
-        let the_harsh_verdict = the_judged_sink.send(the_rejected_payload).await;
+        let the_harsh_verdict = the_judged_sink.drain(the_rejected_payload).await;
 
         // 🎯 Assert — should fail, error chain should contain status info
         // ⚠️ anyhow's .to_string() only shows the outermost .context() message.
         // The "400 Bad Request" lives deeper in the chain. Use {:?} to see the full story.
-        assert!(the_harsh_verdict.is_err(), "💀 400 response should cause send() to fail");
+        assert!(the_harsh_verdict.is_err(), "💀 400 response should cause drain() to fail");
         let the_full_error_chain = format!("{:?}", the_harsh_verdict.unwrap_err());
         assert!(
             the_full_error_chain.contains("400"),
@@ -601,7 +601,7 @@ mod tests {
         let mut the_unlucky_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        let the_500_result = the_unlucky_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
+        let the_500_result = the_unlucky_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
 
         // 🎯 Assert — 500 is not 200. Math checks out.
         assert!(
@@ -631,7 +631,7 @@ mod tests {
         let mut the_proper_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_proper_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_proper_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock's header matcher confirms Content-Type ✅
 
@@ -659,7 +659,7 @@ mod tests {
         let mut the_vip_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_vip_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_vip_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock confirms ApiKey header was sent ✅
 
@@ -695,7 +695,7 @@ mod tests {
         let mut the_basic_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_basic_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_basic_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock confirms Basic auth was sent ✅
 
@@ -722,7 +722,7 @@ mod tests {
         let mut the_naked_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_naked_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_naked_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — request was received. No auth configured = no auth sent. ✅
 
@@ -753,7 +753,7 @@ mod tests {
         let mut the_decisive_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_decisive_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_decisive_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock confirms ApiKey won the auth battle ✅
 
@@ -782,7 +782,7 @@ mod tests {
         let mut the_faithful_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_faithful_sink.send(Payload::from(the_sacred_payload.to_string())).await?;
+        the_faithful_sink.drain(Payload::from(the_sacred_payload.to_string())).await?;
 
         // 🎯 Assert — wiremock's body_string matcher confirms byte-perfect delivery ✅
 
@@ -841,7 +841,7 @@ mod tests {
         let mut the_slash_aware_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_slash_aware_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_slash_aware_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock's path("/_bulk") + expect(1) confirms correct URL ✅
 
@@ -865,7 +865,7 @@ mod tests {
         let mut the_yolo_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — send absolutely nothing
-        let the_existential_result = the_yolo_sink.send(Payload::from(String::new())).await;
+        let the_existential_result = the_yolo_sink.drain(Payload::from(String::new())).await;
 
         // 🎯 Assert — the sink sent it, ES accepted it. Not our circus, not our monkeys.
         assert!(

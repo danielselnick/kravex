@@ -42,7 +42,7 @@ use tracing::{debug, warn};
 ///
 /// 📜 Lifecycle:
 /// 1. **Recv**: assembled payload String from ch2 (async)
-/// 2. **Send**: payload → Sink::send (HTTP POST, file write, memory push)
+/// 2. **Drain**: payload → Sink::drain (HTTP POST, file write, memory push)
 ///    - On failure: exponential backoff → retry up to max_retries
 ///    - On exhaustion: propagate error (pipeline dies with dignity) 💀
 /// 3. **Repeat** until ch2 closes (all joiners done)
@@ -81,9 +81,9 @@ impl Drainer {
     }
 }
 
-/// 🔄 Send a payload to the sink with exponential backoff retries.
+/// 🔄 Drain a payload to the sink with exponential backoff retries.
 ///
-/// Clones the payload before each attempt because sink.send() consumes it —
+/// Clones the payload before each attempt because sink.drain() consumes it —
 /// like handing someone your only copy of a document and hoping they don't
 /// shred it. We make photocopies. We're not animals. 📋
 ///
@@ -100,10 +100,10 @@ async fn drain_with_retry(
     let mut the_last_error = None;
 
     for my_therapist_says_move_on in 0..the_total_attempts {
-        // 📋 Clone the payload for this attempt — send() consumes it like a black hole eats light
+        // 📋 Clone the payload for this attempt — drain() consumes it like a black hole eats light
         let the_payload_clone = the_payload.clone();
 
-        match sink.send(the_payload_clone).await {
+        match sink.drain(the_payload_clone).await {
             Ok(()) => return Ok(()),
             Err(the_rejection) => {
                 // 💀 The sink said no. Like my college applications all over again.
@@ -226,7 +226,7 @@ mod tests {
 
     #[async_trait]
     impl Sink for FlakyTestSink {
-        async fn send(&mut self, payload: Payload) -> Result<()> {
+        async fn drain(&mut self, payload: Payload) -> Result<()> {
             // 💀 Fail if we still have failures to give
             let the_remaining = self.the_failures_remaining.load(Ordering::SeqCst);
             if the_remaining > 0 {
@@ -295,7 +295,7 @@ mod tests {
 
     #[async_trait]
     impl Sink for AlwaysFailSink {
-        async fn send(&mut self, _payload: Payload) -> Result<()> {
+        async fn drain(&mut self, _payload: Payload) -> Result<()> {
             anyhow::bail!("💀 AlwaysFailSink: I reject all payloads on principle. Nothing personal.")
         }
 

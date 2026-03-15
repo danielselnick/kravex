@@ -20,7 +20,7 @@
 //! - **ch2**: async_channel::bounded — assembled payloads from joiners, MPMC
 //! - **ch3**: async_channel::bounded — GaugeReading from drainers to FlowMaster (latency feedback)
 //! - **Joiners**: CPU-bound work (casting, manifold join) on dedicated OS threads
-//! - **Drainers**: I/O-bound work (sink.send) on tokio async runtime
+//! - **Drainers**: I/O-bound work (sink.drain) on tokio async runtime
 //! - **FlowMaster**: receives latency readings, PID-regulates, adjusts FlowKnob
 //!
 //! ⚠️ DO NOT MAKE THIS PUB EVER

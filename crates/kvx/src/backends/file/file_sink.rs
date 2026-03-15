@@ -65,7 +65,7 @@ impl Sink for FileSink {
     /// The Drainer already cast and binary-collected. We just dump bytes to disk.
     /// No parsing. No iterating over hits. No drama. Just I/O.
     /// "What do you do?" "I write bytes." "That's it?" "That's everything." 🦆
-    async fn send(&mut self, payload: Payload) -> Result<()> {
+    async fn drain(&mut self, payload: Payload) -> Result<()> {
         trace!(
             "📬 payload of {} bytes walked into the file sink — writing it all down",
             payload.len()

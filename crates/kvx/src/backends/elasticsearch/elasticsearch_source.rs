@@ -16,7 +16,7 @@ use super::config::ElasticsearchSourceConfig;
 #[derive(Debug)]
 pub struct ElasticsearchSource {
     #[allow(dead_code)]
-    // -- 🔧 config kept for when next_batch finally stops ghosting us and actually scrolls.
+    // -- 🔧 config kept for when pump() finally stops ghosting us and actually scrolls.
     // -- Marked dead_code because rustc has opinions and no chill.
     config: ElasticsearchSourceConfig,
 }
@@ -29,7 +29,7 @@ impl Source for ElasticsearchSource {
     /// It's aspirational. It's a placeholder with excellent posture.
     /// The borrow checker is fully satisfied. The product manager is not.
     /// "He who stubs with None, deploys with hope." — Ancient scroll API proverb 📜
-    async fn next_page(&mut self) -> Result<Option<Page>> {
+    async fn pump(&mut self) -> Result<Option<Page>> {
         // TODO: Implement search_after — the glow-up we deserve. 🚀 🦆
         Ok(None)
     }

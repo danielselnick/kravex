@@ -10,7 +10,7 @@ use crate::backends::{elasticsearch, file, in_mem};
 /// Guaranteed to dispense only the finest organic, free-range, artisanal bytes.
 ///
 /// # Contract 📜
-/// - `next_page` returns `Option<String>` — one raw feed of data, uninterpreted.
+/// - `pump` returns `Option<String>` — one raw feed of data, uninterpreted.
 /// - `None` = EOF. The well is dry. The golden retriever goes home. 🐕
 /// - The source does NOT parse, split, or understand its content. It's a faucet, not a chef.
 /// - The Manifold downstream handles format understanding via the Caster.
@@ -28,7 +28,7 @@ pub trait Source: std::fmt::Debug {
     /// Returns `Ok(Some(feed))` while data flows — one feed per call, content uninterpreted.
     /// Returns `Ok(None)` when the tap runs dry. EOF. Fin. The end. 🏁
     /// Returns `Err(...)` when something has gone sideways, sidelong, or fully upside-down.
-    async fn next_page(&mut self) -> Result<Option<Page>>;
+    async fn pump(&mut self) -> Result<Option<Page>>;
 }
 
 /// 🎭 The many faces of a Source — a polymorphic casting call for data origins.
@@ -48,11 +48,11 @@ pub enum SourceBackend {
 
 #[async_trait]
 impl Source for SourceBackend {
-    async fn next_page(&mut self) -> Result<Option<Page>> {
+    async fn pump(&mut self) -> Result<Option<Page>> {
         match self {
-            SourceBackend::InMemory(i) => i.next_page().await,
-            SourceBackend::File(f) => f.next_page().await,
-            SourceBackend::Elasticsearch(es) => es.next_page().await,
+            SourceBackend::InMemory(i) => i.pump().await,
+            SourceBackend::File(f) => f.pump().await,
+            SourceBackend::Elasticsearch(es) => es.pump().await,
         }
     }
 }

@@ -17,11 +17,11 @@ Core library for kravex — the data migration engine. 3-stage pipeline: Pumper 
 
 ## Pipeline Architecture (current — 3-stage: Pumper → Joiner → Drainer)
 ```
-Source.next_page() → Option<String> (raw page)
+Source.pump() → Option<String> (raw page)
   → ch1 (async_channel, bounded, MPMC)
   → Joiner(s) on std::thread (recv_blocking → buffer → manifold.join(buffer, caster) → send_blocking)
   → ch2 (async_channel, bounded, MPMC)
-  → Drainer(s) on tokio (recv → sink.send)
+  → Drainer(s) on tokio (recv → sink.drain)
   → Sink (HTTP POST, file write, memory push)
 ```
 

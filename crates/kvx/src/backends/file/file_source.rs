@@ -41,7 +41,7 @@ pub struct FileSource {
     // 🧱 reusable read buffer — pre-allocated to CHUNK_SIZE, never reallocated.
     // Each loop iteration fills this from the OS and appends to working_buf.
     read_buf: Vec<u8>,
-    // 🧩 leftover bytes from the previous next_page() call — the tail end of a chunk
+    // 🧩 leftover bytes from the previous pump() call — the tail end of a chunk
     // that didn't end on a newline. Gets prepended to working_buf on the next call.
     // KNOWLEDGE GRAPH: this is the key to correctness across page boundaries.
     // Without it, lines that span two chunks would get split into two incomplete docs.
@@ -124,7 +124,7 @@ impl Source for FileSource {
     /// safe for any valid UTF-8 input. The final `String::from_utf8` validates the output.
     ///
     /// "He who reads the entire file into one String, OOMs in production." — Ancient proverb 📜
-    async fn next_page(&mut self) -> Result<Option<Page>> {
+    async fn pump(&mut self) -> Result<Option<Page>> {
         let max_docs = self.source_config.common_config.max_batch_size_docs;
         let max_bytes = self.source_config.common_config.max_batch_size_bytes;
 
@@ -287,14 +287,14 @@ mod tests {
     }
 
     // -- 🧪 helper: drains all pages from a source and returns them as a Vec
-    // -- because manually calling next_page() in a loop is beneath us (barely)
+    // -- because manually calling pump() in a loop is beneath us (barely)
     /// 🔄 Drains every page from the source until EOF.
     /// Returns all non-None pages in order. Like squeezing a tube of toothpaste
     /// until nothing comes out. 🦷
     async fn drain_all_pages(source: &mut FileSource) -> Result<Vec<Page>> {
         // -- 🦆 this function exists because copy-pasting while loops is a code smell
         let mut pages = Vec::new();
-        while let Some(page) = source.next_page().await? {
+        while let Some(page) = source.pump().await? {
             pages.push(page);
         }
         Ok(pages)
@@ -306,14 +306,14 @@ mod tests {
         let (mut source, _tmp) =
             summon_file_source("line1\nline2\nline3\n", 10_000, 10 * 1024 * 1024).await;
 
-        let page1 = source.next_page().await?;
+        let page1 = source.pump().await?;
         assert_eq!(
             page1,
             Some(Page("line1\nline2\nline3".to_string())),
             "💀 Expected all three lines in one feed, got something else. The vibes are off."
         );
 
-        let page2 = source.next_page().await?;
+        let page2 = source.pump().await?;
         assert_eq!(
             page2, None,
             "💀 Expected None (EOF), but the source kept talking. It doesn't know when to stop."
@@ -378,7 +378,7 @@ mod tests {
         // -- 🧪 empty file → immediate None. Nothing to see here. Like my bank account.
         let (mut source, _tmp) = summon_file_source("", 10_000, 10 * 1024 * 1024).await;
 
-        let page = source.next_page().await?;
+        let page = source.pump().await?;
         assert_eq!(
             page, None,
             "💀 Empty file should return None immediately. The void stares back, but silently."
@@ -393,14 +393,14 @@ mod tests {
         let (mut source, _tmp) =
             summon_file_source("alpha\nbeta\ngamma", 10_000, 10 * 1024 * 1024).await;
 
-        let page = source.next_page().await?;
+        let page = source.pump().await?;
         assert_eq!(
             page,
             Some(Page("alpha\nbeta\ngamma".to_string())),
             "💀 Missing trailing newline should not eat the last doc. gamma deserves better."
         );
 
-        let eof = source.next_page().await?;
+        let eof = source.pump().await?;
         assert_eq!(eof, None, "💀 Expected EOF after all docs consumed.");
         Ok(())
     }
@@ -412,7 +412,7 @@ mod tests {
         let (mut source, _tmp) =
             summon_file_source("hello\r\nworld\r\n", 10_000, 10 * 1024 * 1024).await;
 
-        let page = source.next_page().await?;
+        let page = source.pump().await?;
         assert_eq!(
             page,
             Some(Page("hello\nworld".to_string())),
@@ -428,7 +428,7 @@ mod tests {
         let (mut source, _tmp) =
             summon_file_source("a\n\n\nb\n\nc\n", 10_000, 10 * 1024 * 1024).await;
 
-        let page = source.next_page().await?;
+        let page = source.pump().await?;
         assert_eq!(
             page,
             Some(Page("a\nb\nc".to_string())),
