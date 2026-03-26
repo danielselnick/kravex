@@ -11,6 +11,16 @@ Kravex is an open-source migration engine for Elasticsearch (5–8) and OpenSear
 - Smart cutovers — retry, validation, recovery, pause, and resume
 - Zero tuning required — no knobs, no guesswork
 
+## Demo
+
+Run the full end-to-end pipeline (File → Elasticsearch → OpenSearch) with a single command:
+
+```bash
+./demo/demo.sh
+```
+
+Requires Docker Desktop and [uv](https://docs.astral.sh/uv/). Spins up isolated ES + OpenSearch containers, ingests the geonames dataset (11.4M docs), migrates it across clusters, and reports timing metrics. See [demo/README.md](demo/README.md) for details.
+
 ## Quickstart
 
 ### Prerequisites
@@ -164,8 +174,9 @@ kravex/
 │   └── kvx-cli/      # CLI binary wrapping kvx
 ├── ee/                # Enterprise features (separate license)
 ├── configs/           # Example TOML configurations
-├── benchmark/         # Benchmark data and attribution
-├── demo/              # Sales demo — ES 7.17 → OpenSearch 2.19 migration
+├── datasets/          # Benchmark & demo data (gitignored — downloaded at runtime)
+├── benchmark/         # Benchmark scripts and attribution
+├── demo/              # End-to-end demo harness (File → ES → OpenSearch)
 └── docker-compose.yml # Local ES + OpenSearch (profile: demo | bench)
 ```
 
@@ -291,10 +302,6 @@ PID controller targeting CPU pressure on the sink cluster.
 ### Benchmarks
 
 Sample JSON corpora (NOAA weather, Geonames, PubMed Central) are used for benchmarking. See [benchmark/DATA_ATTRIBUTION.md](benchmark/DATA_ATTRIBUTION.md) for licensing and attribution.
-
-## Status
-
-POC/MVP — API surface is unstable. Dependency footprint is kept minimal.
 
 ## License
 

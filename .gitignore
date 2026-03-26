@@ -24,6 +24,7 @@ target
 .claude/worktrees/
 input.json
 
-benchmark/data/
+datasets/
 benchmark/results/
 __pycache__
+demo/.venv/

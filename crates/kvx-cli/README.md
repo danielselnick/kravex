@@ -20,5 +20,4 @@ CLI interface for kravex — run migrations from the command line.
 
 # Notes
 
-- POC/MVP stage
 - VS Code launch configs (`F5` / `Ctrl+F5`) target this binary via CodeLLDB

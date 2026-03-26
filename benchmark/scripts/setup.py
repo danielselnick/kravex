@@ -48,7 +48,7 @@ DATASETS = {
 # -- 📢 Doc count tolerance: 1% deviation allowed because sometimes downloads are vibes-based
 DOC_COUNT_TOLERANCE_PCT = 1
 
-DATA_DIR = BENCHMARK_DIR / "data"
+DATA_DIR = REPO_ROOT / "datasets"
 RESULTS_DIR = BENCHMARK_DIR / "results"
 
 

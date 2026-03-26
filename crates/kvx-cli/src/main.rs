@@ -55,7 +55,6 @@ async fn main() -> Result<()> {
     /* ? */ ?;
 
     // -- 🚀 SEND IT. No take-backs. This is not a drill.
-    // -- (okay it might be a drill, we're still in POC/MVP)
     let result = kvx::run(app_config).await;
 
     // -- 💀 Error handling: the part where we find out what went wrong

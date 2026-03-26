@@ -43,7 +43,7 @@
 # 📂 Source — File (active)
 # ============================================================
 [source_config.File]
-file_name = "benchmark/data/geonames.json"
+file_name = "datasets/geonames.json"
 
 [source_config]
 

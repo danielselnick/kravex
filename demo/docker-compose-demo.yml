@@ -1,0 +1,61 @@
+# ============================================================================
+#  Kravex Demo — Docker Compose
+# ============================================================================
+#  Isolated demo services on non-standard ports (19200, 19201) to avoid
+#  collisions with the dev docker-compose on 9200/9201.
+#
+#  Usage:  docker compose -f demo/docker-compose-demo.yml up -d
+#  Nuke:   docker compose -f demo/docker-compose-demo.yml down -v
+# ============================================================================
+
+services:
+  es-demo:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    container_name: kravex-demo-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+    ports:
+      - "19200:9200"
+    volumes:
+      - es-demo-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - kravex-demo
+
+  os-demo:
+    image: opensearchproject/opensearch:2.13.0
+    container_name: kravex-demo-os
+    environment:
+      - cluster.name=opensearch-cluster
+      - node.name=opensearch-node1
+      - discovery.seed_hosts=os-demo
+      - cluster.initial_master_nodes=opensearch-node1
+      - bootstrap.memory_lock=true
+      - plugins.security.disabled=true
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=DemoPassword123!
+      - OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g
+    ports:
+      - "19201:9200"
+    volumes:
+      - os-demo-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - kravex-demo
+
+volumes:
+  es-demo-data:
+  os-demo-data:
+
+networks:
+  kravex-demo:
+    driver: bridge

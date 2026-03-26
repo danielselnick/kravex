@@ -15,7 +15,7 @@ sink_parallelism = 32
 # 📂 Source — File
 # ============================================================
 [source_config.File]
-file_name = "benchmark/data/geonames.json"
+file_name = "datasets/geonames.json"
 
 [source_config.File.common_config]
 max_batch_size_bytes =8000000    # 32 MiB

@@ -13,7 +13,7 @@ The GIL sends its regards.
 
 Usage:
   python benchmark/scripts/python_migrate.py \\
-    --input benchmark/data/geonames.json \\
+    --input datasets/geonames.json \\
     --url http://localhost:9200 \\
     --index benchmark_geonames \\
     --batch-mb 10 \\

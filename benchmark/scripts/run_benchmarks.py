@@ -54,7 +54,7 @@ from shared.kvx_utils import (  # noqa: E402
 # ============================================================================
 
 CONFIGS_DIR = BENCHMARK_DIR / "configs" / "local"
-DATA_DIR = BENCHMARK_DIR / "data"
+DATA_DIR = REPO_ROOT / "datasets"
 RESULTS_DIR = BENCHMARK_DIR / "results"
 ESRALLY_TRACKS_DIR = BENCHMARK_DIR / "esrally_tracks"
 
