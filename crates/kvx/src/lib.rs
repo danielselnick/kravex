@@ -3,14 +3,14 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file and at www.mariadb.com/bsl11.
 //! 🚀 kvx — the core library crate, the beating heart, the engine room
-//! where dreams of zero-config search migration become mildly-configured reality.
+//! where dreams of zero-config search migration become precisely-configured reality.
 //!
 //! 📦 This crate contains the supervisor, the workers, and all the existential
-//! dread that comes with building a data migration tool for fun. 🦆
+//! dread that comes with building a data migration tool that doesn't suck. 🦆
 //!
-//! ⚠️ "The singularity will happen before this crate reaches 1.0"
+//! ⚠️ "The singularity will happen, and it'll still use TOML"
 
-// -- 🗑️ TODO: clean up the dedz (dead code, not the grateful kind)
+// -- 🗑️ allow(dead_code) — keeping the lights on for modules under construction
 #![allow(dead_code, unused_variables, unused_imports)]
 pub mod config;
 pub mod backends;
@@ -127,7 +127,7 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
         .await?;
 
     info!(
-        "🎉 MIGRATION COMPLETE! Took: {:#?} — not bad for a Rust crate that was \"almost done\" six sprints ago 🦆",
+        "🎉 MIGRATION COMPLETE! Took: {:#?} — not bad for a Rust crate with more comedy comments than error paths 🦆",
         start_time.elapsed()?
     );
     Ok(())
@@ -622,6 +622,7 @@ mod tests {
             },
             source_config: SourceConfig::Elasticsearch(ElasticsearchSourceConfig {
                 url: "http://source-cluster-that-doesnt-exist:9200".to_string(),
+                index: "test-index".to_string(),
                 username: None,
                 password: None,
                 api_key: None,

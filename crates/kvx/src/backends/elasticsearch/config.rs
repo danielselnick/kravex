@@ -39,6 +39,10 @@ pub struct ElasticsearchSourceConfig {
     /// Point is: hierarchy. This field respects hierarchy.
     #[serde(default)]
     pub api_key: Option<String>,
+    /// 📦 The source index to read from. Required — a source must know where to look.
+    /// Unlike the sink's optional index (per-doc routing), you can't read from "wherever, man."
+    /// That's not how databases work. That's not how any of this works.
+    pub index: String,
     /// 📦 Common source settings — the bureaucratic paperwork of data migration.
     /// Max batch size, timeouts, etc. Not glamorous. Essential. Like the appendix.
     #[serde(default)]

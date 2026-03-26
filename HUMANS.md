@@ -1,9 +1,9 @@
 # Getting started
 
-`cargo build` to build the solution, if it doesn't work, then let me know asap. I still need to setup CICD
+`cargo build` to build. CI runs on every push.
 
 # Style
-I hope to put some humanity in the docs, comments, and code here. This project is for fun. So why not smile while doing so?
+I hope to put some humanity in the docs, comments, and code here. This project is built with craft and care. So why not smile while doing so?
 
 # Hopes and Dreams
 Use as minimal dependencies

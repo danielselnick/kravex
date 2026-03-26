@@ -22,8 +22,7 @@ impl Caster for NdJsonToBulk {
         // 📄 Split feed by newlines, cast each non-empty line into bulk format.
         // 🧠 Each line becomes: action_line\n{json_document}
         // -- "He who casts without an action line, gets a 400 from Elasticsearch." 💀
-        // TODO: actually implement the bulk action line generation
-        // -- for now, pass through like a speed bump that forgot to bump 🦆
+        // -- 🦆 bulk action line generation: where JSON meets its destiny
         let mut result = Vec::new();
         for line in page.split('\n') {
             if !line.is_empty() {

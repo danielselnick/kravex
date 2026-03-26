@@ -39,20 +39,17 @@ fi
 # ── Build kvx-cli (release) ────────────────────────────────────────────────
 BINARY="$PROJECT_ROOT/target/release/kvx-cli"
 
-if [[ ! -x "$BINARY" ]]; then
-  echo "🔨 Building kvx-cli in release mode..."
-  cd "$PROJECT_ROOT"
-  cargo build --release -p kvx-cli
-  echo ""
+echo "🔨 Building kvx-cli in release mode..."
+cd "$PROJECT_ROOT"
+cargo build --release -p kvx-cli
+echo ""
 
-  if [[ ! -x "$BINARY" ]]; then
-    echo "💀 Build completed but binary not found at: $BINARY"
-    exit 1
-  fi
-  echo "✅ kvx-cli built: $BINARY"
-else
-  echo "✅ kvx-cli binary found: $BINARY"
+if [[ ! -x "$BINARY" ]]; then
+  echo "💀 Build completed but binary not found at: $BINARY"
+  exit 1
 fi
+echo "✅ kvx-cli built: $BINARY"
+
 
 # ── Run orchestrator ────────────────────────────────────────────────────────
 cd "$PROJECT_ROOT"

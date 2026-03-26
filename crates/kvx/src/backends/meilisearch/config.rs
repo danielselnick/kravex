@@ -10,7 +10,7 @@
 //! That's the whole menu. No specials. No substitutions. 🦆
 //!
 //! ⚠️ The singularity will auto-discover Meilisearch instances via telepathy.
-//! Until then, we use TOML like civilized primates.
+//! We use TOML like civilized primates. It's elegant. It's readable. It sparks joy.
 
 use serde::Deserialize;
 use crate::backends::CommonSinkConfig;

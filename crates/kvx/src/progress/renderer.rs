@@ -18,9 +18,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use anyhow::Result;
 use comfy_table::{Cell, CellAlignment, ContentArrangement, Table, presets::NOTHING};
 use indicatif::{ProgressBar, ProgressStyle};
 use tokio::task::JoinHandle;
+use tracing::warn;
+
+use super::cluster_stats::{ClusterSnapshot, ClusterStatsPoller};
 
 // -- 📏 one mebibyte — not a megabyte, pedants. there's a difference and I will die on this hill.
 const MIB: u64 = 1024 * 1024;
@@ -96,6 +100,7 @@ impl std::fmt::Debug for DrainMetrics {
 }
 
 pub struct DrainMetrics {
+    // -- 🦆 quack quack — this struct is public because drainers and the foreman need it
     /// 📦 total bytes drained — payload sizes accumulate like a 401k, except this one actually grows
     pub bytes_drained: AtomicU64,
     /// ✅ total drain requests completed — one per successful drain_with_retry
@@ -155,7 +160,7 @@ struct Rates {
 ///
 /// # Ancient Proverb
 /// "He who runs a migration without a progress bar, migrates alone and in darkness."
-struct ProgressReporter {
+pub(crate) struct ProgressReporter {
     /// 🏷️ pipeline name — what are we even migrating? displayed in the UI
     pipeline_name: String,
     /// 📡 shared atomic counters from drainers — the source of truth
@@ -169,6 +174,15 @@ struct ProgressReporter {
     start_time: Instant,
     /// 📏 total expected bytes — 0 if unknown (classic elasticsearch)
     total_expected_bytes: u64,
+    // -- 📡 cluster stats pollers — None for non-ES backends (file, in-memory, etc.)
+    source_poller: Option<ClusterStatsPoller>,
+    sink_poller: Option<ClusterStatsPoller>,
+    // -- 🧵 in-flight fetch handles — tokio::spawn returns immediately, we check back later
+    source_fetch_handle: Option<JoinHandle<Result<ClusterSnapshot>>>,
+    sink_fetch_handle: Option<JoinHandle<Result<ClusterSnapshot>>>,
+    // -- 📸 last successful snapshots — displayed until a newer one arrives
+    source_last_snapshot: Option<ClusterSnapshot>,
+    sink_last_snapshot: Option<ClusterSnapshot>,
 }
 
 impl ProgressReporter {
@@ -176,7 +190,13 @@ impl ProgressReporter {
     ///
     /// # No cap
     /// This function slaps. fr fr. The progress bar will look sick in your terminal.
-    fn new(pipeline_name: String, drain_metrics: Arc<DrainMetrics>, total_expected_bytes: u64) -> Self {
+    pub(crate) fn new(
+        pipeline_name: String,
+        drain_metrics: Arc<DrainMetrics>,
+        total_expected_bytes: u64,
+        source_poller: Option<ClusterStatsPoller>,
+        sink_poller: Option<ClusterStatsPoller>,
+    ) -> Self {
         // -- 🎨 build the progress bar — cyan because it's classy, blue because it's calm
         let progress_bar = if total_expected_bytes > 0 {
             ProgressBar::new(total_expected_bytes)
@@ -204,13 +224,26 @@ impl ProgressReporter {
             rate_samples,
             start_time,
             total_expected_bytes,
+            source_poller,
+            sink_poller,
+            source_fetch_handle: None,
+            sink_fetch_handle: None,
+            source_last_snapshot: None,
+            sink_last_snapshot: None,
         }
     }
 
-    /// 🔄 Tick the reporter: snapshot atomics, calculate rates, render the display.
+    /// 🔄 Tick the reporter: harvest cluster stats, snapshot atomics, calculate rates, render.
     /// Called every 500ms by the spawned reporter task.
     /// Like a heartbeat monitor, but for data. Beep. Beep. Beep. 💓
-    fn tick(&mut self) {
+    pub(crate) async fn tick(&mut self) {
+        // -- 📡 Phase 1: Harvest completed cluster stats fetches (non-blocking)
+        self.harvest_cluster_snapshots().await;
+
+        // -- 🚀 Phase 2: Kick off new fetches if none are in-flight
+        self.kick_off_cluster_fetches();
+
+        // -- 📊 Phase 3: Snapshot drain metrics atomics
         let the_bytes_drained = self.drain_metrics.bytes_drained.load(Ordering::Relaxed);
         let the_requests_completed = self.drain_metrics.requests_completed.load(Ordering::Relaxed);
         let the_latency_sum_ms = self.drain_metrics.latency_sum_ms.load(Ordering::Relaxed);
@@ -241,12 +274,55 @@ impl ProgressReporter {
         }
     }
 
+    /// 📡 Check in-flight cluster stat fetches. If done, harvest the result.
+    /// On success → update snapshot. On error → log warning, keep previous snapshot.
+    /// Like checking if your pizza delivery tracker has changed status. 🍕
+    async fn harvest_cluster_snapshots(&mut self) {
+        // -- 📡 source cluster — is_finished() check makes the .await return instantly
+        if self.source_fetch_handle.as_ref().is_some_and(|h| h.is_finished()) {
+            let the_handle = self.source_fetch_handle.take().unwrap();
+            match the_handle.await {
+                Ok(Ok(snapshot)) => self.source_last_snapshot = Some(snapshot),
+                Ok(Err(e)) => warn!("⚠️ Source cluster stats fetch failed — keeping last known values. Error: {}", e),
+                Err(e) => warn!("⚠️ Source cluster stats task panicked — like socks in a dryer 🧦 Error: {}", e),
+            }
+        }
+
+        // -- 📡 sink cluster — same pattern, different existential dread
+        if self.sink_fetch_handle.as_ref().is_some_and(|h| h.is_finished()) {
+            let the_handle = self.sink_fetch_handle.take().unwrap();
+            match the_handle.await {
+                Ok(Ok(snapshot)) => self.sink_last_snapshot = Some(snapshot),
+                Ok(Err(e)) => warn!("⚠️ Sink cluster stats fetch failed — keeping last known values. Error: {}", e),
+                Err(e) => warn!("⚠️ Sink cluster stats task panicked — another victim of the garbage collector 🗑️ Error: {}", e),
+            }
+        }
+    }
+
+    /// 🚀 Kick off new cluster stats fetches if no fetch is currently in-flight.
+    /// Non-blocking — tokio::spawn returns immediately. We'll check back next tick. 🔄
+    fn kick_off_cluster_fetches(&mut self) {
+        // -- 📡 source: only fetch if we have a poller and no fetch is in-flight
+        if self.source_fetch_handle.is_none() {
+            if let Some(poller) = &self.source_poller {
+                self.source_fetch_handle = Some(poller.fetch());
+            }
+        }
+
+        // -- 📡 sink: same deal — poller exists, no in-flight fetch → go
+        if self.sink_fetch_handle.is_none() {
+            if let Some(poller) = &self.sink_poller {
+                self.sink_fetch_handle = Some(poller.fetch());
+            }
+        }
+    }
+
     /// 📈 Calculate current throughput rates using a 5-second sliding window.
     ///
     /// Sliding window keeps the displayed rate from looking like a seismograph
     /// during normal operations. Short bursts won't spike you into existential terror.
     ///
-    /// TODO: win the lottery, retire, replace this with a proper time-series database
+    /// -- 🦆 One day this will be a time-series database. Today is not that day.
     fn calculate_rates(&mut self, current_bytes: u64, current_docs: u64) -> Rates {
         let now = Instant::now();
         // 🔄 evict samples older than 5 seconds from the front of the queue
@@ -358,71 +434,109 @@ impl ProgressReporter {
             "--:--".to_string()
         };
 
-        // 🍽️ build the comfy table — two columns, right-aligned, no borders (preset: NOTHING)
+        // -- 📡 determine if we're showing cluster columns (4-col mode vs classic 2-col)
+        let the_has_cluster_columns = self.source_poller.is_some() || self.sink_poller.is_some();
+
+        // 🍽️ build the comfy table — right-aligned, no borders (preset: NOTHING)
         // -- NOTHING preset because we're minimalists. and also the borders looked bad.
         let mut table = Table::new();
         table.load_preset(NOTHING);
         table.set_content_arrangement(ContentArrangement::Dynamic);
 
-        // 🚀 row 1: throughput rates
-        table.add_row(vec![
-            Cell::new(format!("{} Docs/min", docs_rate)).set_alignment(CellAlignment::Right),
-            Cell::new(format!("~{} Docs", docs_total)).set_alignment(CellAlignment::Right),
-        ]);
-        // 📦 row 2: byte throughput and cumulative bytes
-        table.add_row(vec![
-            Cell::new(format!("{:.2} MiB/s", rates.mib_per_sec))
-                .set_alignment(CellAlignment::Right),
-            Cell::new(format_bytes_adaptive(the_bytes_drained)).set_alignment(CellAlignment::Right),
-        ]);
-        // ⏱️ row 3: latency — avg and last
-        table.add_row(vec![
-            Cell::new(format!("avg {}ms", the_avg_latency_ms)).set_alignment(CellAlignment::Right),
-            Cell::new(format!("last {}ms", the_last_latency_ms)).set_alignment(CellAlignment::Right),
-        ]);
-        // 📏 row 4: request size — avg and last
-        table.add_row(vec![
-            Cell::new(format!("avg {}", format_bytes_adaptive(the_avg_request_size)))
-                .set_alignment(CellAlignment::Right),
-            Cell::new(format!("last {}", format_bytes_adaptive(the_last_request_size)))
-                .set_alignment(CellAlignment::Right),
-        ]);
-        // ⏱️ row 5: time elapsed and estimated time remaining
-        table.add_row(vec![
-            Cell::new(format!("{} elapsed", elapsed_fmt)).set_alignment(CellAlignment::Right),
-            Cell::new(format!("{} remaining", remaining)).set_alignment(CellAlignment::Right),
-        ]);
+        if the_has_cluster_columns {
+            // -- 📡 4-column mode: drain metrics | cumulative | source cluster | sink cluster
+            let the_source_cpu = self.format_cluster_metric(self.source_last_snapshot, self.source_poller.is_some(), |s| format!("CPU {}%", s.cpu_percent as u64));
+            let the_sink_cpu = self.format_cluster_metric(self.sink_last_snapshot, self.sink_poller.is_some(), |s| format!("CPU {}%", s.cpu_percent as u64));
+            let the_source_mem = self.format_cluster_metric(self.source_last_snapshot, self.source_poller.is_some(), |s| format!("MEM {}%", s.jvm_heap_percent as u64));
+            let the_sink_mem = self.format_cluster_metric(self.sink_last_snapshot, self.sink_poller.is_some(), |s| format!("MEM {}%", s.jvm_heap_percent as u64));
+
+            // 🚀 row 1: throughput rates | source header | sink header
+            table.add_row(vec![
+                Cell::new(format!("{} Docs/min", docs_rate)).set_alignment(CellAlignment::Right),
+                Cell::new(format!("~{} Docs", docs_total)).set_alignment(CellAlignment::Right),
+                Cell::new("source").set_alignment(CellAlignment::Center),
+                Cell::new("sink").set_alignment(CellAlignment::Center),
+            ]);
+            // 📦 row 2: byte throughput | CPU stats
+            table.add_row(vec![
+                Cell::new(format!("{:.2} MiB/s", rates.mib_per_sec)).set_alignment(CellAlignment::Right),
+                Cell::new(format_bytes_adaptive(the_bytes_drained)).set_alignment(CellAlignment::Right),
+                Cell::new(the_source_cpu).set_alignment(CellAlignment::Center),
+                Cell::new(the_sink_cpu).set_alignment(CellAlignment::Center),
+            ]);
+            // ⏱️ row 3: latency | MEM stats
+            table.add_row(vec![
+                Cell::new(format!("avg {}ms", the_avg_latency_ms)).set_alignment(CellAlignment::Right),
+                Cell::new(format!("last {}ms", the_last_latency_ms)).set_alignment(CellAlignment::Right),
+                Cell::new(the_source_mem).set_alignment(CellAlignment::Center),
+                Cell::new(the_sink_mem).set_alignment(CellAlignment::Center),
+            ]);
+            // 📏 row 4: request size
+            table.add_row(vec![
+                Cell::new(format!("avg {}", format_bytes_adaptive(the_avg_request_size))).set_alignment(CellAlignment::Right),
+                Cell::new(format!("last {}", format_bytes_adaptive(the_last_request_size))).set_alignment(CellAlignment::Right),
+                Cell::new("").set_alignment(CellAlignment::Center),
+                Cell::new("").set_alignment(CellAlignment::Center),
+            ]);
+            // ⏱️ row 5: time elapsed and remaining
+            table.add_row(vec![
+                Cell::new(format!("{} elapsed", elapsed_fmt)).set_alignment(CellAlignment::Right),
+                Cell::new(format!("{} remaining", remaining)).set_alignment(CellAlignment::Right),
+                Cell::new("").set_alignment(CellAlignment::Center),
+                Cell::new("").set_alignment(CellAlignment::Center),
+            ]);
+        } else {
+            // -- 🎨 classic 2-column mode — no cluster pollers, no extra columns
+            // 🚀 row 1: throughput rates
+            table.add_row(vec![
+                Cell::new(format!("{} Docs/min", docs_rate)).set_alignment(CellAlignment::Right),
+                Cell::new(format!("~{} Docs", docs_total)).set_alignment(CellAlignment::Right),
+            ]);
+            // 📦 row 2: byte throughput and cumulative bytes
+            table.add_row(vec![
+                Cell::new(format!("{:.2} MiB/s", rates.mib_per_sec)).set_alignment(CellAlignment::Right),
+                Cell::new(format_bytes_adaptive(the_bytes_drained)).set_alignment(CellAlignment::Right),
+            ]);
+            // ⏱️ row 3: latency — avg and last
+            table.add_row(vec![
+                Cell::new(format!("avg {}ms", the_avg_latency_ms)).set_alignment(CellAlignment::Right),
+                Cell::new(format!("last {}ms", the_last_latency_ms)).set_alignment(CellAlignment::Right),
+            ]);
+            // 📏 row 4: request size — avg and last
+            table.add_row(vec![
+                Cell::new(format!("avg {}", format_bytes_adaptive(the_avg_request_size))).set_alignment(CellAlignment::Right),
+                Cell::new(format!("last {}", format_bytes_adaptive(the_last_request_size))).set_alignment(CellAlignment::Right),
+            ]);
+            // ⏱️ row 5: time elapsed and estimated time remaining
+            table.add_row(vec![
+                Cell::new(format!("{} elapsed", elapsed_fmt)).set_alignment(CellAlignment::Right),
+                Cell::new(format!("{} remaining", remaining)).set_alignment(CellAlignment::Right),
+            ]);
+        }
 
         // -- 🎨 slam it all into the progress bar message
         // indicatif will handle the terminal magic (cursor positioning, redraw, etc.)
         self.progress_bar
             .set_message(format!("sink: {}\n{}", self.pipeline_name, table));
     }
-}
 
-/// 🚀 Spawns a tokio task that ticks the progress reporter every 500ms.
-///
-/// Returns a JoinHandle — the Foreman should .abort() this after all real workers complete.
-/// The reporter is a leaf display task: it reads atomics, renders to terminal, and sleeps.
-/// Aborting it is safe and expected. Like pulling the plug on a screensaver. 🖥️
-///
-/// "In the beginning there was no progress bar. And the developer stared into the void.
-///  And the void did not stare back, because there was no render loop." — Genesis 0:0 🦆
-pub fn spawn_progress_reporter(
-    pipeline_name: String,
-    drain_metrics: Arc<DrainMetrics>,
-    total_expected_bytes: u64,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut the_reporter = ProgressReporter::new(pipeline_name, drain_metrics, total_expected_bytes);
-        loop {
-            // -- 💤 sleep 500ms — fast enough to feel responsive, slow enough to not burn CPU
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            the_reporter.tick();
+    /// 📊 Format a cluster metric cell: snapshot present → format it, polling but no data yet → "...", no poller → empty.
+    /// Like a weather app: clear skies, loading, or "we don't serve your area." ☁️
+    fn format_cluster_metric(
+        &self,
+        snapshot: Option<ClusterSnapshot>,
+        has_poller: bool,
+        formatter: impl Fn(ClusterSnapshot) -> String,
+    ) -> String {
+        match (snapshot, has_poller) {
+            // -- ✅ we have data — show it proudly
+            (Some(s), true) => formatter(s),
+            // -- 💤 poller exists but no data yet — patience, grasshopper
+            (None, true) => "...".to_string(),
+            // -- 🚫 no poller → no column content (backend doesn't support cluster stats)
+            (_, false) => String::new(),
         }
-        // -- 🏁 unreachable: this loop runs until aborted by the Foreman.
-        // -- Like a hamster wheel, it doesn't stop on its own. 🐹
-    })
+    }
 }
 
 #[cfg(test)]
@@ -484,26 +598,25 @@ mod tests {
         assert_eq!(format_duration(Duration::from_secs(3661)), "01:01:01");
     }
 
-    /// 🧪 The one where spawn_progress_reporter can be created and aborted.
-    /// Like hiring an intern and immediately firing them. Cruel but necessary. 🏢🦆
+    /// 🧪 The one where ProgressReporter can be created and ticked without panicking.
+    /// Like hiring an intern and immediately checking their work. Standard procedure. 🏢🦆
     #[tokio::test]
-    async fn the_one_where_reporter_starts_and_aborts_cleanly() {
+    async fn the_one_where_reporter_starts_and_ticks_cleanly() {
         let metrics = Arc::new(DrainMetrics::new());
         metrics.record_drain(4096, 42);
 
-        let handle = spawn_progress_reporter(
+        // -- 🏗️ construct reporter directly — no pollers, classic 2-column mode
+        let mut the_reporter = ProgressReporter::new(
             "test-pipeline".to_string(),
             metrics.clone(),
             0,
+            None,
+            None,
         );
 
-        // -- 💤 let it tick once
-        tokio::time::sleep(Duration::from_millis(600)).await;
-
-        // -- 🗑️ abort — the foreman does this after workers complete
-        handle.abort();
-        let _ = handle.await;
-        // -- ✅ if we got here without panicking, the reporter handled abort gracefully
+        // -- 🔄 tick it once — should render without exploding
+        the_reporter.tick().await;
+        // -- ✅ if we got here without panicking, the reporter is a functional member of society
     }
 
     /// 🧪 The one where concurrent drainers don't lose data.
@@ -532,5 +645,82 @@ mod tests {
         assert_eq!(metrics.requests_completed.load(Ordering::Relaxed), 1_000);
         // -- ⏱️ 10 tasks × 100 drains × 10ms = 10,000ms total latency
         assert_eq!(metrics.latency_sum_ms.load(Ordering::Relaxed), 10_000);
+    }
+
+    /// 🧪 The one where cluster columns appear when pollers exist.
+    /// We can't create real pollers without a cluster, but we CAN check that
+    /// format_cluster_metric returns the right strings for each scenario. 📡🦆
+    #[test]
+    fn the_one_where_cluster_columns_format_correctly() {
+        let the_reporter = ProgressReporter::new(
+            "test-cluster-cols".to_string(),
+            Arc::new(DrainMetrics::new()),
+            0,
+            None,
+            None,
+        );
+
+        let the_snapshot = ClusterSnapshot {
+            cpu_percent: 42.0,
+            jvm_heap_percent: 67.0,
+        };
+
+        // -- ✅ snapshot present + poller active → formatted value
+        let cpu_str = the_reporter.format_cluster_metric(
+            Some(the_snapshot), true, |s| format!("CPU {}%", s.cpu_percent as u64),
+        );
+        assert_eq!(cpu_str, "CPU 42%");
+
+        let mem_str = the_reporter.format_cluster_metric(
+            Some(the_snapshot), true, |s| format!("MEM {}%", s.jvm_heap_percent as u64),
+        );
+        assert_eq!(mem_str, "MEM 67%");
+
+        // -- 💤 no snapshot yet + poller active → "..." (loading state)
+        let loading_str = the_reporter.format_cluster_metric(
+            None, true, |s| format!("CPU {}%", s.cpu_percent as u64),
+        );
+        assert_eq!(loading_str, "...");
+
+        // -- 🚫 no poller → empty string (backend doesn't support cluster stats)
+        let empty_str = the_reporter.format_cluster_metric(
+            None, false, |s| format!("CPU {}%", s.cpu_percent as u64),
+        );
+        assert_eq!(empty_str, "");
+
+        // -- 🐛 edge case: snapshot exists but no poller → empty (shouldn't happen, but defensive)
+        let weird_str = the_reporter.format_cluster_metric(
+            Some(the_snapshot), false, |s| format!("CPU {}%", s.cpu_percent as u64),
+        );
+        assert_eq!(weird_str, "");
+    }
+
+    /// 🧪 The one where no pollers means classic two columns.
+    /// File→File migration: no ES clusters, no cluster stats, no extra columns.
+    /// Like ordering a plain cheese pizza — simple, reliable, delicious. 🍕🦆
+    #[tokio::test]
+    async fn the_one_where_no_pollers_means_classic_two_columns() {
+        let metrics = Arc::new(DrainMetrics::new());
+        metrics.record_drain(10240, 100);
+
+        let mut the_reporter = ProgressReporter::new(
+            "file-to-file".to_string(),
+            metrics.clone(),
+            0,
+            None,
+            None,
+        );
+
+        // -- 🔄 tick to render
+        the_reporter.tick().await;
+
+        // -- 📊 the rendered message should NOT contain "source" or "sink" column headers
+        let the_message = the_reporter.progress_bar.message().to_string();
+        assert!(!the_message.contains("source"), "Classic 2-col layout should not have 'source' column header");
+        assert!(!the_message.contains("CPU"), "Classic 2-col layout should not have CPU metric");
+        assert!(!the_message.contains("MEM"), "Classic 2-col layout should not have MEM metric");
+        // -- ✅ but it should still have drain metrics
+        assert!(the_message.contains("Docs/min"), "Should still show docs/min rate");
+        assert!(the_message.contains("elapsed"), "Should still show elapsed time");
     }
 }

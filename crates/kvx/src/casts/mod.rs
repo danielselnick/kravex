@@ -327,6 +327,7 @@ mod tests {
         use crate::backends::open_observe::OpenObserveSinkConfig;
         let source = SourceConfig::Elasticsearch(ElasticsearchSourceConfig {
             url: "http://source-cluster:9200".to_string(),
+            index: "test-index".to_string(),
             username: None,
             password: None,
             api_key: None,
@@ -372,6 +373,7 @@ mod tests {
     fn the_one_where_es_to_es_resolves_to_pit_to_bulk() -> Result<()> {
         let source = SourceConfig::Elasticsearch(ElasticsearchSourceConfig {
             url: "http://source-cluster:9200".to_string(),
+            index: "test-index".to_string(),
             username: None,
             password: None,
             api_key: None,

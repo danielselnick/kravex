@@ -38,7 +38,7 @@ use crate::Entry;
 use crate::Page;
 
 
-// 🧠 Field name constants — stubs for future configurable extraction.
+// 🧠 Field name constants — configurable extraction deferred to config layer.
 // -- "He who hardcodes field names, refactors in production." — Ancient DevOps proverb 🦆
 const _HIT_ID_FIELD: &str = "_id";
 const _HIT_INDEX_FIELD: &str = "_index";

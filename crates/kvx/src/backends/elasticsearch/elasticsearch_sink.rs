@@ -2,15 +2,68 @@
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file and at www.mariadb.com/bsl11.
+use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use tracing::{debug, trace};
+use serde::Deserialize;
+use tracing::{debug, trace, warn};
 
 use crate::Payload;
 use crate::backends::Sink;
 use super::config::ElasticsearchSinkConfig;
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  📦 Bulk Response Types — Elasticsearch's confessional booth
+//     ╭──────────╮
+//     │ 200 OK   │◄── "Sure, we got your docs. Some of them, anyway."
+//     ╰──────────╯
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// -- 📦 The ES bulk API's response is like a report card: the envelope says "delivered" (HTTP 200)
+// -- but inside, individual items may have F's. These structs crack the envelope open.
+
+/// 📦 Top-level bulk response — the envelope that says "200 OK" but might contain bad news inside.
+/// The `errors` field is the TL;DR: true means at least one item failed.
+/// When `errors` is false, we skip parsing `items` entirely — no news is good news.
+#[derive(Debug, Deserialize)]
+struct BulkResponse {
+    // The boolean that decides whether we sleep well tonight
+    #[serde(default)]
+    errors: bool,
+    // Per-item results — only parsed when `errors` is true, because life is short
+    #[serde(default)]
+    items: Vec<BulkItemWrapper>,
+}
+
+/// 📦 Each bulk item is wrapped in an action key ("index", "create", "update", "delete").
+/// ES returns `{ "index": { "status": 201, ... } }` — the outer key varies by action.
+/// We use a HashMap because we don't care WHAT action failed, just THAT it failed.
+/// -- 🗺️ One key per item, one result per key. Simple. Like a funeral guest list.
+type BulkItemWrapper = HashMap<String, BulkItemResult>;
+
+/// 📦 The actual result for a single document in the bulk response.
+/// `status` tells us the HTTP-equivalent result code. `error` tells us why it's crying.
+#[derive(Debug, Deserialize)]
+struct BulkItemResult {
+    #[serde(default)]
+    status: u16,
+    #[serde(default)]
+    error: Option<BulkItemError>,
+    #[serde(default)]
+    _id: Option<String>,
+}
+
+/// 📦 When ES rejects a document, it explains itself with a type + reason.
+/// Like a breakup text: "type: mapping_exception, reason: you're not my type."
+#[derive(Debug, Deserialize)]
+struct BulkItemError {
+    #[serde(default, rename = "type")]
+    error_type: String,
+    #[serde(default)]
+    reason: String,
+}
 
 /// 📡 The sink side of the Elasticsearch backend — pure I/O, zero buffering.
 ///
@@ -150,20 +203,122 @@ impl ElasticsearchSink {
         })
     }
 
-    /// 📡 Fires a `_bulk` POST request with the given NDJSON body.
+    /// 📡 Submits a bulk request with per-item retry — failed docs get re-sent, successful ones don't.
     ///
-    /// This is the actual HTTP call that makes documents leave our process and enter
-    /// Elasticsearch's warm embrace. Or cold rejection. Depends on the status code.
+    /// The ES `_bulk` API returns HTTP 200 even when individual documents fail. This method
+    /// parses the response, extracts only the NDJSON pairs that failed, and re-sends them.
+    /// Up to 10 retry rounds. Each round shrinks the payload to only the rejects.
     ///
-    /// Auth is applied here: API key takes priority over basic auth, same as index check.
-    /// If the response is not 2xx, we bail with enough detail to file a reasonable postmortem.
+    /// This prevents duplicate indexing for File→ES flows (auto-generated `_id`s) while still
+    /// recovering transient per-item failures (shard pressure, version conflicts, etc.).
     ///
-    /// 🔄 This function does not retry. Retries are the caller's problem. Good luck.
+    /// 🔄 "I'm not mad, I'm just going to keep sending these until you accept them or I give up."
     async fn submit_bulk_request(&self, request_body: Payload) -> Result<()> {
-        // -- 📡 Build the bulk endpoint URL. The `_bulk` API: Elasticsearch's loading dock.
-        // -- NDJSON only — no JSON arrays, no XML, no CSV, no hand-coded tab-separated values.
-        // -- NDJSON. The only format Elasticsearch respects. Truly the format of people who
-        // -- wanted JSON but also wanted to feel slightly superior about it.
+        // -- 🔄 10 retries of just the failed docs — not the whole payload, we're not animals.
+        // -- After 10 rounds of "please?" and "no", we accept our fate.
+        const MAX_PARTIAL_RETRIES: usize = 10;
+        // -- 🧮 Cap the number of individual error reasons we collect to avoid OOM on catastrophic failure
+        const MAX_GRIEF_SAMPLES: usize = 5;
+
+        // Take ownership of the payload string — the retry loop will shrink it each round
+        let mut the_current_ndjson = request_body.0;
+
+        for the_attempt in 0..=MAX_PARTIAL_RETRIES {
+            // 📡 Fire the HTTP POST — returns the response body text on 2xx
+            let the_body_text = self.send_bulk_post(&the_current_ndjson).await?;
+
+            // Fast path: empty body means ES gave us nothing to parse — treat as success.
+            if the_body_text.is_empty() {
+                trace!("🚀 Bulk request landed — empty response body, assuming all docs indexed (living dangerously)");
+                return Ok(());
+            }
+
+            let the_bulk_response: BulkResponse = serde_json::from_str(&the_body_text)
+                .context("💀 Elasticsearch returned 200 but the response body wasn't valid JSON. The server spoke, but in tongues. This is like getting a letter back from the post office written in Wingdings.")?;
+
+            if !the_bulk_response.errors {
+                // -- ✅ No errors! Every doc made it! The singularity will happen before we see this log line in prod.
+                trace!("🚀 Bulk request landed successfully — all documents accepted, zero casualties");
+                return Ok(());
+            }
+
+            // 💀 errors: true — time to count the bodies and name the dead
+            let mut the_body_count: usize = 0;
+            let mut the_reasons_for_grief: Vec<String> = Vec::new();
+
+            for (the_item_index, wrapper) in the_bulk_response.items.iter().enumerate() {
+                for (_action, result) in wrapper {
+                    if let Some(ref the_rejection_letter) = result.error {
+                        the_body_count += 1;
+                        if the_reasons_for_grief.len() < MAX_GRIEF_SAMPLES {
+                            let the_doc_id = result._id.as_deref().unwrap_or("unknown");
+                            the_reasons_for_grief.push(format!(
+                                "item[{}] id={} status={} type={} reason={}",
+                                the_item_index, the_doc_id, result.status,
+                                the_rejection_letter.error_type, the_rejection_letter.reason
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // -- 💀 Log each sampled failure so the 3am on-call engineer has something to cry-laugh at
+            for the_eulogy in &the_reasons_for_grief {
+                warn!("💀 Bulk item rejected: {}", the_eulogy);
+            }
+            if the_body_count > MAX_GRIEF_SAMPLES {
+                warn!(
+                    "💀 ... and {} more failed items not shown (we capped the grief at {})",
+                    the_body_count - MAX_GRIEF_SAMPLES, MAX_GRIEF_SAMPLES
+                );
+            }
+
+            // 🏁 If this was the last attempt, accept our fate with dignity (and a detailed error)
+            if the_attempt == MAX_PARTIAL_RETRIES {
+                anyhow::bail!(
+                    "💀 Elasticsearch still rejecting {} out of {} documents after {} retries. \
+                     We asked nicely. We asked repeatedly. We even said please. They said no. \
+                     First failures: [{}]",
+                    the_body_count,
+                    the_bulk_response.items.len(),
+                    MAX_PARTIAL_RETRIES,
+                    the_reasons_for_grief.join("; ")
+                );
+            }
+
+            // 🔄 Extract only the failed NDJSON action/doc pairs for retry
+            let the_retry_payload = extract_failed_pairs(&the_current_ndjson, &the_bulk_response);
+            if the_retry_payload.is_empty() {
+                // Mismatch between NDJSON lines and response items — can't safely correlate
+                anyhow::bail!(
+                    "💀 {} documents failed but we couldn't extract them for retry — \
+                     NDJSON line count doesn't match response item count. \
+                     Like a jigsaw puzzle where the pieces are from different boxes. \
+                     First failures: [{}]",
+                    the_body_count,
+                    the_reasons_for_grief.join("; ")
+                );
+            }
+
+            warn!(
+                "🔄 Retrying {} failed docs (attempt {}/{}) — the rest made it through, \
+                 these just need another chance, like a second audition",
+                the_body_count, the_attempt + 1, MAX_PARTIAL_RETRIES
+            );
+
+            the_current_ndjson = the_retry_payload;
+        }
+
+        // -- 🦆 The borrow checker approved this unreachable. The compiler trusts us. The runtime... we'll see.
+        unreachable!("the retry loop always returns or bails — if you see this, reality has forked")
+    }
+
+    /// 📡 Pure HTTP POST to the `_bulk` endpoint. No parsing, no retry, no opinions.
+    ///
+    /// Returns the response body text on HTTP 2xx. Bails on non-2xx.
+    /// This is the "just mail the letter" function — what happens after is someone else's problem.
+    /// -- 🦆 "I'm just the postman, I don't read the mail."
+    async fn send_bulk_post(&self, the_ndjson_body: &str) -> Result<String> {
         let bulk_url = match self.sink_config.index {
             Some(ref index_name) => format!("{}/{}/_bulk", self.sink_config.url.trim_end_matches('/'), index_name),
             None => format!("{}/_bulk", self.sink_config.url.trim_end_matches('/'))
@@ -185,7 +340,7 @@ impl ElasticsearchSink {
         }
 
         let response = request
-            .body(request_body.0)
+            .body(the_ndjson_body.to_owned())
             .send()
             .await
             // -- 💀 "Failed to send bulk request" — micro-fiction, act one.
@@ -208,15 +363,51 @@ impl ElasticsearchSink {
                 status,
                 body
             );
-        } else {
-            // -- ✅ Sent! Gone! Into the index! No cap, this function absolutely slapped.
-            trace!(
-                "🚀 Bulk request landed successfully — documents have left the building, Elvis-style"
-            );
         }
 
-        Ok(())
+        Ok(response.text().await.unwrap_or_default())
     }
+}
+
+/// 🔄 Extracts only the failed NDJSON action/doc pairs from the original payload.
+///
+/// NDJSON bulk format: lines `[2*i]` = action, lines `[2*i + 1]` = document, for item `i`.
+/// `bulk_response.items[i]` corresponds to NDJSON pair `i`. We grab pairs where `.error.is_some()`.
+///
+/// Returns empty string if we can't safely correlate (line count mismatch) — caller should bail.
+/// -- 🦆 "Extracting the rejected from the accepted, like sorting Halloween candy."
+fn extract_failed_pairs(the_original_ndjson: &str, the_bulk_response: &BulkResponse) -> String {
+    // Split into lines, filtering out trailing empty line from final \n
+    let the_ndjson_lines: Vec<&str> = the_original_ndjson.lines().collect();
+    let the_expected_line_count = the_bulk_response.items.len() * 2;
+
+    // Sanity check: NDJSON lines must be exactly 2x the item count (action + doc per item)
+    if the_ndjson_lines.len() != the_expected_line_count {
+        warn!(
+            "⚠️ NDJSON line count ({}) doesn't match 2 × response items ({}). \
+             Can't safely correlate failures — bailing out of retry. \
+             Like trying to match socks from two different laundry loads.",
+            the_ndjson_lines.len(),
+            the_expected_line_count
+        );
+        return String::new();
+    }
+
+    let mut the_retry_body = String::new();
+
+    for (i, wrapper) in the_bulk_response.items.iter().enumerate() {
+        // Check if any action in this item has an error
+        let the_item_failed = wrapper.values().any(|result| result.error.is_some());
+        if the_item_failed {
+            // Grab the action line (2*i) and document line (2*i + 1)
+            the_retry_body.push_str(the_ndjson_lines[2 * i]);
+            the_retry_body.push('\n');
+            the_retry_body.push_str(the_ndjson_lines[2 * i + 1]);
+            the_retry_body.push('\n');
+        }
+    }
+
+    the_retry_body
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -231,6 +422,7 @@ mod tests {
     use super::*;
     use crate::Payload;
     use crate::backends::{CommonSinkConfig, Sink};
+    use serde_json::json;
     use wiremock::matchers::{body_string, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -789,6 +981,411 @@ mod tests {
         the_faithful_sink.drain(Payload::from(the_sacred_payload.to_string())).await?;
 
         // 🎯 Assert — wiremock's body_string matcher confirms byte-perfect delivery ✅
+
+        Ok(())
+    }
+
+    // ┌──────────────────────────────────────────────────────────────────────┐
+    // │  GROUP C.5: Bulk Response Parsing — "200 OK" Is A Lie              │
+    // │  "Trust, but verify." — Reagan, and also anyone who's used _bulk   │
+    // └──────────────────────────────────────────────────────────────────────┘
+
+    /// 🧪 Bulk response body says `"errors": false` — all docs indexed. Sleep well, young prince.
+    #[tokio::test]
+    async fn the_one_where_bulk_response_is_clean_and_all_is_well() -> Result<()> {
+        // 🔧 Arrange — ES returns 200 with a clean report card
+        let mock_server = MockServer::start().await;
+        mount_root_ping(&mock_server).await;
+
+        let the_clean_response = r#"{"errors":false,"items":[{"index":{"_id":"1","status":201}},{"index":{"_id":"2","status":201}}]}"#;
+
+        Mock::given(method("POST"))
+            .and(path("/_bulk"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(the_clean_response))
+            .mount(&mock_server)
+            .await;
+
+        let config = make_config(&mock_server.uri());
+        let mut the_trusting_sink = ElasticsearchSink::new(config).await?;
+
+        // 🚀 Act — send docs into the welcoming void
+        let the_result = the_trusting_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
+
+        // 🎯 Assert — errors: false means genuine success, not polite lying ✅
+        assert!(
+            the_result.is_ok(),
+            "💀 Bulk response had errors:false but drain() still failed. Trust issues detected."
+        );
+
+        Ok(())
+    }
+
+    /// 🧪 Bulk response body says `"errors": true` with partial failures — some docs rejected.
+    /// This is THE test for the 2-missing-docs bug. The 200 is a lie. The body tells the truth.
+    /// With per-item retry: first call fails 2/4 → retry sends only the 2 failed pairs →
+    /// mock still returns the same 4-item response → line count mismatch → bails with correlation error.
+    /// The IMPORTANT thing: drain() fails, documents are NOT silently lost.
+    #[tokio::test]
+    async fn the_one_where_bulk_response_has_errors_and_dreams_die() -> Result<()> {
+        // 🔧 Arrange — ES returns 200 but 2 out of 4 docs were rejected
+        // Payload has 4 action/doc pairs to match the 4-item response on first call
+        let mock_server = MockServer::start().await;
+        mount_root_ping(&mock_server).await;
+
+        // -- 💀 This is what a real ES bulk response looks like when docs are rejected.
+        // -- The counter-based responder returns a 4-item partial failure first,
+        // -- then a 2-item persistent failure for all retries of the extracted failed pairs.
+        let the_call_counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let the_counter_for_closure = the_call_counter.clone();
+
+        // -- 📡 First call: 4 items, 2 fail. Subsequent calls: 2 items, both still fail.
+        let the_dynamic_responder = move |_req: &wiremock::Request| {
+            let the_call_number = the_counter_for_closure.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let the_body = if the_call_number == 0 {
+                // -- 💀 Round 1: 4 docs sent, 2 rejected. Items 1 and 3 succeed, 2 and 4 fail.
+                json!({
+                    "errors": true,
+                    "items": [
+                        {"index": {"_id": "1", "status": 201}},
+                        {"index": {"_id": "2", "status": 400, "error": {
+                            "type": "mapper_parsing_exception",
+                            "reason": "failed to parse field [location] of type [geo_point]"
+                        }}},
+                        {"index": {"_id": "3", "status": 201}},
+                        {"index": {"_id": "4", "status": 409, "error": {
+                            "type": "version_conflict_engine_exception",
+                            "reason": "[4]: version conflict, document already exists"
+                        }}}
+                    ]
+                })
+            } else {
+                // -- 💀 Round 2+: only the 2 failed docs are resent, both still fail.
+                json!({
+                    "errors": true,
+                    "items": [
+                        {"index": {"_id": "2", "status": 400, "error": {
+                            "type": "mapper_parsing_exception",
+                            "reason": "failed to parse field [location] of type [geo_point]"
+                        }}},
+                        {"index": {"_id": "4", "status": 409, "error": {
+                            "type": "version_conflict_engine_exception",
+                            "reason": "[4]: version conflict, document already exists"
+                        }}}
+                    ]
+                })
+            };
+            ResponseTemplate::new(200).set_body_string(the_body.to_string())
+        };
+
+        Mock::given(method("POST"))
+            .and(path("/_bulk"))
+            .respond_with(the_dynamic_responder)
+            .mount(&mock_server)
+            .await;
+
+        let config = make_config(&mock_server.uri());
+        let mut the_deceived_sink = ElasticsearchSink::new(config).await?;
+
+        // 🚀 Act — send 4 docs, 2 get rejected, retry loop exhausts on the 2 persistent failures
+        let the_four_doc_payload = Payload::from(
+            "{\"index\":{}}\n{\"doc\":1}\n\
+             {\"index\":{}}\n{\"doc\":2}\n\
+             {\"index\":{}}\n{\"doc\":3}\n\
+             {\"index\":{}}\n{\"doc\":4}\n"
+                .to_string(),
+        );
+        let the_bitter_truth = the_deceived_sink.drain(the_four_doc_payload).await;
+
+        // 🎯 Assert — drain() must fail after retrying the 2 rejected docs
+        assert!(the_bitter_truth.is_err(), "💀 200 with errors:true must cause drain() to fail. Silent doc loss is not a feature.");
+
+        let the_autopsy_report = format!("{:?}", the_bitter_truth.unwrap_err());
+        // -- 🧮 Verify the error mentions the failure count and retry exhaustion
+        assert!(
+            the_autopsy_report.contains("2") && the_autopsy_report.contains("10 retries"),
+            "💀 Error should mention 2 failures after 10 retries, got: {the_autopsy_report}"
+        );
+        // -- 🔍 Verify specific error types are surfaced
+        assert!(
+            the_autopsy_report.contains("mapper_parsing_exception"),
+            "💀 Error should contain the ES error type, got: {the_autopsy_report}"
+        );
+        // -- 🧮 Verify we actually retried (1 initial + 10 retries = 11 calls)
+        assert_eq!(
+            the_call_counter.load(std::sync::atomic::Ordering::SeqCst),
+            11,
+            "💀 Expected 11 total calls (1 initial + 10 retries)"
+        );
+
+        Ok(())
+    }
+
+    /// 🧪 ALL items in the bulk response failed. Total wipeout. The Titanic of bulk requests.
+    /// With per-item retry, all docs get resent each round. After 10 retries of the same
+    /// rejection, we bail. The mock returns the same 2-item error every time.
+    #[tokio::test]
+    async fn the_one_where_every_single_document_was_rejected() -> Result<()> {
+        // 🔧 Arrange — ES accepted the request but rejected every doc inside it
+        let mock_server = MockServer::start().await;
+        mount_root_ping(&mock_server).await;
+
+        let the_total_failure = json!({
+            "errors": true,
+            "items": [
+                {"index": {"_id": "1", "status": 400, "error": {"type": "strict_dynamic_mapping_exception", "reason": "mapping set to strict"}}},
+                {"index": {"_id": "2", "status": 400, "error": {"type": "strict_dynamic_mapping_exception", "reason": "mapping set to strict"}}}
+            ]
+        }).to_string();
+
+        Mock::given(method("POST"))
+            .and(path("/_bulk"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&the_total_failure))
+            .mount(&mock_server)
+            .await;
+
+        let config = make_config(&mock_server.uri());
+        let mut the_doomed_sink = ElasticsearchSink::new(config).await?;
+
+        // 🚀 Act — send 2 docs, both rejected, retry loop sends same 2 each time
+        let the_two_doc_payload = Payload::from(
+            "{\"index\":{}}\n{\"doc\":1}\n\
+             {\"index\":{}}\n{\"doc\":2}\n"
+                .to_string(),
+        );
+        let the_massacre = the_doomed_sink.drain(the_two_doc_payload).await;
+
+        // 🎯 Assert — 2 out of 2 failed after 10 retries
+        assert!(the_massacre.is_err(), "💀 100% rejection rate should absolutely be an error");
+        let the_damage_report = format!("{:?}", the_massacre.unwrap_err());
+        assert!(
+            the_damage_report.contains("2") && the_damage_report.contains("strict_dynamic_mapping_exception"),
+            "💀 Error should count all failures and name the error type, got: {the_damage_report}"
+        );
+
+        Ok(())
+    }
+
+    /// 🧪 Bulk response body is valid JSON but not a valid bulk response (missing fields).
+    /// Serde defaults kick in: errors=false, items=[]. Graceful degradation, not panic.
+    #[tokio::test]
+    async fn the_one_where_bulk_response_is_weirdly_shaped_but_we_cope() -> Result<()> {
+        // 🔧 Arrange — ES returns some unexpected JSON shape (maybe a load balancer?)
+        let mock_server = MockServer::start().await;
+        mount_root_ping(&mock_server).await;
+
+        Mock::given(method("POST"))
+            .and(path("/_bulk"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"took":42}"#))
+            .mount(&mock_server)
+            .await;
+
+        let config = make_config(&mock_server.uri());
+        let mut the_flexible_sink = ElasticsearchSink::new(config).await?;
+
+        // 🚀 Act — send docs, get a weird response
+        let the_result = the_flexible_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
+
+        // 🎯 Assert — serde defaults mean errors=false, so we treat it as success ✅
+        assert!(
+            the_result.is_ok(),
+            "💀 Missing fields should default gracefully, not panic. We're not animals."
+        );
+
+        Ok(())
+    }
+
+    /// 🧪 Bulk response body is not valid JSON at all. The parser should bail with context.
+    #[tokio::test]
+    async fn the_one_where_bulk_response_is_not_even_json() -> Result<()> {
+        // 🔧 Arrange — ES returned... HTML? A poem? A cry for help?
+        let mock_server = MockServer::start().await;
+        mount_root_ping(&mock_server).await;
+
+        Mock::given(method("POST"))
+            .and(path("/_bulk"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<html>502 Bad Gateway</html>"))
+            .mount(&mock_server)
+            .await;
+
+        let config = make_config(&mock_server.uri());
+        let mut the_confused_sink = ElasticsearchSink::new(config).await?;
+
+        // 🚀 Act — send docs, receive HTML. A nightmare scenario.
+        let the_what = the_confused_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
+
+        // 🎯 Assert — invalid JSON body on a 200 should fail, not silently succeed
+        assert!(
+            the_what.is_err(),
+            "💀 Non-JSON response body should cause drain() to fail. We don't index HTML."
+        );
+
+        Ok(())
+    }
+
+    /// 🧪 Empty response body — the fast path. Some proxies/mocks do this. We accept it.
+    /// "If you don't tell me about failures, there are no failures." — an optimist, or a bad API
+    #[tokio::test]
+    async fn the_one_where_bulk_response_body_is_empty_and_we_hope_for_the_best() -> Result<()> {
+        // 🔧 Arrange — ES returns 200 with absolutely no body. Cool. Cool cool cool.
+        let mock_server = MockServer::start().await;
+        mount_root_ping(&mock_server).await;
+
+        Mock::given(method("POST"))
+            .and(path("/_bulk"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+
+        let config = make_config(&mock_server.uri());
+        let mut the_optimist_sink = ElasticsearchSink::new(config).await?;
+
+        // 🚀 Act
+        let the_result = the_optimist_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
+
+        // 🎯 Assert — empty body = fast path success ✅
+        assert!(
+            the_result.is_ok(),
+            "💀 Empty response body should be treated as success (fast path). We live dangerously."
+        );
+
+        Ok(())
+    }
+
+    // ┌──────────────────────────────────────────────────────────────────────┐
+    // │  GROUP C.6: Per-Item Retry — "We don't give up on failed docs"     │
+    // │  "Try, try again. But only the ones that failed." — Optimist       │
+    // └──────────────────────────────────────────────────────────────────────┘
+
+    /// 🧪 The montage test: 3 docs sent, 1 fails, retry sends only that 1, it succeeds.
+    /// drain() returns Ok. No duplicates. No silent losses. Just perseverance.
+    /// Like Rocky but for NDJSON action/doc pairs.
+    #[tokio::test]
+    async fn the_one_where_retry_saves_the_day_like_a_montage() -> Result<()> {
+        // 🔧 Arrange — first call: 1/3 fails. Second call: the retry of that 1 doc succeeds.
+        let mock_server = MockServer::start().await;
+        mount_root_ping(&mock_server).await;
+
+        let the_call_counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let the_counter_clone = the_call_counter.clone();
+
+        let the_redemption_arc = move |_req: &wiremock::Request| {
+            let the_call = the_counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let the_body = if the_call == 0 {
+                // -- 💀 Round 1: doc 2 fails, docs 1 and 3 succeed
+                json!({
+                    "errors": true,
+                    "items": [
+                        {"index": {"_id": "1", "status": 201}},
+                        {"index": {"_id": "2", "status": 429, "error": {
+                            "type": "es_rejected_execution_exception",
+                            "reason": "rejected execution of coordinating operation"
+                        }}},
+                        {"index": {"_id": "3", "status": 201}}
+                    ]
+                })
+            } else {
+                // -- ✅ Round 2: the lone retry doc succeeds. Redemption. 🎬
+                json!({
+                    "errors": false,
+                    "items": [
+                        {"index": {"_id": "2", "status": 201}}
+                    ]
+                })
+            };
+            ResponseTemplate::new(200).set_body_string(the_body.to_string())
+        };
+
+        Mock::given(method("POST"))
+            .and(path("/_bulk"))
+            .respond_with(the_redemption_arc)
+            .mount(&mock_server)
+            .await;
+
+        let config = make_config(&mock_server.uri());
+        let mut the_hopeful_sink = ElasticsearchSink::new(config).await?;
+
+        // 🚀 Act — send 3 action/doc pairs, expect retry to save the 1 that failed
+        let the_payload = Payload::from(
+            "{\"index\":{}}\n{\"doc\":1}\n\
+             {\"index\":{}}\n{\"doc\":2}\n\
+             {\"index\":{}}\n{\"doc\":3}\n"
+                .to_string(),
+        );
+        let the_result = the_hopeful_sink.drain(the_payload).await;
+
+        // 🎯 Assert — success after retry! The montage worked!
+        assert!(
+            the_result.is_ok(),
+            "💀 Partial failure + successful retry should return Ok. Got: {:?}",
+            the_result.unwrap_err()
+        );
+        // -- 🧮 Exactly 2 calls: initial (3 docs) + 1 retry (1 failed doc)
+        assert_eq!(
+            the_call_counter.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "💀 Expected exactly 2 bulk calls (1 initial + 1 retry)"
+        );
+
+        Ok(())
+    }
+
+    /// 🧪 The giving-up test: 1 doc persistently fails for 11 rounds (1 initial + 10 retries).
+    /// drain() returns Err with a clear message about retry exhaustion.
+    /// Sometimes you just have to accept the mapping doesn't like your data.
+    #[tokio::test]
+    async fn the_one_where_retries_are_exhausted_and_we_accept_our_fate() -> Result<()> {
+        // 🔧 Arrange — every call returns the same 1-item failure. Forever. Like Sisyphus.
+        let mock_server = MockServer::start().await;
+        mount_root_ping(&mock_server).await;
+
+        let the_call_counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let the_counter_clone = the_call_counter.clone();
+
+        let the_stubborn_rejection = move |_req: &wiremock::Request| {
+            the_counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let the_body = json!({
+                "errors": true,
+                "items": [
+                    {"index": {"_id": "42", "status": 400, "error": {
+                        "type": "mapper_parsing_exception",
+                        "reason": "the field type and the data type had irreconcilable differences"
+                    }}}
+                ]
+            });
+            ResponseTemplate::new(200).set_body_string(the_body.to_string())
+        };
+
+        Mock::given(method("POST"))
+            .and(path("/_bulk"))
+            .respond_with(the_stubborn_rejection)
+            .mount(&mock_server)
+            .await;
+
+        let config = make_config(&mock_server.uri());
+        let mut the_persistent_sink = ElasticsearchSink::new(config).await?;
+
+        // 🚀 Act — send 1 doc that will be rejected 11 times
+        let the_doomed_payload = Payload::from("{\"index\":{}}\n{\"doc\":42}\n".to_string());
+        let the_inevitable = the_persistent_sink.drain(the_doomed_payload).await;
+
+        // 🎯 Assert — Err after exhausting all retries
+        assert!(the_inevitable.is_err(), "💀 11 rejections should mean we give up");
+
+        let the_epitaph = format!("{:?}", the_inevitable.unwrap_err());
+        assert!(
+            the_epitaph.contains("10 retries"),
+            "💀 Error should mention retry exhaustion, got: {the_epitaph}"
+        );
+        assert!(
+            the_epitaph.contains("mapper_parsing_exception"),
+            "💀 Error should include the rejection reason, got: {the_epitaph}"
+        );
+        // -- 🧮 11 calls: 1 initial + 10 retries
+        assert_eq!(
+            the_call_counter.load(std::sync::atomic::Ordering::SeqCst),
+            11,
+            "💀 Expected 11 total bulk calls (1 initial + 10 retries)"
+        );
 
         Ok(())
     }

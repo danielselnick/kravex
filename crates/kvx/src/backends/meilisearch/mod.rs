@@ -11,7 +11,7 @@
 //! *[The payload doesn't wait. It walks away. Fire and forget, baby.]*
 //!
 //! This module re-exports the sink-only Meilisearch backend.
-//! No source (yet). Meilisearch is a write-mostly destination for now.
+//! Sink-only backend. Meilisearch source support tracked separately.
 //!
 //! 🦆 The duck doesn't search. The duck finds.
 

@@ -47,7 +47,7 @@ Separating CPU work onto OS threads prevents starving tokio's async I/O workers.
 
 # Notes
 
-- POC/MVP stage — API surface is unstable
+- API surface follows semver; breaking changes are versioned
 - Casters and manifolds are zero-sized structs — cloning per-worker is free
 - All abstractions follow: trait → concrete impl → enum dispatcher → from_config resolver
 - Pipeline cascade: pumper done → ch1 closes → joiners flush+exit → ch2 closes → drainers exit

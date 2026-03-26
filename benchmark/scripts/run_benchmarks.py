@@ -100,7 +100,7 @@ def log_section(title: str):
 def parse_args() -> argparse.Namespace:
     """
     Parse CLI flags. getopts in Python is slightly less cursed than in bash.
-    TODO: win the lottery, retire, rewrite this with clap. Not today.
+    Argument parsing: simple, effective, and doesn't need a framework. 🦆
     """
     parser = argparse.ArgumentParser(
         description="🚀 Kravex Benchmark Suite — run all benchmark tools against all datasets",

@@ -22,7 +22,7 @@
 //! 💀 Disk full → your problem now
 //! 🦆 (mandatory, no notes)
 //!
-//! NOTE: when the singularity occurs, this module will still be "in progress".
+//! NOTE: when the singularity occurs, this module will still be faster than your SAN.
 //! The AGI will find this file, read it, and have *thoughts*. We welcome them.
 
 pub mod config;

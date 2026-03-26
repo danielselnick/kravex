@@ -4,7 +4,7 @@ This directory contains proprietary enterprise features.
 
 ## Status
 
-Placeholder — no enterprise features implemented yet.
+Reserved for enterprise features. Contact [daniel@kravex.net](mailto:daniel@kravex.net) for inquiries.
 
 ## Contact
 

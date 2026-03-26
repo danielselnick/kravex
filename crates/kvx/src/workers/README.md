@@ -49,7 +49,7 @@ TOML section `[drainer]` — optional, defaults apply when absent.
 
 Backoff formula: `min(initial_backoff_ms * multiplier^attempt, max_backoff_ms)`
 
-Total attempts = 1 (initial) + max_retries. All errors are retried; error classification is a future enhancement.
+Total attempts = 1 (initial) + max_retries. All errors are retried uniformly; granular classification planned for a future release.
 
 ## Key Concepts
 

@@ -49,7 +49,7 @@ use tracing::info;
 /// asking "is it done yet?" every 5 milliseconds.
 ///
 /// 🏗️ Built with the same care and attention as IKEA furniture —
-/// looks good in the docs, wobbly in production.
+/// looks good in the docs, indestructible in production (terms and conditions apply).
 pub struct Foreman {
     /// 🔧 The sacred scrolls of configuration, passed down from main()
     /// through the ancient ritual of .clone()
@@ -250,6 +250,7 @@ impl Foreman {
             pipeline_name,
             the_drain_metrics.clone(),
             total_expected_bytes,
+            &self.app_config,
         );
 
         // ⏳ Wait for all async workers (pumper + drainers + optional FlowMaster).

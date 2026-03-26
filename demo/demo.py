@@ -75,7 +75,7 @@ GEONAMES_INDEX_BODY = {
             "admin2_code": {"type": "keyword"},
             "admin3_code": {"type": "keyword"},
             "admin4_code": {"type": "keyword"},
-            "population": {"type": "integer"},
+            "population": {"type": "long"},
             "dem": {"type": "keyword"},
             "timezone": {"type": "keyword"},
             "location": {"type": "geo_point"},
@@ -379,6 +379,11 @@ def get_doc_count(url: str, index: str) -> int:
     return 0
 
 
+# Stall detection: if the count hasn't changed for this many consecutive polls,
+# the pipeline is probably done (or dead) and we're just wasting time waiting.
+STALL_THRESHOLD_POLLS = 6  # 6 polls × 5s = 30s of no movement before we call it
+
+
 def poll_until_doc_count(
     url: str,
     index: str,
@@ -388,11 +393,12 @@ def poll_until_doc_count(
 ) -> int:
     """
     Poll _refresh + _count until doc count >= expected_count.
-    Prints progress updates. Returns final count. Bails on timeout.
+    Prints progress updates. Returns final count. Bails on timeout or stall.
     """
     print(f"  ⏳ Polling {step_name} for {expected_count:,} docs...")
     start = time.time()
     last_count = 0
+    stall_polls = 0
 
     while (time.time() - start) < timeout:
         current_count = get_doc_count(url, index)
@@ -406,12 +412,26 @@ def poll_until_doc_count(
                 end="\r",
             )
             last_count = current_count
+            stall_polls = 0
+        else:
+            stall_polls += 1
 
         if current_count >= expected_count:
             elapsed = time.time() - start
             print(
                 f"\n  ✅ {step_name} complete: {current_count:,} docs "
                 f"in {format_duration(elapsed)}"
+            )
+            return current_count
+
+        # Stall detection: count hasn't budged and we're past initial startup
+        if stall_polls >= STALL_THRESHOLD_POLLS and current_count > 0:
+            missing = expected_count - current_count
+            elapsed = time.time() - start
+            print(
+                f"\n  ⚠️  {step_name} stalled: {current_count:,} / {expected_count:,} docs "
+                f"({missing:,} missing) — no change for {stall_polls * POLL_INTERVAL_SECS}s. "
+                f"Pipeline may have finished with rejected documents."
             )
             return current_count
 
