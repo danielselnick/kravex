@@ -46,10 +46,8 @@
 | Sink | Manifold | Wire Format |
 |---|---|---|
 | Elasticsearch | NdjsonManifold | `item\nitem\n` |
-| OpenObserve | NdjsonManifold | `item\nitem\n` |
 | File | NdjsonManifold | `item\nitem\n` |
 | InMemory | JsonArrayManifold | `[item, item]` |
-| Meilisearch | JsonArrayManifold | `[item, item]` |
 
 ## Key Concepts
 

@@ -34,7 +34,7 @@ use super::config::ElasticsearchSourceConfig;
 ///
 /// Extracts documents from an Elasticsearch index using PIT (Point In Time) + `search_after`
 /// pagination. Each call to `pump()` returns a raw `_search` response envelope that the
-/// downstream PitToBulk or PitToJson caster knows how to dissect.
+/// downstream PitToBulk caster knows how to dissect.
 ///
 /// Think of it as a library card that lets you read one shelf at a time, except the library
 /// is a distributed system and the shelves keep getting rebalanced by a shard allocator.
@@ -60,7 +60,7 @@ impl Source for ElasticsearchSource {
     // Nth call: uses search_after cursor from last hit, returns Page
     // Final: hits.hits is empty, closes PIT, returns None (EOF)
     //
-    // The raw _search response envelope is returned as-is — PitToBulk/PitToJson
+    // The raw _search response envelope is returned as-is — PitToBulk
     // downstream know how to extract hits from the `{"hits":{"hits":[...]}}` structure.
     async fn pump(&mut self) -> Result<Option<Page>> {
         // -- 💀 "Are we there yet?" "We were there 3 calls ago." — backseat pagination

@@ -68,9 +68,7 @@ impl ManifoldBackend {
     /// | SinkConfig      | Manifold          | Format          |
     /// |-----------------|-------------------|-----------------|
     /// | Elasticsearch   | NdjsonManifold    | `item\nitem\n`  |
-    /// | OpenObserve     | NdjsonManifold    | `item\nitem\n`  |
     /// | File            | NdjsonManifold    | `item\nitem\n`  |
-    /// | Meilisearch     | JsonArrayManifold | `[item,item]`   |
     /// | InMemory        | JsonArrayManifold | `[item,item]`   |
     ///
     /// 🧠 Format follows the sink, not the source. The sink decides the wire format.
@@ -79,12 +77,8 @@ impl ManifoldBackend {
         match sink {
             // -- 📡 ES bulk requires NDJSON — action+source pairs, trailing \n
             SinkConfig::Elasticsearch(_) => Self::Ndjson(NdjsonManifold),
-            // -- 📡 OpenObserve bulk is ES-compatible — same NDJSON wire format, same manifold
-            SinkConfig::OpenObserve(_) => Self::Ndjson(NdjsonManifold),
             // -- 📡 File sinks: NDJSON — one doc per line, trailing \n, everyone's happy
             SinkConfig::File(_) => Self::Ndjson(NdjsonManifold),
-            // -- 🔍 Meilisearch: JSON array — `POST /indexes/{uid}/documents` expects `[doc1,doc2]`
-            SinkConfig::Meilisearch(_) => Self::JsonArray(JsonArrayManifold),
             // -- 📦 InMemory: JSON array — test assertions want `[doc1,doc2]` not `doc1\ndoc2\n`
             SinkConfig::InMemory(_) => Self::JsonArray(JsonArrayManifold),
         }
@@ -127,21 +121,6 @@ mod tests {
         let config = SinkConfig::InMemory(());
         let manifold = ManifoldBackend::from_sink_config(&config);
         assert!(matches!(manifold, ManifoldBackend::JsonArray(_)));
-    }
-
-    #[test]
-    fn backend_the_one_where_openobserve_resolves_to_ndjson() {
-        use crate::backends::open_observe::OpenObserveSinkConfig;
-        let config = SinkConfig::OpenObserve(OpenObserveSinkConfig {
-            url: "http://localhost:5080".into(),
-            org: "default".into(),
-            stream: "test-stream".into(),
-            username: None,
-            password: None,
-            common_config: Default::default(),
-        });
-        let manifold = ManifoldBackend::from_sink_config(&config);
-        assert!(matches!(manifold, ManifoldBackend::Ndjson(_)));
     }
 
     #[test]

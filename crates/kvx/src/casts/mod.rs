@@ -24,13 +24,9 @@
 
 pub mod passthrough;
 pub mod ndjson_to_bulk;
-pub mod ndjson_split;
 pub mod pit_to_bulk;
-pub mod pit_to_json;
 use ndjson_to_bulk::NdJsonToBulk;
-use ndjson_split::NdJsonSplit;
 use pit_to_bulk::PitToBulk;
-use pit_to_json::PitToJson;
 
 use crate::config::{SourceConfig, SinkConfig};
 use anyhow::Result;
@@ -58,14 +54,10 @@ pub trait Caster: std::fmt::Debug {
 pub enum PageToEntriesCaster {
     // -- 📡 NDJSON raw docs → ES bulk action+source pairs
     NdJsonToBulk(ndjson_to_bulk::NdJsonToBulk),
-    // -- 🔪 NDJSON raw docs → individual JSON entries (no bulk headers, for Meilisearch)
-    NdJsonSplit(ndjson_split::NdJsonSplit),
     // -- 🚶 Identity cast — feed passes through unchanged, like TSA PreCheck for data
     Passthrough(passthrough::Passthrough),
     // -- 📡🎭 ES _search PIT response → _bulk NDJSON (extracts hits from envelope)
     PitToBulk(pit_to_bulk::PitToBulk),
-    // -- 🔍🎭 ES _search PIT response → raw JSON entries (for Meilisearch, no bulk headers)
-    PitToJson(pit_to_json::PitToJson),
 }
 
 impl Caster for PageToEntriesCaster {
@@ -74,10 +66,8 @@ impl Caster for PageToEntriesCaster {
         // -- 🎭 Dispatch to the concrete caster — "choose your fighter" but for data formats
         match self {
             Self::NdJsonToBulk(t) => t.cast(page),
-            Self::NdJsonSplit(t) => t.cast(page),
             Self::Passthrough(t) => t.cast(page),
             Self::PitToBulk(t) => t.cast(page),
-            Self::PitToJson(t) => t.cast(page),
         }
     }
 }
@@ -94,12 +84,10 @@ impl PageToEntriesCaster {
     ///
     /// The (SourceConfig, SinkConfig) pair determines which caster to use:
     /// - File → Elasticsearch = NdJsonToBulk (the flagship pair)
-    /// - File → Meilisearch = NdJsonSplit (split NDJSON lines, no bulk headers)
     /// - File → File = Passthrough
     /// - InMemory → InMemory = Passthrough (testing)
-    /// - InMemory → Meilisearch = Passthrough (testing)
     /// - Elasticsearch → File = Passthrough (ES dump to file)
-    /// - Elasticsearch → Meilisearch = PitToJson (extract _source, no bulk headers)
+    /// - Elasticsearch → Elasticsearch = PitToBulk (cross-cluster migration)
     ///
     /// # Panics
     /// 💀 Panics if the `(source, sink)` pair has no caster implementation.
@@ -113,17 +101,10 @@ impl PageToEntriesCaster {
                 Self::NdJsonToBulk(NdJsonToBulk {})
             }
 
-            // -- 🔍🔪 File source → Meilisearch sink: split NDJSON lines into individual entries.
-            // -- No bulk headers. Just the raw docs. Meilisearch likes its JSON naked.
-            (SourceConfig::File(_), SinkConfig::Meilisearch(_)) => {
-                Self::NdJsonSplit(NdJsonSplit)
-            }
-
             // -- 🚶 Passthrough pairs: same format, no conversion needed.
-            // -- File→File, InMemory→InMemory, InMemory→Meilisearch, ES→File — just move the bytes.
+            // -- File→File, InMemory→InMemory, ES→File — just move the bytes.
             (SourceConfig::File(_), SinkConfig::File(_))
             | (SourceConfig::InMemory(_), SinkConfig::InMemory(_))
-            | (SourceConfig::InMemory(_), SinkConfig::Meilisearch(_))
             | (SourceConfig::Elasticsearch(_), SinkConfig::File(_)) => {
                 Self::Passthrough(passthrough::Passthrough)
             }
@@ -132,26 +113,6 @@ impl PageToEntriesCaster {
             // -- "One does not simply walk into Elasticsearch without a bulk action line." — Boromir, probably
             (SourceConfig::Elasticsearch(_), SinkConfig::Elasticsearch(_)) => {
                 Self::PitToBulk(PitToBulk)
-            }
-
-            // -- 🔍🎭 ES source → Meilisearch sink: PIT response → raw JSON entries (no bulk headers)
-            // -- "Do you ever feel like you're just extracting _source into the void?" — ES hit, in therapy
-            (SourceConfig::Elasticsearch(_), SinkConfig::Meilisearch(_)) => {
-                Self::PitToJson(PitToJson)
-            }
-
-            // -- 📡 OpenObserve sink: ES-compatible bulk format, same casters apply.
-            // -- "In a world where APIs were compatible... one sink reused all the casters." 🎬
-            (SourceConfig::File(_), SinkConfig::OpenObserve(_)) => {
-                Self::NdJsonToBulk(NdJsonToBulk {})
-            }
-            // -- 📡🎭 ES source → OpenObserve sink: same PIT-to-bulk dance, different venue
-            (SourceConfig::Elasticsearch(_), SinkConfig::OpenObserve(_)) => {
-                Self::PitToBulk(PitToBulk)
-            }
-            // -- 🧪 InMemory → OpenObserve: testing path, passthrough all the way
-            (SourceConfig::InMemory(_), SinkConfig::OpenObserve(_)) => {
-                Self::Passthrough(passthrough::Passthrough)
             }
 
             // -- 💀 Unimplemented pairs: panic with context.
@@ -293,79 +254,6 @@ mod tests {
         assert!(!the_output.is_empty(), "Cast output should not be empty for multi-doc feed 🎯");
 
         Ok(())
-    }
-
-    /// 🧪 File→OpenObserve resolves to NdJsonToBulk — same bulk format as ES, reuse all the things.
-    #[test]
-    fn the_one_where_file_to_openobserve_resolves_to_ndjson_to_bulk() -> Result<()> {
-        use crate::backends::open_observe::OpenObserveSinkConfig;
-        let source = SourceConfig::File(FileSourceConfig {
-            file_name: "rally_export.json".to_string(),
-            common_config: CommonSourceConfig::default(),
-        });
-        let sink = SinkConfig::OpenObserve(OpenObserveSinkConfig {
-            url: "http://localhost:5080".to_string(),
-            org: "default".to_string(),
-            stream: "rally".to_string(),
-            username: None,
-            password: None,
-            common_config: CommonSinkConfig::default(),
-        });
-
-        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
-        assert!(
-            matches!(the_caster, PageToEntriesCaster::NdJsonToBulk(_)),
-            "File → OpenObserve should resolve to NdJsonToBulk — same wire format as ES 🏎️"
-        );
-
-        Ok(())
-    }
-
-    /// 🧪 ES→OpenObserve resolves to PitToBulk — PIT response to bulk, different destination same dance.
-    #[test]
-    fn the_one_where_es_to_openobserve_resolves_to_pit_to_bulk() -> Result<()> {
-        use crate::backends::open_observe::OpenObserveSinkConfig;
-        let source = SourceConfig::Elasticsearch(ElasticsearchSourceConfig {
-            url: "http://source-cluster:9200".to_string(),
-            index: "test-index".to_string(),
-            username: None,
-            password: None,
-            api_key: None,
-            common_config: CommonSourceConfig::default(),
-        });
-        let sink = SinkConfig::OpenObserve(OpenObserveSinkConfig {
-            url: "http://localhost:5080".to_string(),
-            org: "default".to_string(),
-            stream: "migrated".to_string(),
-            username: None,
-            password: None,
-            common_config: CommonSinkConfig::default(),
-        });
-
-        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
-        assert!(
-            matches!(the_caster, PageToEntriesCaster::PitToBulk(_)),
-            "ES → OpenObserve should resolve to PitToBulk 🎭"
-        );
-
-        Ok(())
-    }
-
-    /// 🧪 InMemory→OpenObserve resolves to Passthrough — testing path, no conversion needed.
-    #[test]
-    fn the_one_where_inmemory_to_openobserve_resolves_to_passthrough() {
-        use crate::backends::open_observe::OpenObserveSinkConfig;
-        let source = SourceConfig::InMemory(());
-        let sink = SinkConfig::OpenObserve(OpenObserveSinkConfig {
-            url: "http://localhost:5080".to_string(),
-            org: "default".to_string(),
-            stream: "test".to_string(),
-            username: None,
-            password: None,
-            common_config: CommonSinkConfig::default(),
-        });
-        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
-        assert!(matches!(the_caster, PageToEntriesCaster::Passthrough(_)));
     }
 
     /// 🧪 ES→ES resolves to PitToBulk — the PIT response caster for cross-cluster migration.

@@ -9,7 +9,7 @@ Reads documents from Elasticsearch using **PIT (Point In Time) + search_after** 
 
 - Opens a PIT snapshot on the configured index at first `pump()` call
 - Issues `_search` requests with `search_after` cursors for deep pagination
-- Returns raw `_search` response envelopes as `Page` — downstream casters (PitToBulk, PitToJson) extract hits
+- Returns raw `_search` response envelopes as `Page` — downstream caster (PitToBulk) extracts hits
 - Closes the PIT on exhaustion (best-effort — PIT auto-expires after `keep_alive`)
 - Sort order: `_doc` ascending (most efficient for bulk reads)
 - Requires ES 7.10+ (PIT API)
@@ -77,6 +77,6 @@ BulkResponse → { errors: bool, items: Vec<BulkItemWrapper> } — serde types f
 BulkItemResult → { status: u16, error: Option<BulkItemError> } — per-document outcome
 ElasticsearchSourceConfig → CommonSourceConfig (embedded) → max_batch_size_docs, max_batch_size_bytes
 ElasticsearchSinkConfig → CommonSinkConfig (embedded) → max_request_size_bytes
-PIT + search_after → Page (raw _search envelope) → PitToBulk/PitToJson caster → Entry → Manifold → Sink
+PIT + search_after → Page (raw _search envelope) → PitToBulk caster → Entry → Manifold → Sink
 _bulk API ← Payload (NDJSON action+doc pairs) ← NdjsonManifold ← Entry ← PitToBulk
 ```

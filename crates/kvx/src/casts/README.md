@@ -20,12 +20,7 @@ Feed format transformation layer. A Caster converts raw feeds from a Source into
 |---|---|---|
 | `Passthrough` | Any → same format | Identity — feed passes through unchanged |
 | `NdJsonToBulk` | File → Elasticsearch | Wraps each NDJSON line with a `_bulk` action line |
-| `NdJsonSplit` | File → Meilisearch | Splits NDJSON lines into individual entries (no bulk headers) |
 | `PitToBulk` | Elasticsearch → Elasticsearch | Extracts hits from PIT search response, emits `_bulk` NDJSON |
-| `PitToJson` | Elasticsearch → Meilisearch | Extracts `_source` from PIT hits as raw JSON entries (no bulk headers) |
-| `NdJsonToBulk` | File → OpenObserve | Wraps each NDJSON line with a `_bulk` action line |
-| `PitToBulk` | Elasticsearch → OpenObserve | Extracts hits from PIT search response, emits `_bulk` NDJSON |
-| `Passthrough` | InMemory → OpenObserve | Identity — feed passes through unchanged |
 
 ## Resolution
 
@@ -39,8 +34,7 @@ Caster selection is determined by the **source x sink config** combination at st
 ## Knowledge Graph
 
 ```
-Caster trait → PageToEntriesCaster enum → Passthrough | NdJsonToBulk | NdJsonSplit | PitToBulk | PitToJson
+Caster trait → PageToEntriesCaster enum → Passthrough | NdJsonToBulk | PitToBulk
 PageToEntriesCaster → resolved by from_configs(SourceConfig, SinkConfig)
-OpenObserve sink → reuses NdJsonToBulk, PitToBulk, Passthrough (ES-compatible bulk API)
 Caster → consumed by Manifold during join()
 ```
