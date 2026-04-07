@@ -3,7 +3,7 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
-//! 🔧 Regulator configuration — the TOML knobs for PID-controlled throttling.
+//! 🔧 Regulator configuration — the TOML knobs for throttle control.
 //!
 //! 📡 Extracted from regulators.rs so all config options live in one discoverable place.
 //! Like a thermostat manual, except people actually read this one. Maybe. 🦆
@@ -16,43 +16,6 @@ use serde::Deserialize;
 // 🔧 RegulatorConfig — TOML-friendly configuration
 // ============================================================
 
-/// 🔧 Configuration for the regulator system, deserialized from TOML `[regulator]` section.
-///
-/// 📜 Example TOML:
-/// ```toml
-/// [regulator]
-/// target_cpu = 75.0
-/// poll_interval_secs = 3
-/// min_request_size_bytes = 131072
-/// max_request_size_bytes = 67108864
-/// initial_output_bytes = 4194304
-/// ```
-///
-/// 🧠 If this section is absent from config, no regulator is created and the pipeline
-/// runs at fixed max_request_size_bytes from the sink config. Business as usual. 🦆
-#[derive(Debug, Deserialize, Clone)]
-pub struct CpuRegulatorConfig {
-    /// 🎯 Target CPU percent for the sink cluster (default: 75.0)
-    #[serde(default = "default_target_cpu")]
-    pub target_cpu: f64,
-
-    /// ⏱️ How often to poll node stats, in seconds (default: 3)
-    #[serde(default = "default_poll_interval_secs")]
-    pub poll_interval_secs: u64,
-
-    /// 📏 Minimum request size bytes — floor for PID output (default: 128 KiB)
-    /// The pipeline won't throttle below this — prevents stalling. 🛑
-    #[serde(default = "default_min_request_size_bytes")]
-    pub min_request_size_bytes: usize,
-
-    /// 📊 Initial output bytes — starting flow rate before first regulation (default: 4 MiB)
-    /// 🧠 Also used to initialize the FlowKnob (Arc<AtomicUsize>) so joiners start at this value.
-    #[serde(default = "default_initial_output_bytes")]
-    pub initial_output_bytes: usize,
-}
-
-fn default_target_cpu() -> f64 { 75.0 }
-fn default_poll_interval_secs() -> u64 { 3 }
 fn default_min_request_size_bytes() -> usize { 128 * 1024 } // 📏 128 KiB
 fn default_initial_output_bytes() -> usize { 4 * 1024 * 1024 } // 📊 4 MiB
 
@@ -71,9 +34,9 @@ pub struct StaticRegulatorConfig {
 /// initial_output_bytes = 4194304
 /// ```
 ///
-/// 🧠 The PID math is identical to CpuPressure — setpoint is target latency instead of CPU %.
+/// 🧠 PID math: setpoint is target latency.
 /// High latency = overloaded → PID reduces flow. Low latency = headroom → PID increases flow.
-/// Same error direction: `error = setpoint - reading`. No inversion needed. 🦆
+/// Error direction: `error = setpoint - reading`. No inversion needed. 🦆
 #[derive(Debug, Deserialize, Clone)]
 pub struct LatencyRegulatorConfig {
     /// 🎯 Target drain latency in ms — the sweet spot where the sink is happy (default: 200ms)

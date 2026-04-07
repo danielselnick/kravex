@@ -349,7 +349,7 @@ impl Regulate for ThroughputSeeker {
     ///
     /// DrainResult → compute throughput, run circuit breaker + hill climber.
     /// Error → immediate halve + cooldown + reset.
-    /// CpuValue/LatencyMs → politely ignored. Not our department. 📋🦆
+    /// Error → immediate halve + cooldown. Everything else is DrainResult. 📋🦆
     fn regulate(&mut self, reading: GaugeReading, _since_last_checked_ms: Duration) -> f64 {
         match reading {
             GaugeReading::DrainResult {
@@ -367,10 +367,6 @@ impl Regulate for ThroughputSeeker {
                 self.on_drain_complete(the_throughput)
             }
             GaugeReading::Error() => self.on_error(),
-            GaugeReading::CpuValue(_) | GaugeReading::LatencyMs(_) => {
-                // 🤷 Not our signal — return current size unchanged, like a cat ignoring commands
-                self.the_current_request_size
-            }
         }
     }
 }
@@ -675,28 +671,21 @@ mod tests {
         );
     }
 
-    /// 🧪 The one where CpuValue and LatencyMs are politely ignored.
-    /// ThroughputSeeker only cares about DrainResult. Everything else gets the cold shoulder.
-    /// Like a cat when you call its name. 🐱🦆
+    /// 🧪 The one where Error readings trigger AIMD halving.
+    /// ThroughputSeeker: "Error? Say less. Halving immediately." 📉🦆
     #[test]
-    fn the_one_where_irrelevant_readings_are_ignored() {
+    fn the_one_where_error_readings_trigger_aimd_halving() {
         let mut the_seeker = ThroughputSeeker::new(&test_config(), 64_000_000.0);
 
         let the_initial = the_seeker.the_current_request_size;
 
-        // 🤷 Feed CPU and Latency readings — should be ignored entirely
-        let the_after_cpu = feed(&mut the_seeker, GaugeReading::CpuValue(95));
-        let the_after_latency = feed(&mut the_seeker, GaugeReading::LatencyMs(999));
+        // 💀 Feed an Error — should halve
+        let the_after_error = feed(&mut the_seeker, GaugeReading::Error());
 
         assert!(
-            (the_after_cpu - the_initial).abs() < f64::EPSILON,
-            "🎯 CpuValue should not change request size — {} vs {}",
-            the_after_cpu, the_initial
-        );
-        assert!(
-            (the_after_latency - the_initial).abs() < f64::EPSILON,
-            "🎯 LatencyMs should not change request size — {} vs {}",
-            the_after_latency, the_initial
+            the_after_error < the_initial,
+            "🎯 Error should reduce request size — {} vs {}",
+            the_after_error, the_initial
         );
     }
 }

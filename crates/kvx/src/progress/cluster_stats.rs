@@ -99,7 +99,6 @@ impl ClusterStatsPoller {
             ClusterAuth::None
         };
 
-        // -- 🌐 build HTTP client with 5s timeout — same as pressure_gauge, because consistency
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(5))
             .build()

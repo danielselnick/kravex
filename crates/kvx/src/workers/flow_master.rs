@@ -13,7 +13,7 @@
 //!
 //! 🧠 Knowledge graph:
 //! ```text
-//! Drainer(s) --[ch3: GaugeReading::LatencyMs]--> FlowMaster
+//! Drainer(s) --[ch3: GaugeReading::DrainResult]--> FlowMaster
 //!   → regulator.regulate(reading, dt) → new flow rate (bytes)
 //!     → FlowKnob: Arc<AtomicUsize> (effective max_request_size_bytes)
 //!       → Joiner reads flow knob on every flush check
@@ -34,7 +34,7 @@ use tracing::{debug, info};
 
 use crate::GaugeReading;
 use crate::regulators::{Regulate, Regulators};
-use crate::regulators::pressure_gauge::FlowKnob;
+use crate::FlowKnob;
 use super::Worker;
 
 /// 🎛️ The FlowMaster: receives gauge readings, feeds a PID regulator, adjusts the FlowKnob.
@@ -117,7 +117,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
-    use crate::regulators::{ByteValue, CpuPressure};
+    use crate::regulators::{ByteValue, PidController};
 
     /// 🧪 The one where FlowMaster receives a reading and adjusts the knob.
     /// Like a thermostat that actually listens. Unlike my office thermostat. 🌡️🦆
@@ -125,7 +125,7 @@ mod tests {
     async fn the_one_where_flow_master_adjusts_the_knob() {
         // 🔧 Set up: PID with 200ms setpoint, 128KiB min, 64MiB max, start at 4MiB
         let the_knob: FlowKnob = Arc::new(AtomicUsize::new(4_194_304));
-        let the_regulator = Regulators::CpuPressure(CpuPressure::new(
+        let the_regulator = Regulators::Pid(PidController::new(
             200.0, 131_072.0, 67_108_864.0, 4_194_304.0,
         ));
 
@@ -136,7 +136,7 @@ mod tests {
         let the_handle = the_flow_master.start();
 
         // 📡 Send a low-latency reading — PID should increase flow (headroom)
-        tx.send(GaugeReading::LatencyMs(50)).await.unwrap();
+        tx.send(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 50 }).await.unwrap();
 
         // 💤 Give FlowMaster a moment to process
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -183,7 +183,7 @@ mod tests {
     async fn the_one_where_high_latency_reduces_the_flow() {
         let the_initial_flow = 4_194_304_usize;
         let the_knob: FlowKnob = Arc::new(AtomicUsize::new(the_initial_flow));
-        let the_regulator = Regulators::CpuPressure(CpuPressure::new(
+        let the_regulator = Regulators::Pid(PidController::new(
             200.0, 131_072.0, 67_108_864.0, the_initial_flow as f64,
         ));
 
@@ -193,7 +193,7 @@ mod tests {
 
         // 📡 Send sustained high-latency readings — PID should reduce flow
         for _ in 0..20 {
-            tx.send(GaugeReading::LatencyMs(500)).await.unwrap();
+            tx.send(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 500 }).await.unwrap();
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 

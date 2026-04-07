@@ -32,7 +32,7 @@
 use crate::{Entry, Page, Payload};
 use crate::casts::{Caster, PageToEntriesCaster};
 use crate::manifolds::{Manifold, ManifoldBackend};
-use crate::regulators::pressure_gauge::FlowKnob;
+use crate::FlowKnob;
 use anyhow::{Context, Result};
 use async_channel::{Receiver, Sender};
 use std::sync::atomic::Ordering;

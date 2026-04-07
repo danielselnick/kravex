@@ -67,17 +67,16 @@ index = "test-123"                      # Optional — each doc can carry its ow
 max_request_size_bytes = 1000000        # 4 MiB — benchmark override (serde default: 10,485,760 / 10 MiB)
 
 # ============================================================
-# 🎚️  Regulator — PID-controlled adaptive throttling (optional)
+# 🎚️  FlowMaster — adaptive throttling (optional)
 # ============================================================
-# Absent → pipeline runs at fixed max_request_size_bytes. No PID. No drama.
-# Present → spawns manometer + flow_master, dynamically adjusts payload size
-# based on sink cluster CPU pressure.
+# Absent → pipeline runs at fixed max_request_size_bytes. No regulation. No drama.
+# Present → spawns flow_master, dynamically adjusts payload size
+# based on drain feedback (latency, throughput).
 
-#[flow_master.CPU]
-# target_cpu = 75.0                     # 🎯 Target CPU % for sink cluster
-# poll_interval_secs = 1               # ⏱️  Node stats poll interval (seconds)
+#[flow_master.Latency]
+# set_point_latency_ms = 200            # 🎯 Target drain latency in ms
 # min_request_size_bytes = 131072       # 📏 PID floor: 128 KiB
-# initial_output_bytes = 1024000        # 📊 Starting flow rate: 4 MiB
+# initial_output_bytes = 4194304        # 📊 Starting flow rate: 4 MiB
 
 #[flow_master.Latency]
 # set_point_latency_ms = 200            # 🎯 Target drain latency (ms)

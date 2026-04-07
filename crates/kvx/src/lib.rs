@@ -30,7 +30,6 @@ use crate::foreman::Foreman;
 use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
 use crate::manifolds::ManifoldBackend;
 use crate::casts::PageToEntriesCaster;
-use crate::regulators::pressure_gauge::FlowKnob;
 use crate::workers::FlowMasterConfig;
 use anyhow::{Context, Result};
 use std::ops::Deref;
@@ -80,11 +79,9 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     // 🧠 FlowMasterConfig determines the initial value:
     //   - Static: fixed at output_bytes, never changes (no FlowMaster spawned)
     //   - Latency: starts at initial_output_bytes, PID adjusts based on drain latency
-    //   - CPU: starts at initial_output_bytes, PID adjusts based on cluster CPU pressure
     let the_initial_flow = match &app_config.flow_master {
         FlowMasterConfig::Static(cfg) => cfg.output_bytes,
         FlowMasterConfig::Latency(cfg) => cfg.initial_output_bytes,
-        FlowMasterConfig::CPU(cfg) => cfg.initial_output_bytes,
         FlowMasterConfig::Throughput(cfg) => cfg.initial_output_bytes,
     };
     let the_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(the_initial_flow));
@@ -248,9 +245,13 @@ impl PartialEq<&str> for Entry {
     }
 }
 
+/// 🔧 The FlowKnob — a shared atomic valve that controls payload size.
+///
+/// The FlowMaster writes it. The joiners read it. Nobody else touches it.
+/// Like the office thermostat, except this one actually works. 🌡️
+pub type FlowKnob = Arc<AtomicUsize>;
+
 pub enum GaugeReading {
-    CpuValue(usize),
-    LatencyMs(usize),
     DrainResult { payload_bytes: u64, latency_ms: u64 },
     Error()
 }

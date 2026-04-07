@@ -13,7 +13,7 @@
 
 use serde::Deserialize;
 
-use crate::regulators::{CpuRegulatorConfig, LatencyRegulatorConfig, StaticRegulatorConfig, ThroughputSeekerConfig};
+use crate::regulators::{LatencyRegulatorConfig, StaticRegulatorConfig, ThroughputSeekerConfig};
 
 // ============================================================
 // 🔧 DrainerConfig — TOML-friendly retry configuration
@@ -82,7 +82,6 @@ fn default_max_backoff_ms() -> u64 { 30_000 }
 #[derive(Debug, Deserialize, Clone)]
 pub enum FlowMasterConfig {
     Static(StaticRegulatorConfig),
-    CPU(CpuRegulatorConfig),
     Latency(LatencyRegulatorConfig),
     Throughput(ThroughputSeekerConfig),
 }

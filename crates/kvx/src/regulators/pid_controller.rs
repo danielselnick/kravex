@@ -3,15 +3,15 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
-//! 🎬 *[INT. CONTROL ROOM — ALARMS BLARING]*
-//! *[A single dial labeled "CPU %" creeps past 80.]*
-//! *[The PID controller wakes. It has been training for this moment its entire lifecycle.]*
-//! *["Reduce the flow," it whispers. "Before the JVM GC eats us all."]*  🧵🔧🦆
+//! 🎬 *[INT. CONTROL ROOM — THE DIALS FLICKER]*
+//! *[A PID controller sits in the dark, watching readings scroll past.]*
+//! *[It doesn't know what it's regulating. It doesn't care. Error is error.]*
+//! *["Reduce the flow," it whispers. "The math demands it."]*  🧵🔧🦆
 //!
-//! 📦 CpuPressure — a PID controller that regulates payload size based on CPU pressure.
+//! 📦 PidController — a generic PID controller that regulates payload size based on a setpoint.
 //!
 //! 🧠 Knowledge graph:
-//! - Input: CPU usage percent (0.0–100.0), smoothed via EMA (α=0.25)
+//! - Input: a numeric reading (latency ms from DrainResult), smoothed via EMA (α=0.25)
 //! - Output: effective max request size in bytes, clamped to [min, max]
 //! - PID error = setpoint - smoothed_reading (positive = headroom, negative = overloaded)
 //! - Gains auto-tuned from output range ratio — no manual knob-twiddling required
@@ -28,7 +28,7 @@ use crate::{GaugeReading, regulators::Regulate};
 /// 0.25 = "I believe you, but I also believed the last three readings." 📊
 const EMA_ALPHA: f64 = 0.25;
 
-/// 🧮 PID controller that converts CPU pressure into a flow rate (bytes).
+/// 🧮 Generic PID controller that converts a reading into a flow rate (bytes).
 ///
 /// Like a thermostat, but instead of temperature it controls how much JSON
 /// we hurl at Elasticsearch before the JVM starts having Vietnam flashbacks
@@ -38,8 +38,8 @@ const EMA_ALPHA: f64 = 0.25;
 /// This means you don't need a PhD in control theory to use this.
 /// You just need a PhD in Rust lifetimes. Which is arguably harder.
 #[derive(Debug, Clone)]
-pub struct CpuPressure {
-    /// 🎯 Target CPU percent — the promised land we're trying to reach (default: 75.0)
+pub struct PidController {
+    /// 🎯 Target value — the promised land we're trying to reach
     setpoint: f64,
     /// 📏 Minimum output bytes — floor so we don't throttle to zero and stall the pipeline
     min_output: f64,
@@ -59,11 +59,11 @@ pub struct CpuPressure {
     integral_clamp: f64,
     /// 📉 Previous error — for computing derivative (rate of change)
     prev_error: f64,
-    /// 📊 EMA-smoothed CPU reading — because raw readings jitter like a chihuahua on espresso
+    /// 📊 EMA-smoothed reading — because raw readings jitter like a chihuahua on espresso
     ema_average: f64,
 }
 
-impl CpuPressure {
+impl PidController {
     /// 🏗️ Create a new PID controller with auto-tuned gains.
     ///
     /// "Give me a setpoint and a range, and I shall move the world."
@@ -116,8 +116,8 @@ impl CpuPressure {
     }
 }
 
-impl Regulate for CpuPressure {
-    /// 🔄 Feed a CPU pressure reading, get back an adjusted flow rate in bytes.
+impl Regulate for PidController {
+    /// 🔄 Feed a gauge reading, get back an adjusted flow rate in bytes.
     ///
     /// The PID loop in all its glory:
     /// 1. EMA smooth the raw reading (tame the jitter demon)
@@ -131,7 +131,6 @@ impl Regulate for CpuPressure {
     fn regulate(&mut self, reading: GaugeReading, since_last_checked_ms: Duration) -> f64 {
         // 🎰 Extract the number from the enum — or bail if it's an Error (hold steady, like a poker face)
         let reading_value = match reading {
-            GaugeReading::CpuValue(v) | GaugeReading::LatencyMs(v) => v as f64,
             GaugeReading::DrainResult { latency_ms, .. } => latency_ms as f64,
             GaugeReading::Error() => return self.output,
         };
@@ -181,7 +180,7 @@ mod tests {
     #[test]
     fn the_one_where_pid_initializes_without_existential_crisis() {
         // 🏗️ 75% CPU target, 128KiB min, 64MiB max, start at 4MiB
-        let the_controller = CpuPressure::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
+        let the_controller = PidController::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
 
         assert_eq!(the_controller.setpoint, 75.0, "🎯 Setpoint should be 75%");
         assert_eq!(the_controller.output, 4_194_304.0, "📊 Initial output should be 4 MiB");
@@ -195,11 +194,11 @@ mod tests {
     /// "The CPU is bored. Feed it more data." — every optimization engineer ever 🚀
     #[test]
     fn the_one_where_low_cpu_means_more_bytes() {
-        let mut the_controller = CpuPressure::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
+        let mut the_controller = PidController::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
         let the_starting_output = the_controller.output;
 
         // 📊 Feed it 50% CPU — well below 75% setpoint — should increase output
-        let the_new_flow = the_controller.regulate(GaugeReading::CpuValue(50), Duration::from_millis(3000));
+        let the_new_flow = the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 50 }, Duration::from_millis(3000));
 
         assert!(
             the_new_flow > the_starting_output,
@@ -212,11 +211,11 @@ mod tests {
     /// "The CPU is on fire. Stop feeding it. STOP." — the PID controller, calmly 🔥
     #[test]
     fn the_one_where_high_cpu_means_fewer_bytes() {
-        let mut the_controller = CpuPressure::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
+        let mut the_controller = PidController::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
 
         // 📊 First, pump output up by feeding low CPU readings — give it room to decrease
         for _ in 0..10 {
-            the_controller.regulate(GaugeReading::CpuValue(50), Duration::from_millis(3000));
+            the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 50 }, Duration::from_millis(3000));
         }
         let the_elevated_output = the_controller.output;
 
@@ -224,7 +223,7 @@ mod tests {
         // ⚠️ EMA needs several readings to overcome the low-CPU momentum,
         // so we pump 20 readings at 95% to let the PID fully respond. 🔥
         for _ in 0..20 {
-            the_controller.regulate(GaugeReading::CpuValue(95), Duration::from_millis(3000));
+            the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 95 }, Duration::from_millis(3000));
         }
 
         assert!(
@@ -240,11 +239,11 @@ mod tests {
     fn the_one_where_output_respects_the_guardrails() {
         let the_min = 131_072.0_f64;
         let the_max = 67_108_864.0_f64;
-        let mut the_controller = CpuPressure::new(75.0, the_min, the_max, 4_194_304.0);
+        let mut the_controller = PidController::new(75.0, the_min, the_max, 4_194_304.0);
 
         // 🚀 Feed it super low CPU — should try to max out but respect ceiling
         for _ in 0..100 {
-            the_controller.regulate(GaugeReading::CpuValue(10), Duration::from_millis(3000));
+            the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 10 }, Duration::from_millis(3000));
         }
         assert!(
             the_controller.output <= the_max,
@@ -254,7 +253,7 @@ mod tests {
 
         // 💀 Feed it super high CPU — should try to min out but respect floor
         for _ in 0..100 {
-            the_controller.regulate(GaugeReading::CpuValue(99), Duration::from_millis(3000));
+            the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 99 }, Duration::from_millis(3000));
         }
         assert!(
             the_controller.output >= the_min,
@@ -267,13 +266,13 @@ mod tests {
     /// The reading says 100%, then 0%, then 100% — the EMA says "chill." 📊🦆
     #[test]
     fn the_one_where_ema_smoothing_prevents_whiplash() {
-        let mut the_controller = CpuPressure::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
+        let mut the_controller = PidController::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
 
         // 📊 Alternate between extremes — EMA should dampen the oscillation
-        the_controller.regulate(GaugeReading::CpuValue(100), Duration::from_millis(3000));
+        the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 100 }, Duration::from_millis(3000));
         let after_high = the_controller.ema_average;
 
-        the_controller.regulate(GaugeReading::CpuValue(0), Duration::from_millis(3000));
+        the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 0 }, Duration::from_millis(3000));
         let after_low = the_controller.ema_average;
 
         // 📊 EMA should NOT be at 0 — it should still remember the 100 reading
@@ -294,10 +293,10 @@ mod tests {
     /// Because even PID controllers deserve NaN protection. 🛡️
     #[test]
     fn the_one_where_zero_dt_doesnt_explode() {
-        let mut the_controller = CpuPressure::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
+        let mut the_controller = PidController::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
 
         // 📊 Zero dt — derivative should be 0, no NaN, no panic
-        let the_result = the_controller.regulate(GaugeReading::CpuValue(80), Duration::from_millis(0));
+        let the_result = the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 80 }, Duration::from_millis(0));
         assert!(
             the_result.is_finite(),
             "🎯 Output should be finite even with zero dt — got {}",
@@ -310,18 +309,18 @@ mod tests {
     /// If it oscillates wildly, the gains are drunk. 📊🦆
     #[test]
     fn the_one_where_pid_finds_inner_peace_at_setpoint() {
-        let mut the_controller = CpuPressure::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
+        let mut the_controller = PidController::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
 
         // 📊 Feed exactly the setpoint for many iterations — should converge
         for _ in 0..100 {
-            the_controller.regulate(GaugeReading::CpuValue(75), Duration::from_millis(3000));
+            the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 75 }, Duration::from_millis(3000));
         }
 
         let the_settled_output = the_controller.output;
 
         // 📊 Run 20 more — output should barely change (steady state)
         for _ in 0..20 {
-            the_controller.regulate(GaugeReading::CpuValue(75), Duration::from_millis(3000));
+            the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 75 }, Duration::from_millis(3000));
         }
 
         let the_drift = (the_controller.output - the_settled_output).abs();
@@ -341,6 +340,6 @@ mod tests {
     #[should_panic(expected = "min_output")]
     fn the_one_where_inverted_bounds_trigger_existential_panic() {
         // 📏 min=1M, max=100 — floor above ceiling, like an Escher painting
-        CpuPressure::new(75.0, 1_000_000.0, 100.0, 500.0);
+        PidController::new(75.0, 1_000_000.0, 100.0, 500.0);
     }
 }

@@ -36,7 +36,7 @@ use crate::config::AppConfig;
 use crate::casts::PageToEntriesCaster;
 use crate::manifolds::ManifoldBackend;
 use crate::progress::{DrainMetrics, spawn_progress_reporter};
-use crate::regulators::pressure_gauge::FlowKnob;
+use crate::FlowKnob;
 use crate::regulators::Regulators;
 use crate::workers;
 use crate::workers::{FlowMasterConfig, Worker};
@@ -122,14 +122,6 @@ impl Foreman {
                 let (tx3, rx3) = async_channel::bounded::<GaugeReading>(256);
                 let the_regulator = Regulators::from_latency_config(
                     latency_config,
-                    the_sink_max_request_size_bytes,
-                );
-                Some((tx3, rx3, the_regulator))
-            }
-            FlowMasterConfig::CPU(cpu_config) => {
-                let (tx3, rx3) = async_channel::bounded::<GaugeReading>(256);
-                let the_regulator = Regulators::from_config(
-                    cpu_config,
                     the_sink_max_request_size_bytes,
                 );
                 Some((tx3, rx3, the_regulator))
