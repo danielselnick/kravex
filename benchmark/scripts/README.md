@@ -7,7 +7,7 @@ Shared Python utilities for Kravex demo and benchmark scripts.
 The Switzerland of the Kravex repo. Common functions extracted from `demo/scripts/` and `benchmark/scripts/` to eliminate duplication. One library to rule them all.
 
 # Knowledge Graph
-- `kvx_utils.py` → used by `demo/scripts/*.py` + `benchmark/scripts/*.py`
+- `kvx_utils.py` (in `benchmark/scripts/`) → used by `benchmark/scripts/*.py`
 - Index ops: `create_index`, `delete_index`, `get_doc_count`, `refresh_index`, `force_merge`, `reset_index`
 - Binary discovery: `find_kvx_binary`, `build_kvx_binary`, `find_or_build_kvx_binary`
 - Cluster health: `check_cluster_health` (polling with timeout)
@@ -23,6 +23,6 @@ The Switzerland of the Kravex repo. Common functions extracted from `demo/script
 - **Benchmark-optimal defaults**: 1 shard, 0 replicas, refresh=-1 for max ingest throughput
 
 # Notes for future reference
-- Import pattern: `sys.path.insert(0, str(REPO_ROOT))` then `from shared.kvx_utils import ...`
-- `_guess_project_root()` walks up from `shared/` to find `Cargo.toml`
+- Import pattern: `from kvx_utils import ...` (Python auto-adds script directory to sys.path)
+- `_guess_project_root()` walks up from `benchmark/scripts/` to find `Cargo.toml`
 - `MetricsSampler` uses daemon threads — no zombie cleanup needed

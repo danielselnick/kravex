@@ -15,8 +15,8 @@
 //!
 //! 🧠 Knowledge graph:
 //! - **Caster** trait: `fn cast(&self, feed: String) -> Result<String>`
-//! - **DocumentCaster** enum: dispatches to concrete casters (same pattern as ManifoldBackend)
-//! - Resolution: `DocumentCaster::from_configs(source, sink)` matches the pair
+//! - **PageToEntriesCaster** enum: dispatches to concrete casters (same pattern as ManifoldBackend)
+//! - Resolution: `PageToEntriesCaster::from_configs(source, sink)` matches the pair
 //!
 //! 🦆 The duck casts no shadow. Only feeds.
 //!
@@ -162,7 +162,7 @@ impl PageToEntriesCaster {
                 panic!(
                     "💀 No caster implemented for source {:?} → sink {:?}. \
                      This is the resolve() equivalent of 'new phone who dis.' \
-                     Add a variant to DocumentCaster, write the impl, add tests.",
+                     Add a variant to PageToEntriesCaster, write the impl, add tests.",
                     src, dst
                 )
             }
@@ -170,7 +170,7 @@ impl PageToEntriesCaster {
     }
 }
 
-/// 🧠 `DocumentCaster` dispatches to the concrete caster inside each variant.
+/// 🧠 `PageToEntriesCaster` dispatches to the concrete caster inside each variant.
 /// Same pattern as `impl Source for SourceBackend` in `backends.rs`.
 /// The borrow checker approves. The compiler inlines. Life is good. 🐄
 

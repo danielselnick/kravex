@@ -236,10 +236,10 @@ def find_or_build_kvx_binary(project_root: Optional[Path] = None) -> Path:
 def _guess_project_root() -> Path:
     """
     Walk up from this file to find the repo root (where Cargo.toml lives).
-    shared/ is at repo_root/shared/, so parent.parent gets us there.
+    benchmark/scripts/ is at repo_root/benchmark/scripts/, so parent.parent.parent gets us there.
     """
-    # -- 🔧 shared/kvx_utils.py → shared/ → repo_root/
-    candidate = Path(__file__).resolve().parent.parent
+    # -- 🔧 benchmark/scripts/kvx_utils.py → benchmark/scripts/ → benchmark/ → repo_root/
+    candidate = Path(__file__).resolve().parent.parent.parent
     if (candidate / "Cargo.toml").exists():
         return candidate
     # -- 🐛 Fallback: cwd. Hope for the best, prepare for the worst.

@@ -8,7 +8,7 @@ something profoundly boring but technically necessary: run every tool against
 every dataset and write the receipts.
 
 Replaces: run_all.sh, run_kravex.sh, run_esrally.sh, run_elasticdump.sh
-Uses shared/kvx_utils.py for index ops, metrics, and result recording.
+Uses kvx_utils.py for index ops, metrics, and result recording.
 
 Usage:
   python benchmark/scripts/run_benchmarks.py
@@ -35,7 +35,7 @@ BENCHMARK_DIR = SCRIPT_DIR.parent
 REPO_ROOT = BENCHMARK_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from shared.kvx_utils import (  # noqa: E402
+from kvx_utils import (  # noqa: E402
     MetricsSampler,
     check_cluster_health,
     extract_host_port,

@@ -65,7 +65,7 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     }
 
     // 🔄 Resolve the caster from source/sink config pair.
-    // 🧠 Knowledge graph: DocumentCaster::from_configs() matches (source, sink) → caster.
+    // 🧠 Knowledge graph: PageToEntriesCaster::from_configs() matches (source, sink) → caster.
     // File→ES = NdJsonToBulk, File→File = Passthrough, InMemory→InMemory = Passthrough, etc.
     let caster =
         PageToEntriesCaster::from_configs(&app_config.source_config, &app_config.sink_config);

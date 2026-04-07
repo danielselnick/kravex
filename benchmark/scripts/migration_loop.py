@@ -23,7 +23,7 @@ REPO_ROOT = BENCHMARK_DIR.parent
 CONFIGS_DIR = BENCHMARK_DIR / "configs" / "local"
 ESRALLY_TRACK = BENCHMARK_DIR / "esrally_tracks" / "geonames"
 
-sys.path.insert(0, str(REPO_ROOT / "shared"))
+sys.path.insert(0, str(SCRIPT_DIR))
 from kvx_utils import (
     check_cluster_health,
     reset_index,
