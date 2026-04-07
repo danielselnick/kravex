@@ -4,8 +4,10 @@ Kravex End-to-End Demo — Orchestrator
 ======================================
 Manages infrastructure and polls for kravex completion.
 The actual kravex execution lives in standalone shell scripts:
-  - file_to_esdb.sh  (Leg 1: geonames.json → Elasticsearch)
+  - file_to_esdb.sh  (Leg 1: dataset.json → Elasticsearch)
   - esdb_to_osdb.sh  (Leg 2: Elasticsearch → OpenSearch)
+
+Supports multiple datasets: geonames (11.4M), noaa (33.6M), pmc (574K).
 
 Usage: ./demo/demo.sh
    or: uv run --project demo demo/demo.py
@@ -32,54 +34,131 @@ import requests
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEMO_DIR = PROJECT_ROOT / "demo"
 DATASETS_DIR = PROJECT_ROOT / "datasets"
-GEONAMES_FILE = DATASETS_DIR / "geonames.json"
-GEONAMES_BZ2 = DATASETS_DIR / "geonames.json.bz2"
 COMPOSE_FILE = DEMO_DIR / "docker-compose-demo.yml"
 
 ES_URL = "http://localhost:19200"
 OS_URL = "http://localhost:19201"
-INDEX_NAME = "geonames"
 
 DEMO_PORTS = {19200: "Elasticsearch", 19201: "OpenSearch"}
 DEMO_CONTAINER_NAMES = {"kravex-demo-es", "kravex-demo-os"}
 
-EXPECTED_DOC_COUNT = 11_396_503
-
 # Polling config
 POLL_INTERVAL_SECS = 5
-MAX_WAIT_SECS = 1800  # 30 minutes — geonames is 11.4M docs, not a haiku
+MAX_WAIT_SECS = 1800  # 30 minutes — noaa is 33.6M docs, give it time
+
+# Abbreviated mode
+ABBREVIATED_FRACTION = 0.25
 
 # ============================================================================
-#  Geonames Index Definition (embedded)
+#  Dataset Registry
 # ============================================================================
-# Mappings lifted from benchmark/reset_index.sh. Settings tuned for ingest:
-# no replicas (single-node), refresh disabled (bulk throughput over freshness).
 
-GEONAMES_INDEX_BODY = {
-    "settings": {
-        "number_of_shards": 1,
-        "number_of_replicas": 0,
-        "refresh_interval": "-1",
+DATASETS = {
+    "geonames": {
+        "url": "https://rally-tracks.elastic.co/geonames/documents-2.json.bz2",
+        "expected_docs": 11_396_503,
+        "file": "geonames.json",
+        "description": "Geographic features (cities, mountains, lakes)",
     },
-    "mappings": {
-        "properties": {
-            "geonameid": {"type": "integer"},
-            "name": {"type": "text"},
-            "asciiname": {"type": "text"},
-            "alternatenames": {"type": "text"},
-            "feature_class": {"type": "keyword"},
-            "feature_code": {"type": "keyword"},
-            "country_code": {"type": "keyword"},
-            "cc2": {"type": "keyword"},
-            "admin1_code": {"type": "keyword"},
-            "admin2_code": {"type": "keyword"},
-            "admin3_code": {"type": "keyword"},
-            "admin4_code": {"type": "keyword"},
-            "population": {"type": "long"},
-            "dem": {"type": "keyword"},
-            "timezone": {"type": "keyword"},
-            "location": {"type": "geo_point"},
-        }
+    "noaa": {
+        "url": "https://rally-tracks.elastic.co/noaa/documents.json.bz2",
+        "expected_docs": 33_659_481,
+        "file": "noaa.json",
+        "description": "NOAA weather station observations",
+    },
+    "pmc": {
+        "url": "https://rally-tracks.elastic.co/pmc/documents.json.bz2",
+        "expected_docs": 574_199,
+        "file": "pmc.json",
+        "description": "PubMed Central journal articles",
+    },
+}
+
+# ============================================================================
+#  Index Mappings — per-dataset, tuned for ingest throughput
+# ============================================================================
+# Settings: single shard, no replicas, refresh disabled for max ingest speed.
+
+INDEX_MAPPINGS = {
+    "geonames": {
+        "settings": {
+            "number_of_shards": 1,
+            "number_of_replicas": 0,
+            "refresh_interval": "-1",
+        },
+        "mappings": {
+            "properties": {
+                "geonameid": {"type": "integer"},
+                "name": {"type": "text"},
+                "asciiname": {"type": "text"},
+                "alternatenames": {"type": "text"},
+                "feature_class": {"type": "keyword"},
+                "feature_code": {"type": "keyword"},
+                "country_code": {"type": "keyword"},
+                "cc2": {"type": "keyword"},
+                "admin1_code": {"type": "keyword"},
+                "admin2_code": {"type": "keyword"},
+                "admin3_code": {"type": "keyword"},
+                "admin4_code": {"type": "keyword"},
+                "population": {"type": "long"},
+                "dem": {"type": "keyword"},
+                "timezone": {"type": "keyword"},
+                "location": {"type": "geo_point"},
+            }
+        },
+    },
+    "noaa": {
+        "settings": {
+            "number_of_shards": 1,
+            "number_of_replicas": 0,
+            "refresh_interval": "-1",
+        },
+        "mappings": {
+            "properties": {
+                "date": {"type": "date", "format": "yyyy-MM-dd'T'HH:mm:ss"},
+                "TMIN": {"type": "float"},
+                "TMAX": {"type": "float"},
+                "TAVG": {"type": "float"},
+                "TOBS": {"type": "float"},
+                "PRCP": {"type": "float"},
+                "SNOW": {"type": "keyword"},
+                "SNWD": {"type": "keyword"},
+                "WESD": {"type": "float"},
+                "TRANGE": {"type": "float_range"},
+                "station": {
+                    "properties": {
+                        "name": {"type": "text"},
+                        "id": {"type": "keyword"},
+                        "state": {"type": "keyword"},
+                        "state_code": {"type": "keyword"},
+                        "country": {"type": "keyword"},
+                        "country_code": {"type": "keyword"},
+                        "elevation": {"type": "float"},
+                        "location": {"type": "geo_point"},
+                    }
+                },
+            }
+        },
+    },
+    "pmc": {
+        "settings": {
+            "number_of_shards": 1,
+            "number_of_replicas": 0,
+            "refresh_interval": "-1",
+        },
+        "mappings": {
+            "properties": {
+                "name": {"type": "keyword"},
+                "journal": {"type": "text"},
+                "date": {"type": "text"},
+                "volume": {"type": "keyword"},
+                "issue": {"type": "keyword"},
+                "accession": {"type": "keyword"},
+                "timestamp": {"type": "date", "format": "yyyy-MM-dd HH:mm:ss"},
+                "pmid": {"type": "keyword"},
+                "body": {"type": "text"},
+            }
+        },
     },
 }
 
@@ -108,38 +187,156 @@ class StepResult:
 
 
 # ============================================================================
-#  Pre-flight Checks
+#  Dataset Selection & Download
 # ============================================================================
 
 
-def check_dataset_exists() -> None:
-    """Verify geonames.json exists. Offer bz2 decompression if applicable."""
-    if GEONAMES_FILE.exists():
-        size_gb = GEONAMES_FILE.stat().st_size / (1024**3)
-        print(f"  ✅ Dataset found: {GEONAMES_FILE} ({size_gb:.1f} GB)")
-        return
+def select_demo_mode() -> bool:
+    """Ask user whether to run abbreviated (25%) or full dataset. Returns True for abbreviated."""
+    print("\n📦 Demo size:")
+    print("  [1] Quick demo — 25% of dataset (default)")
+    print("  [2] Full dataset — 100%")
+    choice = input("\n  Choice [1]: ").strip()
+    if choice in ("", "1"):
+        return True
+    if choice == "2":
+        return False
+    bail(f"Invalid selection: '{choice}'. Expected 1 or 2.")
+    raise  # unreachable
 
-    if GEONAMES_BZ2.exists():
-        print(f"  ⚠️  Found {GEONAMES_BZ2} but not the decompressed .json")
+
+def create_subset_file(dataset_name: str) -> Path:
+    """Create a 25% subset NDJSON file from the full dataset. Cached — skips if already exists."""
+    info = DATASETS[dataset_name]
+    full_path = DATASETS_DIR / info["file"]
+    subset_path = DATASETS_DIR / f"{dataset_name}_25pct.json"
+
+    if subset_path.exists():
+        size_mb = subset_path.stat().st_size / (1024**2)
+        print(f"  ✅ Subset already exists: {subset_path} ({size_mb:.0f} MB)")
+        return subset_path
+
+    total_lines = info["expected_docs"]
+    target_lines = int(total_lines * ABBREVIATED_FRACTION)
+
+    print(f"  ✂️  Creating 25% subset ({target_lines:,} lines) from {info['file']}...")
+    lines_written = 0
+    with open(full_path, "r") as src, open(subset_path, "w") as dst:
+        for line in src:
+            if lines_written >= target_lines:
+                break
+            dst.write(line)
+            lines_written += 1
+
+    size_mb = subset_path.stat().st_size / (1024**2)
+    print(f"  ✅ Subset created: {subset_path} ({lines_written:,} docs, {size_mb:.0f} MB)")
+    return subset_path
+
+
+def select_dataset(abbreviated: bool) -> str:
+    """Auto-detect available datasets, prompt user to choose one."""
+    print("\n📂 Available datasets:")
+    entries = []
+    for i, (name, info) in enumerate(DATASETS.items(), 1):
+        json_path = DATASETS_DIR / info["file"]
+        bz2_path = DATASETS_DIR / f"{info['file']}.bz2"
+        subset_path = DATASETS_DIR / f"{name}_25pct.json"
+
+        full_docs = info["expected_docs"]
+        display_docs = int(full_docs * ABBREVIATED_FRACTION) if abbreviated else full_docs
+        docs_str = f"{display_docs:,}"
+
+        if abbreviated and subset_path.exists():
+            size_gb = subset_path.stat().st_size / (1024**3)
+            status = f"✅ Ready ({size_gb:.1f} GB)"
+        elif json_path.exists():
+            size_gb = json_path.stat().st_size / (1024**3)
+            if abbreviated:
+                size_gb *= ABBREVIATED_FRACTION
+            status = f"✅ Ready (~{size_gb:.1f} GB)"
+        elif bz2_path.exists():
+            status = "📦 Compressed (needs decompress)"
+        else:
+            status = "⬇️  Download available"
+
+        entries.append(name)
+        print(f"  [{i}] {name:<10} ({docs_str:>12} docs) — {status}")
+        print(f"      {info['description']}")
+
+    print()
+    choice = input("  Select dataset [1]: ").strip()
+    if choice == "" or choice == "1":
+        return entries[0]
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(entries):
+            return entries[idx]
+    except ValueError:
+        # Maybe they typed the name
+        if choice.lower() in DATASETS:
+            return choice.lower()
+
+    bail(f"Invalid selection: '{choice}'. Expected 1-{len(entries)} or a dataset name.")
+    raise  # unreachable
+
+
+def ensure_dataset_ready(dataset_name: str) -> Path:
+    """Make sure the dataset JSON file exists. Offer download/decompress if not."""
+    info = DATASETS[dataset_name]
+    json_path = DATASETS_DIR / info["file"]
+    bz2_path = DATASETS_DIR / f"{info['file']}.bz2"
+
+    if json_path.exists():
+        size_gb = json_path.stat().st_size / (1024**3)
+        print(f"  ✅ Dataset found: {json_path} ({size_gb:.1f} GB)")
+        return json_path
+
+    if bz2_path.exists():
+        print(f"  📦 Found {bz2_path} but not the decompressed .json")
         answer = input("     Decompress with bunzip2? [Y/n]: ").strip().lower()
         if answer in ("", "y", "yes"):
-            print("     Decompressing... (this takes a minute)")
-            subprocess.run(["bunzip2", "-k", str(GEONAMES_BZ2)], check=True)
-            if GEONAMES_FILE.exists():
+            print("     Decompressing... (this may take a few minutes)")
+            subprocess.run(["bunzip2", "-k", str(bz2_path)], check=True)
+            if json_path.exists():
                 print("  ✅ Decompression complete.")
-                return
+                return json_path
         bail("Decompression declined or failed.")
 
-    bail(
-        f"Dataset not found: {GEONAMES_FILE}\n"
-        f"  Download it with:\n"
-        f"    python benchmark/scripts/setup.py\n"
-        f"  Or manually:\n"
-        f"    mkdir -p datasets\n"
-        f"    curl -o datasets/geonames.json.bz2 \\\n"
-        f"      https://rally-tracks.elastic.co/geonames/documents.json.bz2\n"
-        f"    bunzip2 -k datasets/geonames.json.bz2"
-    )
+    # Neither file exists — offer download
+    print(f"  ⬇️  Dataset not found locally: {info['file']}")
+    print(f"     Source: {info['url']}")
+    answer = input("     Download now? [Y/n]: ").strip().lower()
+    if answer not in ("", "y", "yes"):
+        bail("Download declined. Cannot proceed without dataset.")
+
+    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"     Downloading {dataset_name}... (this may take a while)")
+    try:
+        subprocess.run(
+            ["curl", "-L", "-#", "-o", str(bz2_path), info["url"]],
+            check=True,
+            timeout=3600,
+        )
+        print(f"  ✅ Download complete: {bz2_path}")
+    except subprocess.CalledProcessError:
+        bz2_path.unlink(missing_ok=True)
+        bail("Download failed. Check your internet connection.")
+
+    print("     Decompressing...")
+    try:
+        subprocess.run(["bunzip2", "-k", str(bz2_path)], check=True, timeout=600)
+        print(f"  ✅ Ready: {json_path}")
+        return json_path
+    except subprocess.CalledProcessError:
+        json_path.unlink(missing_ok=True)
+        bail("Decompression failed.")
+
+    raise  # unreachable
+
+
+# ============================================================================
+#  Pre-flight Checks
+# ============================================================================
 
 
 def check_docker_available() -> None:
@@ -221,9 +418,16 @@ def check_port_conflicts() -> None:
     for c in conflicts:
         print(c)
 
-    answer = input("\n  Stop conflicting containers and continue? [Y/n]: ").strip().lower()
-    if answer not in ("", "y", "yes"):
+    print("\n  What would you like to do?")
+    print("  [1] Leave them running and continue anyway (default)")
+    print("  [2] Stop conflicting containers and continue")
+    print("  [3] Exit")
+    answer = input("\n  Choice [1]: ").strip()
+    if answer in ("3",):
         bail("Port conflicts unresolved. Exiting.")
+    if answer in ("", "1"):
+        print("  ⚠️  Proceeding with conflicting containers — ports may collide")
+        return
 
     # Stop conflicting Docker containers
     result = subprocess.run(
@@ -346,7 +550,7 @@ def wait_for_cluster(url: str, name: str, timeout: int = 120) -> None:
 def delete_index_if_exists(url: str, index: str) -> None:
     """Delete an index if it exists. Silently succeeds on 404."""
     try:
-        resp = requests.delete(f"{url}/{index}", timeout=10)
+        resp = requests.delete(f"{url}/{index}", timeout=30)
         if resp.status_code in (200, 404):
             return
         print(f"  ⚠️  Unexpected status deleting '{index}' on {url}: {resp.status_code}")
@@ -354,17 +558,34 @@ def delete_index_if_exists(url: str, index: str) -> None:
         print(f"  ⚠️  Error deleting index '{index}' on {url}: {exc}")
 
 
-def create_index(url: str, index: str) -> None:
-    """Create index with geonames mapping."""
-    resp = requests.put(
-        f"{url}/{index}",
-        json=GEONAMES_INDEX_BODY,
-        headers={"Content-Type": "application/json"},
-        timeout=30,
-    )
-    if resp.status_code not in (200, 201):
-        bail(f"Failed to create index '{index}' on {url}: {resp.status_code} {resp.text[:300]}")
-    print(f"  ✅ Index '{index}' created on {url}")
+def create_index(url: str, index: str, dataset_name: str) -> None:
+    """Create index with dataset-specific mapping."""
+    body = INDEX_MAPPINGS.get(dataset_name, {
+        "settings": {
+            "number_of_shards": 1,
+            "number_of_replicas": 0,
+            "refresh_interval": "-1",
+        }
+    })
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = requests.put(
+                f"{url}/{index}",
+                json=body,
+                headers={"Content-Type": "application/json"},
+                timeout=60,
+            )
+            if resp.status_code not in (200, 201):
+                bail(f"Failed to create index '{index}' on {url}: {resp.status_code} {resp.text[:300]}")
+            print(f"  ✅ Index '{index}' created on {url}")
+            return
+        except requests.RequestException as exc:
+            if attempt < max_attempts:
+                print(f"  ⚠️  Index creation timed out (attempt {attempt}/{max_attempts}), retrying...")
+                time.sleep(5)
+            else:
+                bail(f"Failed to create index '{index}' on {url} after {max_attempts} attempts: {exc}")
 
 
 def get_doc_count(url: str, index: str) -> int:
@@ -451,7 +672,12 @@ def poll_until_doc_count(
 # ============================================================================
 
 
-def print_summary(results: list[StepResult], es_count: int, os_count: int) -> None:
+def print_summary(
+    results: list[StepResult],
+    dataset_name: str,
+    es_count: int,
+    os_count: int,
+) -> None:
     """Pretty-print the timing summary table."""
     print("\n")
     print("┌──────────────────────────────┬────────────┬──────────────┬─────────┐")
@@ -535,15 +761,30 @@ def bail(msg: str) -> None:
 def main() -> None:
     print("=" * 60)
     print("  🚀 Kravex End-to-End Demo")
-    print("  Pipeline: geonames.json → Elasticsearch → OpenSearch")
+    print("  Pipeline: dataset.json → Elasticsearch → OpenSearch")
     print("=" * 60)
 
     register_cleanup_handler()
     results: list[StepResult] = []
 
+    # ── Mode & Dataset Selection ───────────────────────────────
+    abbreviated = select_demo_mode()
+    dataset_name = select_dataset(abbreviated)
+    dataset_info = DATASETS[dataset_name]
+    full_docs = dataset_info["expected_docs"]
+    expected_docs = int(full_docs * ABBREVIATED_FRACTION) if abbreviated else full_docs
+    index_name = dataset_name
+    # For leg scripts: abbreviated uses geonames_25pct config, full uses geonames
+    leg1_dataset_arg = f"{dataset_name}_25pct" if abbreviated else dataset_name
+
+    mode_label = "25%" if abbreviated else "100%"
+    print(f"\n  📦 Selected: {dataset_name} ({expected_docs:,} docs, {mode_label})")
+
     # ── Pre-flight ──────────────────────────────────────────────
     print("\n📋 Pre-flight checks:")
-    check_dataset_exists()
+    ensure_dataset_ready(dataset_name)
+    if abbreviated:
+        create_subset_file(dataset_name)
     check_docker_available()
 
     # ── Infrastructure ──────────────────────────────────────────
@@ -554,47 +795,47 @@ def main() -> None:
         check_port_conflicts()
         start_demo_containers()
         print("\n⏳ Waiting for clusters to be ready:")
-        wait_for_cluster(ES_URL, "Elasticsearch")
-        wait_for_cluster(OS_URL, "OpenSearch")
+        wait_for_cluster(ES_URL, "Elasticsearch", timeout=240)
+        wait_for_cluster(OS_URL, "OpenSearch", timeout=240)
 
     # ── Leg 1: File → Elasticsearch ─────────────────────────────
     print("\n" + "─" * 60)
-    print("  📂 Leg 1: geonames.json → Elasticsearch")
+    print(f"  📂 Leg 1: {dataset_name}.json → Elasticsearch")
     print("─" * 60)
 
-    delete_index_if_exists(ES_URL, INDEX_NAME)
-    create_index(ES_URL, INDEX_NAME)
+    delete_index_if_exists(ES_URL, index_name)
+    create_index(ES_URL, index_name, dataset_name)
 
     print("\n  👉 Run this in another terminal:")
-    print("     ./demo/file_to_esdb.sh")
+    print(f"     ./demo/file_to_esdb.sh {leg1_dataset_arg}")
     input("\n  Press Enter when you've started the script...")
 
     step1 = StepResult(name="File → Elasticsearch")
-    count1 = poll_until_doc_count(ES_URL, INDEX_NAME, EXPECTED_DOC_COUNT, MAX_WAIT_SECS, "File → ES")
+    count1 = poll_until_doc_count(ES_URL, index_name, expected_docs, MAX_WAIT_SECS, "File → ES")
     step1.finish(count1)
     results.append(step1)
 
     # ── Leg 2: Elasticsearch → OpenSearch ───────────────────────
     print("\n" + "─" * 60)
-    print("  📡 Leg 2: Elasticsearch → OpenSearch")
+    print(f"  📡 Leg 2: Elasticsearch → OpenSearch ({dataset_name})")
     print("─" * 60)
 
-    delete_index_if_exists(OS_URL, INDEX_NAME)
-    create_index(OS_URL, INDEX_NAME)
+    delete_index_if_exists(OS_URL, index_name)
+    create_index(OS_URL, index_name, dataset_name)
 
     print("\n  👉 Run this in another terminal:")
-    print("     ./demo/esdb_to_osdb.sh")
+    print(f"     ./demo/esdb_to_osdb.sh {dataset_name}")
     input("\n  Press Enter when you've started the script...")
 
     step2 = StepResult(name="Elasticsearch → OpenSearch")
-    count2 = poll_until_doc_count(OS_URL, INDEX_NAME, EXPECTED_DOC_COUNT, MAX_WAIT_SECS, "ES → OS")
+    count2 = poll_until_doc_count(OS_URL, index_name, expected_docs, MAX_WAIT_SECS, "ES → OS")
     step2.finish(count2)
     results.append(step2)
 
     # ── Validation & Summary ────────────────────────────────────
-    es_count = get_doc_count(ES_URL, INDEX_NAME)
-    os_count = get_doc_count(OS_URL, INDEX_NAME)
-    print_summary(results, es_count, os_count)
+    es_count = get_doc_count(ES_URL, index_name)
+    os_count = get_doc_count(OS_URL, index_name)
+    print_summary(results, dataset_name, es_count, os_count)
 
     # ── Cleanup ─────────────────────────────────────────────────
     print()

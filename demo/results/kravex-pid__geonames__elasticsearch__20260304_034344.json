@@ -1,0 +1,16 @@
+{
+  "run_id": "kravex-pid__geonames__elasticsearch__20260304_034344",
+  "tool": "kravex-pid",
+  "dataset": "geonames",
+  "engine": "elasticsearch",
+  "expected_docs": 11396503,
+  "indexed_docs": 0,
+  "duration_sec": 30.064,
+  "docs_per_min": 0.0,
+  "peak_mem_mb": 0.94,
+  "avg_cpu_pct": 0.0,
+  "peak_cpu_pct": 0.0,
+  "avg_mem_mb": 0.02,
+  "exit_code": 1,
+  "timestamp": "2026-03-04T03:43:44.086833+00:00"
+}

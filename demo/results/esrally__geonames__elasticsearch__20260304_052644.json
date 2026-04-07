@@ -1,0 +1,16 @@
+{
+  "run_id": "esrally__geonames__elasticsearch__20260304_052644",
+  "tool": "esrally",
+  "dataset": "geonames",
+  "engine": "elasticsearch",
+  "expected_docs": 11396503,
+  "indexed_docs": 11396503,
+  "duration_sec": 438.845,
+  "docs_per_min": 1558160.0,
+  "peak_mem_mb": 60.55,
+  "avg_cpu_pct": 0.08,
+  "peak_cpu_pct": 54.2,
+  "avg_mem_mb": 12.93,
+  "exit_code": 0,
+  "timestamp": "2026-03-04T05:34:03.999919+00:00"
+}

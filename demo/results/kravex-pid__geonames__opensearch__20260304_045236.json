@@ -1,0 +1,16 @@
+{
+  "run_id": "kravex-pid__geonames__opensearch__20260304_045236",
+  "tool": "kravex-pid",
+  "dataset": "geonames",
+  "engine": "opensearch",
+  "expected_docs": 11396503,
+  "indexed_docs": 7695500,
+  "duration_sec": 438.596,
+  "docs_per_min": 1052745.0,
+  "peak_mem_mb": 140.98,
+  "avg_cpu_pct": 6.17,
+  "peak_cpu_pct": 85.8,
+  "avg_mem_mb": 40.95,
+  "exit_code": -15,
+  "timestamp": "2026-03-04T04:52:36.201915+00:00"
+}

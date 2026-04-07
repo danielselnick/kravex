@@ -1,0 +1,16 @@
+{
+  "run_id": "elasticdump__geonames__elasticsearch__20260304_040429",
+  "tool": "elasticdump",
+  "dataset": "geonames",
+  "engine": "elasticsearch",
+  "expected_docs": 11396503,
+  "indexed_docs": 901003,
+  "duration_sec": 302.228,
+  "docs_per_min": 178872.0,
+  "peak_mem_mb": 2699.84,
+  "avg_cpu_pct": 80.98,
+  "peak_cpu_pct": 291.2,
+  "avg_mem_mb": 710.37,
+  "exit_code": -6,
+  "timestamp": "2026-03-04T04:04:29.871620+00:00"
+}

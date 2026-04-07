@@ -1,0 +1,28 @@
+# ============================================================================
+#  Kravex Demo — Leg 2: Elasticsearch → OpenSearch (noaa)
+# ============================================================================
+#  Reads noaa index from Elasticsearch (19200) via scroll API,
+#  writes to OpenSearch (19201) via ES-compatible bulk API.
+# ============================================================================
+
+[runtime]
+sink_parallelism = 8
+joiner_parallelism = 4
+pumper_to_joiner_capacity = 2
+joiner_to_drainer_capacity = 2
+
+[source_config.Elasticsearch]
+url = "http://localhost:19200"
+index = "noaa"
+
+[source_config.Elasticsearch.common_config]
+max_batch_size_bytes = 8000000
+max_batch_size_docs = 10000
+
+[sink_config.Elasticsearch]
+url = "http://localhost:19201"
+index = "noaa"
+max_request_size_bytes = 1000000
+
+[flow_master.Static]
+output_bytes = 10000000

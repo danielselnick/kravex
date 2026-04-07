@@ -1,0 +1,27 @@
+# ============================================================================
+#  Kravex Demo — Leg 1: File → Elasticsearch (pmc)
+# ============================================================================
+#  Ingests pmc.json (574K docs) into Elasticsearch on port 19200.
+#  Run from project root so datasets/ path resolves correctly.
+# ============================================================================
+
+[runtime]
+sink_parallelism = 8
+joiner_parallelism = 4
+pumper_to_joiner_capacity = 2
+joiner_to_drainer_capacity = 2
+
+[source_config.File]
+file_name = "datasets/pmc.json"
+
+[source_config.File.common_config]
+max_batch_size_bytes = 8000000
+max_batch_size_docs = 1000000
+
+[sink_config.Elasticsearch]
+url = "http://localhost:19200"
+index = "pmc"
+max_request_size_bytes = 1000000
+
+[flow_master.Static]
+output_bytes = 10000000
