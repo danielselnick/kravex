@@ -27,6 +27,8 @@ from pathlib import Path
 
 import requests
 
+from terminal_launcher import detect_terminal, launch_in_terminal
+
 # ============================================================================
 #  Constants
 # ============================================================================
@@ -806,9 +808,18 @@ def main() -> None:
     delete_index_if_exists(ES_URL, index_name)
     create_index(ES_URL, index_name, dataset_name)
 
-    print("\n  👉 Run this in another terminal:")
-    print(f"     ./demo/file_to_esdb.sh {leg1_dataset_arg}")
-    input("\n  Press Enter when you've started the script...")
+    launched = launch_in_terminal(
+        script="./demo/file_to_esdb.sh",
+        args=[leg1_dataset_arg],
+        cwd=PROJECT_ROOT,
+    )
+    if launched:
+        print(f"  ✅ Launched ./demo/file_to_esdb.sh {leg1_dataset_arg} in new terminal window")
+        input("\n  Press Enter when the script has finished...")
+    else:
+        print("\n  👉 Run this in another terminal:")
+        print(f"     ./demo/file_to_esdb.sh {leg1_dataset_arg}")
+        input("\n  Press Enter when you've started the script...")
 
     step1 = StepResult(name="File → Elasticsearch")
     count1 = poll_until_doc_count(ES_URL, index_name, expected_docs, MAX_WAIT_SECS, "File → ES")
@@ -823,9 +834,18 @@ def main() -> None:
     delete_index_if_exists(OS_URL, index_name)
     create_index(OS_URL, index_name, dataset_name)
 
-    print("\n  👉 Run this in another terminal:")
-    print(f"     ./demo/esdb_to_osdb.sh {dataset_name}")
-    input("\n  Press Enter when you've started the script...")
+    launched = launch_in_terminal(
+        script="./demo/esdb_to_osdb.sh",
+        args=[dataset_name],
+        cwd=PROJECT_ROOT,
+    )
+    if launched:
+        print(f"  ✅ Launched ./demo/esdb_to_osdb.sh {dataset_name} in new terminal window")
+        input("\n  Press Enter when the script has finished...")
+    else:
+        print("\n  👉 Run this in another terminal:")
+        print(f"     ./demo/esdb_to_osdb.sh {dataset_name}")
+        input("\n  Press Enter when you've started the script...")
 
     step2 = StepResult(name="Elasticsearch → OpenSearch")
     count2 = poll_until_doc_count(OS_URL, index_name, expected_docs, MAX_WAIT_SECS, "ES → OS")

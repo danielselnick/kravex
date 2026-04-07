@@ -86,6 +86,17 @@ pub enum FlowMasterConfig {
     Throughput(ThroughputSeekerConfig),
 }
 
+impl std::fmt::Display for FlowMasterConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // -- 🎛️ Just the knob label, not the whole settings panel. Keep it classy. 🦆
+        match self {
+            FlowMasterConfig::Static(_) => write!(f, "Static"),
+            FlowMasterConfig::Latency(_) => write!(f, "Latency"),
+            FlowMasterConfig::Throughput(_) => write!(f, "Throughput"),
+        }
+    }
+}
+
 impl Default for FlowMasterConfig {
     // 📏 Default: static 4 MiB — the same safe starting point the PID controller uses
     fn default() -> Self {

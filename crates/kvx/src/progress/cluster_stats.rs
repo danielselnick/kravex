@@ -10,7 +10,7 @@
 //! *["How are you feeling?" it asks. The cluster responds with JSON.]*
 //! *[Some say the singularity will arrive before this module ships. They may be right.]*
 //!
-//! Polls `_nodes/stats/os,jvm` from ES/OS clusters and extracts CPU% and JVM heap%.
+//! Polls `_nodes/stats/process,jvm` from ES/OS clusters and extracts process CPU% and JVM heap%.
 //! Stateless except for an HTTP client. Fire-and-forget via `tokio::spawn` — the
 //! renderer kicks off a fetch each tick and harvests the result when it's ready.
 
@@ -62,7 +62,7 @@ pub struct ClusterSnapshot {
 /// 🏗️ Stateless-ish poller for cluster node stats.
 ///
 /// Holds a URL, auth config, and an HTTP client. Call `fetch()` to spawn a background
-/// task that hits `_nodes/stats/os,jvm` and returns a `ClusterSnapshot`.
+/// task that hits `_nodes/stats/process,jvm` and returns a `ClusterSnapshot`.
 /// The caller decides when to harvest the result. Like planting a garden and checking
 /// on it when you feel like it. 🌱
 ///
@@ -131,9 +131,9 @@ impl ClusterStatsPoller {
 //  🔬 Internal fetch logic — the part that actually talks to the cluster
 // =========================================================================
 
-/// 📡 Fetch and parse cluster stats from `_nodes/stats/os,jvm`.
+/// 📡 Fetch and parse cluster stats from `_nodes/stats/process,jvm`.
 ///
-/// Averages CPU% and JVM heap% across all reporting nodes.
+/// Averages process CPU% and JVM heap% across all reporting nodes.
 /// Nodes that don't report a metric are skipped — like that one coworker
 /// who never fills out their timesheet. We just work around them. 🦆
 async fn fetch_cluster_stats(
@@ -141,7 +141,7 @@ async fn fetch_cluster_stats(
     base_url: &str,
     auth: &ClusterAuth,
 ) -> Result<ClusterSnapshot> {
-    let the_stats_url = format!("{}/_nodes/stats/os,jvm", base_url);
+    let the_stats_url = format!("{}/_nodes/stats/process,jvm", base_url);
 
     // -- 📡 build the request — auth applied like seasoning on a steak
     let mut the_request_builder = client.get(&the_stats_url);
@@ -186,9 +186,9 @@ async fn fetch_cluster_stats(
     let mut the_jvm_count = 0_u64;
 
     for (_node_id, node) in &the_stats.nodes {
-        // -- 🧠 CPU: os → cpu → percent
-        if let Some(os) = &node.os {
-            if let Some(cpu) = &os.cpu {
+        // -- 🧠 CPU: process → cpu → percent (the JVM's own CPU, not the container's system CPU)
+        if let Some(process) = &node.process {
+            if let Some(cpu) = &process.cpu {
                 the_cpu_sum += cpu.percent as f64;
                 the_cpu_count += 1;
             }
@@ -222,7 +222,7 @@ async fn fetch_cluster_stats(
 //  📦 Serde structs — parsing the firehose of JSON into the two numbers we want
 // =========================================================================
 
-/// 🔬 Top-level response from `_nodes/stats/os,jvm`.
+/// 🔬 Top-level response from `_nodes/stats/process,jvm`.
 /// ES/OS return approximately 47 billion fields per node. We want exactly four.
 /// This struct is the bouncer at the JSON nightclub. 🚪
 #[derive(Debug, Deserialize)]
@@ -231,26 +231,27 @@ struct NodeStatsResponse {
     nodes: HashMap<String, NodeStats>,
 }
 
-/// 📦 Per-node stats — we only care about os and jvm subsections.
+/// 📦 Per-node stats — we only care about process and jvm subsections.
 #[derive(Debug, Deserialize)]
 struct NodeStats {
-    // -- 🧠 OS-level stats (CPU, load, mem)
-    os: Option<NodeOsStats>,
+    // -- 🧠 Process-level stats (the ES/OS JVM process specifically, not the container OS)
+    process: Option<NodeProcessStats>,
     // -- ☕ JVM stats (heap, GC, threads)
     jvm: Option<NodeJvmStats>,
 }
 
-/// 🖥️ OS-level stats from a node.
+/// 🏭 Process-level stats from a node (the ES/OS JVM process).
 #[derive(Debug, Deserialize)]
-struct NodeOsStats {
-    // -- 🧠 CPU subsection — the only OS metric we care about
-    cpu: Option<NodeCpuStats>,
+struct NodeProcessStats {
+    // -- 🧠 CPU subsection — the process's own CPU, not the system/container CPU
+    cpu: Option<NodeProcessCpuStats>,
 }
 
-/// 🧠 CPU stats from a node's OS.
+/// 🧠 CPU stats from the ES/OS process itself.
+/// Can exceed 100% on multi-core (e.g. 200% = fully utilizing 2 cores). 💪
 #[derive(Debug, Deserialize)]
-struct NodeCpuStats {
-    // -- 📊 CPU usage percent — 0-100, like a test score. 90+ means trouble.
+struct NodeProcessCpuStats {
+    // -- 📊 process CPU usage percent — 0 to N×100 where N = cores. 150% means 1.5 cores worth of work.
     percent: u64,
 }
 
@@ -284,15 +285,15 @@ mod tests {
         let the_json = r#"{
             "nodes": {
                 "node_1": {
-                    "os": { "cpu": { "percent": 30 } },
+                    "process": { "cpu": { "percent": 30 } },
                     "jvm": { "mem": { "heap_used_percent": 40 } }
                 },
                 "node_2": {
-                    "os": { "cpu": { "percent": 60 } },
+                    "process": { "cpu": { "percent": 60 } },
                     "jvm": { "mem": { "heap_used_percent": 70 } }
                 },
                 "node_3": {
-                    "os": { "cpu": { "percent": 90 } },
+                    "process": { "cpu": { "percent": 90 } },
                     "jvm": { "mem": { "heap_used_percent": 50 } }
                 }
             }
@@ -306,8 +307,8 @@ mod tests {
         let mut jvm_count = 0_u64;
 
         for (_id, node) in &the_stats.nodes {
-            if let Some(os) = &node.os {
-                if let Some(cpu) = &os.cpu {
+            if let Some(process) = &node.process {
+                if let Some(cpu) = &process.cpu {
                     cpu_sum += cpu.percent as f64;
                     cpu_count += 1;
                 }
@@ -337,11 +338,11 @@ mod tests {
         let the_json = r#"{
             "nodes": {
                 "chatty_node": {
-                    "os": { "cpu": { "percent": 42 } },
+                    "process": { "cpu": { "percent": 42 } },
                     "jvm": { "mem": { "heap_used_percent": 55 } }
                 },
                 "shy_node": {
-                    "os": { "cpu": { "percent": 58 } }
+                    "process": { "cpu": { "percent": 58 } }
                 }
             }
         }"#;
@@ -353,8 +354,8 @@ mod tests {
         let mut jvm_count = 0_u64;
 
         for (_id, node) in &the_stats.nodes {
-            if let Some(os) = &node.os {
-                if let Some(cpu) = &os.cpu {
+            if let Some(process) = &node.process {
+                if let Some(cpu) = &process.cpu {
                     cpu_sum += cpu.percent as f64;
                     cpu_count += 1;
                 }
@@ -386,5 +387,42 @@ mod tests {
         assert!(the_stats.nodes.is_empty());
         // fetch_cluster_stats would return ClusterSnapshot { cpu_percent: 0.0, jvm_heap_percent: 0.0 }
         // because both counts are 0 → fallback to 0.0
+    }
+
+    /// 🧪 The one where process CPU exceeds 100% because multi-core is a lifestyle.
+    /// Two nodes hammering all their cores. process.cpu.percent goes brrr. 🔥🦆
+    #[test]
+    fn the_one_where_process_cpu_exceeds_100_on_multicore() {
+        let the_json = r#"{
+            "nodes": {
+                "beefy_node": {
+                    "process": { "cpu": { "percent": 350 } },
+                    "jvm": { "mem": { "heap_used_percent": 60 } }
+                },
+                "modest_node": {
+                    "process": { "cpu": { "percent": 150 } },
+                    "jvm": { "mem": { "heap_used_percent": 40 } }
+                }
+            }
+        }"#;
+
+        let the_stats: NodeStatsResponse = serde_json::from_str(the_json).unwrap();
+        let mut cpu_sum = 0.0_f64;
+        let mut cpu_count = 0_u64;
+
+        for (_id, node) in &the_stats.nodes {
+            if let Some(process) = &node.process {
+                if let Some(cpu) = &process.cpu {
+                    cpu_sum += cpu.percent as f64;
+                    cpu_count += 1;
+                }
+            }
+        }
+
+        let avg_cpu = cpu_sum / cpu_count as f64;
+
+        // -- 🎯 (350+150)/2 = 250.0 — yes, process CPU can be > 100%. That's the whole point.
+        assert_eq!(cpu_count, 2);
+        assert!((avg_cpu - 250.0).abs() < 0.01, "CPU avg should be 250.0, got {}", avg_cpu);
     }
 }

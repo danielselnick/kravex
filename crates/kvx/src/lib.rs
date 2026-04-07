@@ -20,6 +20,7 @@ pub mod foreman;
 pub mod casts;
 pub mod regulators;
 pub mod workers;
+pub mod victory_laps;
 
 use crate::config::AppConfig;
 use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSource};
@@ -87,8 +88,8 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     let the_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(the_initial_flow));
 
     info!(
-        "🎛️ FlowMaster mode: {:?} — initial flow: {} bytes",
-        std::mem::discriminant(&app_config.flow_master),
+        "🎛️ FlowMaster mode: {} — initial flow: {} bytes",
+        &app_config.flow_master,
         the_initial_flow
     );
 
@@ -115,10 +116,7 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
         )
         .await?;
 
-    info!(
-        "🎉 MIGRATION COMPLETE! Took: {:#?} — not bad for a Rust crate with more comedy comments than error paths 🦆",
-        start_time.elapsed()?
-    );
+    info!("{}", victory_laps::victory_lap(start_time.elapsed()?));
     Ok(())
 }
 
