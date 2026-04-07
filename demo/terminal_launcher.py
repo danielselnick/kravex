@@ -56,7 +56,7 @@ def launch_in_terminal(script: str, args: list[str], cwd: Path) -> bool:
 
     # Build the shell command that runs inside the new terminal
     script_with_args = f"{script} {' '.join(shlex.quote(a) for a in args)}"
-    inner_cmd = f"cd {shlex.quote(str(cwd))} && {script_with_args}; echo ''; echo '✅ Script finished. Press Enter to close.'; read"
+    inner_cmd = f"cd {shlex.quote(str(cwd))} && {script_with_args}; echo; echo 'Script finished. Press Enter to close.'; read"
 
     try:
         if terminal == "ghostty":
@@ -72,8 +72,10 @@ def launch_in_terminal(script: str, args: list[str], cwd: Path) -> bool:
 
 
 def _launch_ghostty(cmd: str) -> bool:
+    # Ghostty's -e expects separate args: -e bash -c "the command"
+    # open --args passes each list element as a separate arg to the app
     subprocess.Popen(
-        ["open", "-na", "Ghostty", "--args", "-e", f"bash -c {shlex.quote(cmd)}"],
+        ["open", "-na", "Ghostty", "--args", "-e", "bash", "-c", cmd],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
