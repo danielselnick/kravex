@@ -18,14 +18,14 @@
 //!                                                                           ↓ (latency readings)
 //!                                                                          ch3
 //!                                                                           ↓
-//!                                                                      FlowMaster → FlowKnob → Joiners
+//!                                                                      Governor → FlowKnob → Joiners
 //! ```
 //! - **ch1**: async_channel::bounded — raw feeds from source, MPMC
 //! - **ch2**: async_channel::bounded — assembled payloads from joiners, MPMC
-//! - **ch3**: async_channel::bounded — GaugeReading from drainers to FlowMaster (latency feedback)
+//! - **ch3**: async_channel::bounded — GaugeReading from drainers to Governor (latency feedback)
 //! - **Joiners**: CPU-bound work (casting, manifold join) on dedicated OS threads
 //! - **Drainers**: I/O-bound work (sink.drain) on tokio async runtime
-//! - **FlowMaster**: receives latency readings, PID-regulates, adjusts FlowKnob
+//! - **Governor**: receives latency readings, PID-regulates, adjusts FlowKnob
 //!
 //! ⚠️ DO NOT MAKE THIS PUB EVER
 //! ⚠️ YOU HAVE BEEN WARNED
@@ -39,7 +39,7 @@ use crate::progress::{DrainMetrics, spawn_progress_reporter};
 use crate::FlowKnob;
 use crate::regulators::Regulators;
 use crate::workers;
-use crate::workers::{FlowMasterConfig, Worker};
+use crate::workers::{GovernorConfig, Worker};
 use crate::GaugeReading;
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -65,7 +65,7 @@ impl Foreman {
 }
 
 impl Foreman {
-    /// 🧵 Orchestrate the 3-stage pipeline: Pumper → Joiners → Drainers (+ optional FlowMaster).
+    /// 🧵 Orchestrate the 3-stage pipeline: Pumper → Joiners → Drainers (+ optional Governor).
     ///
     /// 🧠 Knowledge graph — pipeline wiring:
     /// ```text
@@ -74,7 +74,7 @@ impl Foreman {
     ///                                                               |
     ///                                                          [ch3: latency]
     ///                                                               ↓
-    ///                                                          FlowMaster → FlowKnob → Joiners
+    ///                                                          Governor → FlowKnob → Joiners
     /// ```
     ///
     /// 🔒 Channel closure semantics (async_channel implicit close):
@@ -89,7 +89,7 @@ impl Foreman {
     /// 2. Joiners' recv_blocking() returns Err → flush remaining → joiner threads exit → tx2 clones dropped
     /// 3. Last joiner's tx2 dropped → all Senders for ch2 gone → ch2 closes
     /// 4. Drainers' recv().await returns Err → close sinks → exit → tx3 clones dropped
-    /// 5. Last drainer's tx3 dropped → ch3 closes → FlowMaster exits
+    /// 5. Last drainer's tx3 dropped → ch3 closes → Governor exits
     ///
     /// "In the beginning there was main(). And main() said 'let there be workers.'
     ///  And the Foreman made it so. And it was... mostly okay." — Genesis 1:1 (Cargo edition) 🦆
@@ -100,7 +100,7 @@ impl Foreman {
         caster: PageToEntriesCaster,
         manifold: ManifoldBackend,
         the_flow_knob: FlowKnob,
-        the_flow_master_config: &FlowMasterConfig,
+        the_governor_config: &GovernorConfig,
         the_sink_max_request_size_bytes: usize,
         pipeline_name: String,
         total_expected_bytes: u64,
@@ -115,10 +115,10 @@ impl Foreman {
         // The VIP lounge of the pipeline — only processed payloads allowed past this point 🎟️
         let (tx2, rx2) = async_channel::bounded::<crate::Payload>(self.app_config.runtime.joiner_to_drainer_capacity);
 
-        // 📬 ch3: drainers → flow_master — carries GaugeReading (latency feedback), MPSC-ish
-        // Only created for latency regulation. Static mode = no channel, no FlowMaster, no drama 🎭
-        let the_gauge_channel = match the_flow_master_config {
-            FlowMasterConfig::Latency(latency_config) => {
+        // 📬 ch3: drainers → governor — carries GaugeReading (latency feedback), MPSC-ish
+        // Only created for latency regulation. Static mode = no channel, no Governor, no drama 🎭
+        let the_gauge_channel = match the_governor_config {
+            GovernorConfig::Latency(latency_config) => {
                 let (tx3, rx3) = async_channel::bounded::<GaugeReading>(256);
                 let the_regulator = Regulators::from_latency_config(
                     latency_config,
@@ -126,7 +126,7 @@ impl Foreman {
                 );
                 Some((tx3, rx3, the_regulator))
             }
-            FlowMasterConfig::Throughput(throughput_config) => {
+            GovernorConfig::Throughput(throughput_config) => {
                 let (tx3, rx3) = async_channel::bounded::<GaugeReading>(256);
                 let the_regulator = Regulators::from_throughput_config(
                     throughput_config,
@@ -134,14 +134,14 @@ impl Foreman {
                 );
                 Some((tx3, rx3, the_regulator))
             }
-            FlowMasterConfig::Static(_) => None,
+            GovernorConfig::Static(_) => None,
         };
 
         info!(
             "🏗️ Foreman assembling pipeline: 1 pumper → {} joiners → {} drainers{}",
             the_joiner_count,
             sink_backends.len(),
-            if the_gauge_channel.is_some() { " + FlowMaster" } else { "" }
+            if the_gauge_channel.is_some() { " + Governor" } else { "" }
         );
 
         // ═══════════════════════════════════════════════════════════════════
@@ -216,15 +216,15 @@ impl Foreman {
         drop(rx2);
 
         // 🗑️ Foreman surrenders ch3 sender — only drainers hold tx3 clones now.
-        // When all drainers exit and drop their tx3 clones → ch3 closes → FlowMaster exits.
+        // When all drainers exit and drop their tx3 clones → ch3 closes → Governor exits.
         drop(the_gauge_tx);
 
-        // 🎛️ Spawn FlowMaster if we have a gauge channel — it consumes rx3 and adjusts FlowKnob.
+        // 🎛️ Spawn Governor if we have a gauge channel — it consumes rx3 and adjusts FlowKnob.
         if let Some((tx3, rx3, the_regulator)) = the_gauge_channel {
             // 🗑️ Drop foreman's tx3 — only drainers should hold senders
             drop(tx3);
-            let the_flow_master = workers::FlowMaster::new(rx3, the_regulator, the_flow_knob.clone());
-            the_async_worker_handles.push(the_flow_master.start());
+            let the_governor = workers::Governor::new(rx3, the_regulator, the_flow_knob.clone());
+            the_async_worker_handles.push(the_governor.start());
         }
 
         // 🚰 Spawn the pumper — gets tx1 by MOVE (not clone).
@@ -245,9 +245,9 @@ impl Foreman {
             &self.app_config,
         );
 
-        // ⏳ Wait for all async workers (pumper + drainers + optional FlowMaster).
+        // ⏳ Wait for all async workers (pumper + drainers + optional Governor).
         // The cascade: pumper done → ch1 closes → joiners drain+exit → ch2 closes
-        //   → drainers exit → ch3 closes → FlowMaster exits.
+        //   → drainers exit → ch3 closes → Governor exits.
         // So by the time join_all returns, everyone's done. 🏁
         let the_async_results = futures::future::join_all(the_async_worker_handles).await;
 

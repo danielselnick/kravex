@@ -80,27 +80,26 @@ fn default_backoff_multiplier() -> f64 { 2.0 }
 fn default_max_backoff_ms() -> u64 { 30_000 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub enum FlowMasterConfig {
+pub enum GovernorConfig {
     Static(StaticRegulatorConfig),
     Latency(LatencyRegulatorConfig),
     Throughput(ThroughputSeekerConfig),
 }
-
-impl std::fmt::Display for FlowMasterConfig {
+impl std::fmt::Display for GovernorConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // -- 🎛️ Just the knob label, not the whole settings panel. Keep it classy. 🦆
         match self {
-            FlowMasterConfig::Static(_) => write!(f, "Static"),
-            FlowMasterConfig::Latency(_) => write!(f, "Latency"),
-            FlowMasterConfig::Throughput(_) => write!(f, "Throughput"),
+            GovernorConfig::Static(_) => write!(f, "Static"),
+            GovernorConfig::Latency(_) => write!(f, "Latency"),
+            GovernorConfig::Throughput(_) => write!(f, "Throughput"),
         }
     }
 }
 
-impl Default for FlowMasterConfig {
+impl Default for GovernorConfig {
     // 📏 Default: static 4 MiB — the same safe starting point the PID controller uses
     fn default() -> Self {
-        FlowMasterConfig::Static(StaticRegulatorConfig { output_bytes: 4 * 1024 * 1024 })
+        GovernorConfig::Static(StaticRegulatorConfig { output_bytes: 4 * 1024 * 1024 })
     }
 }
 
@@ -143,8 +142,8 @@ mod tests {
         assert_eq!(the_config.initial_backoff_ms, 1_000);
     }
 
-    /// 🧪 The one where FlowMasterConfig deserializes the Throughput variant from TOML.
-    /// "[flow_master.Throughput]" — the future of regulation. No PIDs were harmed. 🏔️🦆
+    /// 🧪 The one where GovernorConfig deserializes the Throughput variant from TOML.
+    /// "[governor.Throughput]" — the future of regulation. No PIDs were harmed. 🏔️🦆
     #[test]
     fn the_one_where_throughput_config_deserializes_from_toml() {
         let the_toml = r#"
@@ -153,11 +152,11 @@ mod tests {
             initial_output_bytes = 8388608
         "#;
 
-        let the_config: FlowMasterConfig = toml::from_str(the_toml)
-            .expect("💀 Throughput FlowMasterConfig should deserialize from TOML");
+        let the_config: GovernorConfig = toml::from_str(the_toml)
+            .expect("💀 Throughput GovernorConfig should deserialize from TOML");
 
         match the_config {
-            FlowMasterConfig::Throughput(cfg) => {
+            GovernorConfig::Throughput(cfg) => {
                 assert_eq!(cfg.min_request_size_bytes, 262_144, "🎯 min should be 256 KiB");
                 assert_eq!(cfg.initial_output_bytes, 8_388_608, "🎯 initial should be 8 MiB");
                 assert_eq!(cfg.window_duration_secs, 5, "🎯 window_duration should default to 5s");
@@ -170,15 +169,15 @@ mod tests {
     }
 
     /// 🧪 The one where Throughput defaults are all sane.
-    /// Empty [flow_master.Throughput] section = 128KiB floor, 4MiB start, 5s windows. 🏔️🦆
+    /// Empty [governor.Throughput] section = 128KiB floor, 4MiB start, 5s windows. 🏔️🦆
     #[test]
     fn the_one_where_throughput_defaults_are_not_insane() {
         let the_toml = "[Throughput]";
-        let the_config: FlowMasterConfig = toml::from_str(the_toml)
+        let the_config: GovernorConfig = toml::from_str(the_toml)
             .expect("💀 Empty Throughput section should use defaults");
 
         match the_config {
-            FlowMasterConfig::Throughput(cfg) => {
+            GovernorConfig::Throughput(cfg) => {
                 assert_eq!(cfg.min_request_size_bytes, 128 * 1024, "🎯 Default min is 128 KiB");
                 assert_eq!(cfg.initial_output_bytes, 4 * 1024 * 1024, "🎯 Default initial is 4 MiB");
             }

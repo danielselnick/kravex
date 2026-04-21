@@ -59,7 +59,7 @@ pub struct Drainer {
     sink: SinkBackend,
     /// 🔄 Retry configuration — how persistent are we when the sink says "nah"?
     retry_config: DrainerConfig,
-    /// 📡 Optional gauge channel — sends latency readings to FlowMaster after each drain.
+    /// 📡 Optional gauge channel — sends latency readings to Governor after each drain.
     /// None when running in static mode (no regulation). try_send: non-blocking, drops
     /// readings if channel full — acceptable for a throttle signal. Like shouting your
     /// blood pressure at a nurse who's already dealing with 6 patients. 🏥🦆
@@ -161,7 +161,7 @@ impl Worker for Drainer {
                         // 📡 Send the assembled payload to the sink, with retries.
                         // Skip empty payloads — the joiner should filter these, but belt AND suspenders 🩳
                         if !the_payload.is_empty() && *the_payload != "[]" {
-                            // ⏱️ Time the drain — FlowMaster needs to know how long the sink took
+                            // ⏱️ Time the drain — Governor needs to know how long the sink took
                             let the_stopwatch = std::time::Instant::now();
                             let the_payload_bytes = the_payload.len() as u64;
 
@@ -178,7 +178,7 @@ impl Worker for Drainer {
                             // 📊 Record drain metrics — atomics, no lock, no drama
                             self.drain_metrics.record_drain(the_payload_bytes, the_latency_ms);
 
-                            // 📡 Report drain result to FlowMaster — non-blocking, drops if channel full
+                            // 📡 Report drain result to Governor — non-blocking, drops if channel full
                             if let Some(tx) = &self.gauge_tx {
                                 let _ = tx.try_send(GaugeReading::DrainResult {
                                     payload_bytes: the_payload_bytes,
@@ -252,7 +252,7 @@ mod tests {
     /// 🧪 The one where the drainer sends latency to the gauge channel after a successful drain.
     /// Like a runner hitting the lap button on their watch — every drain gets timed. ⏱️🦆
     #[tokio::test]
-    async fn the_one_where_drainer_reports_latency_to_flow_master() {
+    async fn the_one_where_drainer_reports_latency_to_governor() {
         let mut the_sink = FlakyTestSink::new(0);
         let the_payload = Payload::from("timed payload".to_string());
         let the_config = test_config(3);

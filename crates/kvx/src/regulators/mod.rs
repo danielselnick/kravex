@@ -13,7 +13,7 @@
 //! 🧠 Knowledge graph:
 //! ```text
 //! Drainer sends GaugeReading::DrainResult { payload_bytes, latency_ms }
-//!   → FlowMaster receives on ch3
+//!   → Governor receives on ch3
 //!     → Regulator.regulate(reading, dt) → new flow rate (bytes)
 //!       → FlowKnob: Arc<AtomicUsize> (effective max_request_size_bytes)
 //!         → Joiner reads flow knob on every flush check

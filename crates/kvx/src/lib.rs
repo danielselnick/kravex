@@ -31,7 +31,7 @@ use crate::foreman::Foreman;
 use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
 use crate::manifolds::ManifoldBackend;
 use crate::casts::PageToEntriesCaster;
-use crate::workers::FlowMasterConfig;
+use crate::workers::GovernorConfig;
 use anyhow::{Context, Result};
 use std::ops::Deref;
 use std::sync::Arc;
@@ -76,20 +76,20 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     // 📏 Extract max request size from sink config — the hard ceiling for payload size.
     let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
 
-    // 🔧 Create the FlowKnob — shared atomic valve between FlowMaster and joiners.
-    // 🧠 FlowMasterConfig determines the initial value:
-    //   - Static: fixed at output_bytes, never changes (no FlowMaster spawned)
+    // 🔧 Create the FlowKnob — shared atomic valve between Governor and joiners.
+    // 🧠 GovernorConfig determines the initial value:
+    //   - Static: fixed at output_bytes, never changes (no Governor spawned)
     //   - Latency: starts at initial_output_bytes, PID adjusts based on drain latency
-    let the_initial_flow = match &app_config.flow_master {
-        FlowMasterConfig::Static(cfg) => cfg.output_bytes,
-        FlowMasterConfig::Latency(cfg) => cfg.initial_output_bytes,
-        FlowMasterConfig::Throughput(cfg) => cfg.initial_output_bytes,
+    let the_initial_flow = match &app_config.governor {
+        GovernorConfig::Static(cfg) => cfg.output_bytes,
+        GovernorConfig::Latency(cfg) => cfg.initial_output_bytes,
+        GovernorConfig::Throughput(cfg) => cfg.initial_output_bytes,
     };
     let the_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(the_initial_flow));
 
     info!(
-        "🎛️ FlowMaster mode: {} — initial flow: {} bytes",
-        &app_config.flow_master,
+        "🎛️ Governor mode: {} — initial flow: {} bytes",
+        &app_config.governor,
         the_initial_flow
     );
 
@@ -109,7 +109,7 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
             caster,
             manifold,
             the_flow_knob,
-            &app_config.flow_master,
+            &app_config.governor,
             max_request_size_bytes,
             pipeline_name,
             total_expected_bytes,
@@ -245,7 +245,7 @@ impl PartialEq<&str> for Entry {
 
 /// 🔧 The FlowKnob — a shared atomic valve that controls payload size.
 ///
-/// The FlowMaster writes it. The joiners read it. Nobody else touches it.
+/// The Governor writes it. The joiners read it. Nobody else touches it.
 /// Like the office thermostat, except this one actually works. 🌡️
 pub type FlowKnob = Arc<AtomicUsize>;
 
@@ -281,7 +281,7 @@ mod tests {
             source_config: SourceConfig::InMemory(()),
             sink_config: SinkConfig::InMemory(()),
             drainer: Default::default(),
-            flow_master: Default::default(),
+            governor: Default::default(),
         };
 
         let source = SourceBackend::InMemory(InMemorySource::new().await?);
@@ -303,10 +303,10 @@ mod tests {
         // 🔧 No regulator for tests — static flow knob at max 🎚️
         let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_request_size_bytes));
 
-        let the_flow_master_config = FlowMasterConfig::default();
+        let the_governor_config = GovernorConfig::default();
         let foreman = Foreman::new(app_config);
         foreman
-            .start_workers(source, vec![sink], caster, manifold, the_test_flow_knob, &the_flow_master_config, max_request_size_bytes, "test-pipeline".to_string(), 0)
+            .start_workers(source, vec![sink], caster, manifold, the_test_flow_knob, &the_governor_config, max_request_size_bytes, "test-pipeline".to_string(), 0)
             .await?;
 
         // 📦 Joiner received 1 feed (4 docs newline-delimited), passthrough-cast and joined into JSON array.
@@ -378,7 +378,7 @@ mod tests {
                 common_config: CommonSinkConfig::default(),
             }),
             drainer: Default::default(),
-            flow_master: Default::default(),
+            governor: Default::default(),
         };
 
         // 📡 Page 1: Two hits from the "movies" index — one with routing, because spicy data is best data
@@ -410,7 +410,7 @@ mod tests {
         // 🔧 Static flow knob — no regulator, full throttle, send it and pray 🙏
         let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_request_size_bytes));
 
-        let the_flow_master_config = FlowMasterConfig::default();
+        let the_governor_config = GovernorConfig::default();
         let foreman = Foreman::new(app_config);
         foreman
             .start_workers(
@@ -419,7 +419,7 @@ mod tests {
                 caster,
                 manifold,
                 the_test_flow_knob,
-                &the_flow_master_config,
+                &the_governor_config,
                 max_request_size_bytes,
                 "es-to-es-pit-to-bulk-gauntlet".to_string(),
                 0,

@@ -66,5 +66,5 @@ Manifold ──buffers──→ docs (stateful carry-over)
 Manifold ──flushes──→ payload(s) at dynamic setpoint
 Joiner ──forwards──→ payloads to channel 2
 FlowKnob ──controls──→ both Joiner + Manifold setpoints
-FlowMaster ──adjusts──→ FlowKnob (via regulator)
+Governor ──adjusts──→ FlowKnob (via regulator)
 ```

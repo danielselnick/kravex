@@ -40,7 +40,7 @@ Three-stage pipeline: async I/O → sync CPU → async I/O. Channels are bounded
 
 ```
 lib.rs → AppConfig → Foreman → Workers (Pumper, Joiner, Drainer)
-lib.rs → Regulators → Manometer + FlowMaster → FlowKnob
+lib.rs → Regulators → Manometer + Governor → FlowKnob
 Foreman → Source (via Pumper), Sink (via Drainer)
 Joiner → Caster + Manifold (cast feeds, assemble payloads)
 ```

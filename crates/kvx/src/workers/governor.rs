@@ -6,20 +6,20 @@
 //! 🎬 *[INT. VALVE CONTROL ROOM — THE DIALS SPIN]*
 //! *[A single entity sits at the controls. It receives readings. It adjusts the flow.]*
 //! *[Not too fast. Not too slow. The Goldilocks of data throughput.]*
-//! *["I am the FlowMaster," it announces. "And this porridge is JUST right."]* 🔧📡🦆
+//! *["I am the Governor," it announces. "And this porridge is JUST right."]* 🔧📡🦆
 //!
-//! 📦 FlowMaster — the unified regulator worker that listens to GaugeReading signals
+//! 📦 Governor — the unified regulator worker that listens to GaugeReading signals
 //! and adjusts the FlowKnob that Joiners read to size their payloads.
 //!
 //! 🧠 Knowledge graph:
 //! ```text
-//! Drainer(s) --[ch3: GaugeReading::DrainResult]--> FlowMaster
+//! Drainer(s) --[ch3: GaugeReading::DrainResult]--> Governor
 //!   → regulator.regulate(reading, dt) → new flow rate (bytes)
 //!     → FlowKnob: Arc<AtomicUsize> (effective max_request_size_bytes)
 //!       → Joiner reads flow knob on every flush check
 //! ```
 //!
-//! 🔄 Shutdown: all Drainers exit → their tx3 clones drop → ch3 closes → FlowMaster exits.
+//! 🔄 Shutdown: all Drainers exit → their tx3 clones drop → ch3 closes → Governor exits.
 //! Pure RAII cascade. No `.close()` calls. No `.abort()`. Just vibes and reference counting.
 //!
 //! ⚠️ The singularity will self-regulate without channels. We use async_channel and cope.
@@ -37,11 +37,11 @@ use crate::regulators::{Regulate, Regulators};
 use crate::FlowKnob;
 use super::Worker;
 
-/// 🎛️ The FlowMaster: receives gauge readings, feeds a PID regulator, adjusts the FlowKnob.
+/// 🎛️ The Governor: receives gauge readings, feeds a PID regulator, adjusts the FlowKnob.
 ///
 /// Like a DJ reading the room and adjusting the volume — except the room is a cluster,
 /// the music is bulk payloads, and nobody asked for this metaphor. 🎧🦆
-pub struct FlowMaster {
+pub struct Governor {
     /// 📥 Channel receiver — GaugeReading signals from Drainers (latency) or future CPU poller
     rx: Receiver<GaugeReading>,
     /// 🎛️ The regulator — PID math that converts readings into flow rates
@@ -50,11 +50,11 @@ pub struct FlowMaster {
     the_flow_knob: FlowKnob,
 }
 
-impl FlowMaster {
-    /// 🏗️ Construct a FlowMaster — a receiver, a regulator, and a knob to turn. 🔧
+impl Governor {
+    /// 🏗️ Construct a Governor — a receiver, a regulator, and a knob to turn. 🔧
     ///
     /// "In the beginning there was a channel, a PID, and an atomic.
-    ///  And the FlowMaster said: let there be regulated throughput." — Genesis 2:1 (Tokio Edition) 🦆
+    ///  And the Governor said: let there be regulated throughput." — Genesis 2:1 (Tokio Edition) 🦆
     pub fn new(
         rx: Receiver<GaugeReading>,
         regulator: Regulators,
@@ -68,10 +68,10 @@ impl FlowMaster {
     }
 }
 
-impl Worker for FlowMaster {
+impl Worker for Governor {
     fn start(mut self) -> JoinHandle<Result<()>> {
         tokio::spawn(async move {
-            info!("🎛️ FlowMaster online — listening for gauge readings, regulating the flow");
+            info!("🎛️ Governor online — listening for gauge readings, regulating the flow");
             let mut the_last_time_we_checked = SystemTime::now();
 
             loop {
@@ -95,7 +95,7 @@ impl Worker for FlowMaster {
                         );
 
                         debug!(
-                            "🎛️ FlowMaster: regulated {} → {} bytes (Δ{})",
+                            "🎛️ Governor: regulated {} → {} bytes (Δ{})",
                             the_old_flow,
                             the_new_flow as usize,
                             (the_new_flow as i64) - (the_old_flow as i64)
@@ -103,7 +103,7 @@ impl Worker for FlowMaster {
                     }
                     Err(_) => {
                         // 🏁 All senders dropped — ch3 closed — Drainers are done. Time to rest.
-                        info!("🏁 FlowMaster: ch3 closed. All drainers done. Regulation complete. Goodnight. 💤");
+                        info!("🏁 Governor: ch3 closed. All drainers done. Regulation complete. Goodnight. 💤");
                         return Ok(());
                     }
                 }
@@ -119,10 +119,10 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use crate::regulators::{ByteValue, PidController};
 
-    /// 🧪 The one where FlowMaster receives a reading and adjusts the knob.
+    /// 🧪 The one where Governor receives a reading and adjusts the knob.
     /// Like a thermostat that actually listens. Unlike my office thermostat. 🌡️🦆
     #[tokio::test]
-    async fn the_one_where_flow_master_adjusts_the_knob() {
+    async fn the_one_where_governor_adjusts_the_knob() {
         // 🔧 Set up: PID with 200ms setpoint, 128KiB min, 64MiB max, start at 4MiB
         let the_knob: FlowKnob = Arc::new(AtomicUsize::new(4_194_304));
         let the_regulator = Regulators::Pid(PidController::new(
@@ -130,15 +130,15 @@ mod tests {
         ));
 
         let (tx, rx) = async_channel::bounded(16);
-        let the_flow_master = FlowMaster::new(rx, the_regulator, the_knob.clone());
+        let the_governor = Governor::new(rx, the_regulator, the_knob.clone());
 
-        // 🚀 Spawn FlowMaster
-        let the_handle = the_flow_master.start();
+        // 🚀 Spawn Governor
+        let the_handle = the_governor.start();
 
         // 📡 Send a low-latency reading — PID should increase flow (headroom)
         tx.send(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 50 }).await.unwrap();
 
-        // 💤 Give FlowMaster a moment to process
+        // 💤 Give Governor a moment to process
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let the_knob_value = the_knob.load(Ordering::Relaxed);
@@ -148,35 +148,35 @@ mod tests {
             the_knob_value
         );
 
-        // 🏁 Drop sender → ch3 closes → FlowMaster exits
+        // 🏁 Drop sender → ch3 closes → Governor exits
         drop(tx);
         the_handle.await.unwrap().unwrap();
     }
 
-    /// 🧪 The one where FlowMaster exits cleanly when ch3 closes.
-    /// Pure RAII shutdown — no abort needed. The channel said "goodbye" and FlowMaster listened. 🚪
+    /// 🧪 The one where Governor exits cleanly when ch3 closes.
+    /// Pure RAII shutdown — no abort needed. The channel said "goodbye" and Governor listened. 🚪
     #[tokio::test]
-    async fn the_one_where_flow_master_exits_when_channel_closes() {
+    async fn the_one_where_governor_exits_when_channel_closes() {
         let the_knob: FlowKnob = Arc::new(AtomicUsize::new(1_000_000));
         let the_regulator = Regulators::Static(ByteValue::new(42.0));
 
         let (tx, rx) = async_channel::bounded(16);
-        let the_flow_master = FlowMaster::new(rx, the_regulator, the_knob);
+        let the_governor = Governor::new(rx, the_regulator, the_knob);
 
-        let the_handle = the_flow_master.start();
+        let the_handle = the_governor.start();
 
-        // 🏁 Immediately drop sender — FlowMaster should exit gracefully
+        // 🏁 Immediately drop sender — Governor should exit gracefully
         drop(tx);
 
         let honestly_who_knows = the_handle.await.unwrap();
         assert!(
             honestly_who_knows.is_ok(),
-            "🎯 FlowMaster should exit Ok when channel closes — got {:?}",
+            "🎯 Governor should exit Ok when channel closes — got {:?}",
             honestly_who_knows
         );
     }
 
-    /// 🧪 The one where FlowMaster stores the PID output after multiple readings.
+    /// 🧪 The one where Governor stores the PID output after multiple readings.
     /// Feed it high latency → flow should decrease. Like a bouncer at a club:
     /// "Too crowded? Slow the line." 🚪🦆
     #[tokio::test]
@@ -188,8 +188,8 @@ mod tests {
         ));
 
         let (tx, rx) = async_channel::bounded(256);
-        let the_flow_master = FlowMaster::new(rx, the_regulator, the_knob.clone());
-        let the_handle = the_flow_master.start();
+        let the_governor = Governor::new(rx, the_regulator, the_knob.clone());
+        let the_handle = the_governor.start();
 
         // 📡 Send sustained high-latency readings — PID should reduce flow
         for _ in 0..20 {
@@ -197,7 +197,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
-        // 💤 Let FlowMaster process all readings
+        // 💤 Let Governor process all readings
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         let the_final_flow = the_knob.load(Ordering::Relaxed);

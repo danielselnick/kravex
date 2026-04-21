@@ -24,11 +24,11 @@ pub struct StaticRegulatorConfig {
     pub output_bytes: usize
 }
 
-/// 🔧 Configuration for latency-based PID regulation, deserialized from TOML `[flow_master.Latency]`.
+/// 🔧 Configuration for latency-based PID regulation, deserialized from TOML `[governor.Latency]`.
 ///
 /// 📜 Example TOML:
 /// ```toml
-/// [flow_master.Latency]
+/// [governor.Latency]
 /// set_point_latency_ms = 200
 /// min_request_size_bytes = 131072
 /// initial_output_bytes = 4194304
@@ -58,7 +58,7 @@ fn default_set_point_latency_ms() -> usize { 200 }
 ///
 /// 📜 Example TOML:
 /// ```toml
-/// [flow_master.Throughput]
+/// [governor.Throughput]
 /// min_request_size_bytes = 131072
 /// initial_output_bytes = 4194304
 /// ```

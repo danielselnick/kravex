@@ -55,7 +55,7 @@ Total attempts = 1 (initial) + max_retries. All errors are retried uniformly; gr
 
 - **Three-stage separation**: Async I/O (pump) → sync CPU (cast+join) → async I/O (drain)
 - **Drainer is thin + resilient**: Relay with retry — recv from ch2, send to sink with backoff
-- **DrainMetrics**: Shared `Arc<DrainMetrics>` passed to Drainer constructor. After each successful `drain_with_retry`, Drainer calls `drain_metrics.record_drain(payload_bytes, latency_ms)` to atomically update shared progress counters. Separate from `gauge_tx` (FlowMaster feedback) — this is for progress reporting
+- **DrainMetrics**: Shared `Arc<DrainMetrics>` passed to Drainer constructor. After each successful `drain_with_retry`, Drainer calls `drain_metrics.record_drain(payload_bytes, latency_ms)` to atomically update shared progress counters. Separate from `gauge_tx` (Governor feedback) — this is for progress reporting
 - **Joiner is stateful**: Buffers feeds by byte count, flushes the Manifold output
 
 ## Knowledge Graph
@@ -66,7 +66,7 @@ Pumper → Source.pump() → ch1
 Joiner → ch1 → Caster + Manifold → ch2
 Drainer → ch2 → Sink.drain() with exponential backoff retry
 Drainer → Arc<DrainMetrics> (progress reporting, atomic counters)
-Drainer → gauge_tx (FlowMaster latency feedback, separate concern)
+Drainer → gauge_tx (Governor latency feedback, separate concern)
 Drainer config → DrainerConfig (workers/config.rs)
 Joiner parallelism → RuntimeConfig.joiner_parallelism
 Drainer parallelism → RuntimeConfig.sink_parallelism

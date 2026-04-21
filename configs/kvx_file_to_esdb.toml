@@ -67,30 +67,28 @@ index = "test-123"                      # Optional — each doc can carry its ow
 max_request_size_bytes = 1000000        # 4 MiB — benchmark override (serde default: 10,485,760 / 10 MiB)
 
 # ============================================================
-# 🎚️  FlowMaster — adaptive throttling (optional)
+# 🎚️  Governor — adaptive throttling (optional)
 # ============================================================
 # Absent → pipeline runs at fixed max_request_size_bytes. No regulation. No drama.
-# Present → spawns flow_master, dynamically adjusts payload size
+# Present → spawns governor, dynamically adjusts payload size
 # based on drain feedback (latency, throughput).
-
-#[flow_master.Latency]
+# Legacy `[flow_master.*]` sections are still accepted for compatibility.
+#[governor.Latency]
 # set_point_latency_ms = 200            # 🎯 Target drain latency in ms
 # min_request_size_bytes = 131072       # 📏 PID floor: 128 KiB
 # initial_output_bytes = 4194304        # 📊 Starting flow rate: 4 MiB
-
-#[flow_master.Latency]
+#[governor.Latency]
 # set_point_latency_ms = 200            # 🎯 Target drain latency (ms)
 # min_request_size_bytes = 131072       # 📏 PID floor: 128 KiB
 # initial_output_bytes = 4194304        # 📊 Starting flow rate: 4 MiB
-
-#[flow_master.Throughput]
+#[governor.Throughput]
 #min_request_size_bytes = 131072         # 📏 Floor: 128 KiB
 #initial_output_bytes = 4194304          # 📊 Start at 4 MiB, hill climber finds the peak
 # window_duration_secs = 5             # ⏱️  Evaluation window (default: 5s)
 # improvement_threshold_pct = 10.0     # 📈 Step forward when median improves >10%
 # degradation_threshold_pct = 20.0     # 📉 Circuit breaker trips at 20% EMA drop
 # re_explore_after_windows = 30        # 🔍 Re-explore after 30 quiet windows
-[flow_master.Static]
+[governor.Static]
 output_bytes = 10000000
 # ============================================================
 # 📡 Source — Elasticsearch (commented-out reference)

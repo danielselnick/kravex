@@ -12,7 +12,7 @@
 
 use anyhow::Context;
 use crate::workers::DrainerConfig;
-use crate::workers::FlowMasterConfig;
+use crate::workers::GovernorConfig;
 use serde::Deserialize;
 // -- 🔧 To load the configuration, so I don't have to manually parse
 // -- environment variables or files. Bleh. Like doing taxes but for bytes.
@@ -119,10 +119,10 @@ pub struct AppConfig {
     /// Defaults to 3 retries, 1s initial, 2x multiplier, 30s cap. Optional section in TOML. 🦆
     #[serde(default)]
     pub drainer: DrainerConfig,
-    /// 🎛️ FlowMaster config — the unified regulator. Static = fixed flow, Latency = PID from
+    /// 🎛️ Governor config — the unified regulator. Static = fixed flow, Latency = PID from
     /// drain latency, CPU = PID from cluster CPU stats. Replaces the old `regulator` field. 🔧
-    #[serde(default)]
-    pub flow_master: FlowMasterConfig,
+    #[serde(default, alias = "flow_master")]
+    pub governor: GovernorConfig,
 }
 
 /// 🚀 Load the config — from a file, from env vars, or from the sheer power of hoping.
@@ -284,5 +284,34 @@ mod tests {
         assert_eq!(app_config.runtime.sink_parallelism, 4);
 
         // 🧹 TempPath auto-deletes on drop — no manual cleanup needed
+    }
+
+    #[test]
+    fn the_one_where_governor_accepts_legacy_flow_master_table_name() {
+        let config_path = write_test_config(
+            r#"
+            [source_config.File]
+            file_name = "input.json"
+
+            [sink_config.File]
+            file_name = "output.json"
+
+            [flow_master.Static]
+            output_bytes = 777777
+            "#,
+        );
+
+        let app_config = load_config(Some(&config_path))
+            .expect("💀 Legacy [flow_master.*] should still deserialize into governor config");
+
+        match app_config.governor {
+            GovernorConfig::Static(cfg) => {
+                assert_eq!(cfg.output_bytes, 777_777, "🎯 Legacy alias should map to governor static output");
+            }
+            honestly_who_knows => panic!(
+                "💀 Expected GovernorConfig::Static from legacy [flow_master.Static], got {:?}",
+                honestly_who_knows
+            ),
+        }
     }
 }

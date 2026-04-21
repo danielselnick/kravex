@@ -23,5 +23,5 @@ url = "http://localhost:19200"
 index = "pmc"
 max_request_size_bytes = 1000000
 
-[flow_master.Static]
+[governor.Static]
 output_bytes = 10000000

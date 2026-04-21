@@ -23,7 +23,7 @@ use tokio::task::JoinHandle;
 
 mod config;
 pub use config::DrainerConfig;
-pub use config::FlowMasterConfig;
+pub use config::GovernorConfig;
 
 mod drainer;
 pub use drainer::Drainer;
@@ -31,8 +31,8 @@ mod pumper;
 pub use pumper::Pumper;
 mod joiner;
 pub use joiner::Joiner;
-mod flow_master;
-pub use flow_master::FlowMaster;
+mod governor;
+pub use governor::Governor;
 
 /// 🏗️ A background worker, that does work. duh.
 pub trait Worker {
