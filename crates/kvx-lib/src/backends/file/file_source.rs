@@ -5,15 +5,12 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use memchr::memchr;
-use tokio::{
-    fs::File,
-    io::AsyncReadExt,
-};
+use tokio::{fs::File, io::AsyncReadExt};
 use tracing::trace;
 
+use super::config::FileSourceConfig;
 use crate::Page;
 use crate::backends::{CommonSourceConfig, Source};
-use super::config::FileSourceConfig;
 // 📏 128 KiB per OS read — the Goldilocks zone between "too many syscalls" and "too much RAM".
 // BufReader's default is 8 KiB. We're 16x that. Fewer context switches, happier kernel.
 // KNOWLEDGE GRAPH: this constant controls the I/O batch size for raw file reads.
@@ -154,9 +151,7 @@ impl Source for FileSource {
             while let Some(newline_offset) = memchr(b'\n', &working_buf[cursor..]) {
                 let line_end = cursor + newline_offset;
                 // 🧹 strip \r if this is a \r\n line ending (Windows refugees welcome)
-                let line_content_end = if line_end > cursor
-                    && working_buf[line_end - 1] == b'\r'
-                {
+                let line_content_end = if line_end > cursor && working_buf[line_end - 1] == b'\r' {
                     line_end - 1
                 } else {
                     line_end
@@ -270,7 +265,8 @@ mod tests {
         max_bytes: usize,
     ) -> (FileSource, NamedTempFile) {
         // -- 📁 write content to a temp file that self-destructs on drop (very Mission Impossible 🕵️)
-        let mut tmp = NamedTempFile::new().expect("💀 Failed to create temp file. The OS has forsaken us.");
+        let mut tmp =
+            NamedTempFile::new().expect("💀 Failed to create temp file. The OS has forsaken us.");
         tmp.write_all(content.as_bytes())
             .expect("💀 Failed to write test content. The disk is either full or haunted.");
         tmp.flush()
@@ -334,7 +330,12 @@ mod tests {
         let pages = drain_all_pages(&mut source).await?;
 
         // -- 🎯 verify page count: ceil(10/3) = 4 pages
-        assert_eq!(pages.len(), 4, "💀 Expected 4 pages (3+3+3+1), got {}", pages.len());
+        assert_eq!(
+            pages.len(),
+            4,
+            "💀 Expected 4 pages (3+3+3+1), got {}",
+            pages.len()
+        );
 
         // -- 🎯 verify doc counts per page
         let doc_counts: Vec<usize> = pages.iter().map(|p| p.split('\n').count()).collect();
@@ -345,9 +346,19 @@ mod tests {
         );
 
         // -- ✅ verify total content integrity — no docs lost in the mail
-        let all_docs: String = pages.iter().map(|f| f.as_str()).collect::<Vec<_>>().join("\n");
-        let expected: String = (0..10).map(|i| format!("doc{i}")).collect::<Vec<_>>().join("\n");
-        assert_eq!(all_docs, expected, "💀 Total content mismatch. Some docs went AWOL.");
+        let all_docs: String = pages
+            .iter()
+            .map(|f| f.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let expected: String = (0..10)
+            .map(|i| format!("doc{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            all_docs, expected,
+            "💀 Total content mismatch. Some docs went AWOL."
+        );
         Ok(())
     }
 
@@ -455,7 +466,11 @@ mod tests {
         let pages = drain_all_pages(&mut source).await?;
 
         // -- 🎯 reconstruct full content from pages and compare to original
-        let reconstructed = pages.iter().map(|f| f.as_str()).collect::<Vec<_>>().join("\n");
+        let reconstructed = pages
+            .iter()
+            .map(|f| f.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         let expected = lines.join("\n");
         assert_eq!(
             reconstructed, expected,

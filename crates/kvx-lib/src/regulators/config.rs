@@ -16,12 +16,16 @@ use serde::Deserialize;
 // 🔧 RegulatorConfig — TOML-friendly configuration
 // ============================================================
 
-fn default_min_request_size_bytes() -> usize { 128 * 1024 } // 📏 128 KiB
-fn default_initial_output_bytes() -> usize { 4 * 1024 * 1024 } // 📊 4 MiB
+fn default_min_request_size_bytes() -> usize {
+    128 * 1024
+} // 📏 128 KiB
+fn default_initial_output_bytes() -> usize {
+    4 * 1024 * 1024
+} // 📊 4 MiB
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct StaticRegulatorConfig {
-    pub output_bytes: usize
+    pub output_bytes: usize,
 }
 
 /// 🔧 Configuration for latency-based PID regulation, deserialized from TOML `[governor.Latency]`.
@@ -52,7 +56,9 @@ pub struct LatencyRegulatorConfig {
     pub initial_output_bytes: usize,
 }
 
-fn default_set_point_latency_ms() -> usize { 200 }
+fn default_set_point_latency_ms() -> usize {
+    200
+}
 
 /// 🔧 Configuration for throughput-seeking hill climbing regulation.
 ///
@@ -93,7 +99,15 @@ pub struct ThroughputSeekerConfig {
     pub re_explore_after_windows: usize,
 }
 
-fn default_window_duration_secs() -> u64 { 5 }
-fn default_improvement_threshold_pct() -> f64 { 10.0 }
-fn default_degradation_threshold_pct() -> f64 { 35.0 }
-fn default_re_explore_after_windows() -> usize { 30 }
+fn default_window_duration_secs() -> u64 {
+    5
+}
+fn default_improvement_threshold_pct() -> f64 {
+    10.0
+}
+fn default_degradation_threshold_pct() -> f64 {
+    35.0
+}
+fn default_re_explore_after_windows() -> usize {
+    30
+}

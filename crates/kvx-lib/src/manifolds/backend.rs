@@ -20,7 +20,7 @@
 //! 🦆 The duck asked why we need a backend enum when we have trait objects.
 //!    We said "monomorphization." The duck left. It didn't want a lecture.
 
-use super::{Manifold, JsonArrayManifold, NdjsonManifold};
+use super::{JsonArrayManifold, Manifold, NdjsonManifold};
 use crate::config::SinkConfig;
 use crate::{Entry, Payload};
 use anyhow::Result;

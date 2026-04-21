@@ -17,9 +17,9 @@
 //!
 //! 🦆 The duck wonders if we're benchmarking the joiner or the channel. Yes.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use kvx_lib::casts::passthrough::Passthrough;
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kvx_lib::casts::PageToEntriesCaster;
+use kvx_lib::casts::passthrough::Passthrough;
 use kvx_lib::manifolds::ManifoldBackend;
 use kvx_lib::workers::Joiner;
 use kvx_lib::{Page, Payload};
@@ -93,7 +93,9 @@ fn joiner_throughput_bytes(c: &mut Criterion) {
                             tx2,
                             PageToEntriesCaster::Passthrough(Passthrough),
                             manifold.clone(),
-                            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(MAX_REQUEST_SIZE_BYTES)),
+                            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(
+                                MAX_REQUEST_SIZE_BYTES,
+                            )),
                         );
 
                         // -- 🚀 Launch the joiner thread — it blocks on recv_blocking until feeds arrive
@@ -155,7 +157,9 @@ fn joiner_throughput_docs(c: &mut Criterion) {
                             tx2,
                             PageToEntriesCaster::Passthrough(Passthrough),
                             manifold.clone(),
-                            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(MAX_REQUEST_SIZE_BYTES)),
+                            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(
+                                MAX_REQUEST_SIZE_BYTES,
+                            )),
                         );
 
                         let the_joiner_handle = joiner.start();

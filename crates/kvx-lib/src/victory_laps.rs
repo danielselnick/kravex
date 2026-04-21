@@ -118,8 +118,14 @@ mod tests {
     fn the_one_where_victory_lap_doesnt_panic() {
         let elapsed = Duration::from_secs(42);
         let message = victory_lap(elapsed);
-        assert!(message.contains("MIGRATION COMPLETE"), "🎯 Every message must declare victory");
-        assert!(message.contains("42"), "🎯 Elapsed time must appear somewhere in the message");
+        assert!(
+            message.contains("MIGRATION COMPLETE"),
+            "🎯 Every message must declare victory"
+        );
+        assert!(
+            message.contains("42"),
+            "🎯 Elapsed time must appear somewhere in the message"
+        );
     }
 
     #[test]
@@ -165,6 +171,9 @@ mod tests {
         let elapsed = Duration::from_secs_f64(70.126579);
         let message = victory_lap(elapsed);
         // -- 🎯 Debug format should produce something like "70.13s"
-        assert!(!message.contains("{elapsed}"), "💀 Raw placeholder leaked through: {message}");
+        assert!(
+            !message.contains("{elapsed}"),
+            "💀 Raw placeholder leaked through: {message}"
+        );
     }
 }

@@ -84,13 +84,15 @@ impl PidController {
             min_output > 0.0 && max_output > 0.0,
             "💀 PID output bounds must be positive — got min={}, max={}. \
              Negative bytes are not a thing. Yet.",
-            min_output, max_output
+            min_output,
+            max_output
         );
         assert!(
             min_output <= max_output,
             "💀 PID min_output ({}) > max_output ({}) — the floor is above the ceiling. \
              This is not an Escher painting, it's a config error.",
-            min_output, max_output
+            min_output,
+            max_output
         );
 
         // 🧮 Auto-tune gains from the full operating range ratio
@@ -159,9 +161,8 @@ impl Regulate for PidController {
         self.prev_error = error;
 
         // 🧮 Step 5: PID output adjustment — the moment of truth
-        let the_pid_says = self.kp * error
-            + self.ki * self.integral_accumulation
-            + self.kd * derivative;
+        let the_pid_says =
+            self.kp * error + self.ki * self.integral_accumulation + self.kd * derivative;
 
         // 📏 Step 6: Additive adjustment + clamp — the guardrails of sanity
         self.output = (self.output + the_pid_says).clamp(self.min_output, self.max_output);
@@ -183,11 +184,26 @@ mod tests {
         let the_controller = PidController::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
 
         assert_eq!(the_controller.setpoint, 75.0, "🎯 Setpoint should be 75%");
-        assert_eq!(the_controller.output, 4_194_304.0, "📊 Initial output should be 4 MiB");
-        assert!(the_controller.kp > 0.0, "🔧 kp should be positive — we need proportional response");
-        assert!(the_controller.ki > 0.0, "🔧 ki should be positive — we need integral correction");
-        assert!(the_controller.kd > 0.0, "🔧 kd should be positive — we need derivative damping");
-        assert_eq!(the_controller.ema_average, 75.0, "📊 EMA starts at setpoint — hopeful 🦆");
+        assert_eq!(
+            the_controller.output, 4_194_304.0,
+            "📊 Initial output should be 4 MiB"
+        );
+        assert!(
+            the_controller.kp > 0.0,
+            "🔧 kp should be positive — we need proportional response"
+        );
+        assert!(
+            the_controller.ki > 0.0,
+            "🔧 ki should be positive — we need integral correction"
+        );
+        assert!(
+            the_controller.kd > 0.0,
+            "🔧 kd should be positive — we need derivative damping"
+        );
+        assert_eq!(
+            the_controller.ema_average, 75.0,
+            "📊 EMA starts at setpoint — hopeful 🦆"
+        );
     }
 
     /// 🧪 The one where CPU is below setpoint so PID increases flow.
@@ -198,12 +214,20 @@ mod tests {
         let the_starting_output = the_controller.output;
 
         // 📊 Feed it 50% CPU — well below 75% setpoint — should increase output
-        let the_new_flow = the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 50 }, Duration::from_millis(3000));
+        let the_new_flow = the_controller.regulate(
+            GaugeReading::DrainResult {
+                payload_bytes: 0,
+                latency_ms: 50,
+            },
+            Duration::from_millis(3000),
+        );
 
         assert!(
             the_new_flow > the_starting_output,
             "🎯 Output should increase when CPU ({}) is below setpoint (75%) — got {} vs {}",
-            50.0, the_new_flow, the_starting_output
+            50.0,
+            the_new_flow,
+            the_starting_output
         );
     }
 
@@ -215,7 +239,13 @@ mod tests {
 
         // 📊 First, pump output up by feeding low CPU readings — give it room to decrease
         for _ in 0..10 {
-            the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 50 }, Duration::from_millis(3000));
+            the_controller.regulate(
+                GaugeReading::DrainResult {
+                    payload_bytes: 0,
+                    latency_ms: 50,
+                },
+                Duration::from_millis(3000),
+            );
         }
         let the_elevated_output = the_controller.output;
 
@@ -223,13 +253,20 @@ mod tests {
         // ⚠️ EMA needs several readings to overcome the low-CPU momentum,
         // so we pump 20 readings at 95% to let the PID fully respond. 🔥
         for _ in 0..20 {
-            the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 95 }, Duration::from_millis(3000));
+            the_controller.regulate(
+                GaugeReading::DrainResult {
+                    payload_bytes: 0,
+                    latency_ms: 95,
+                },
+                Duration::from_millis(3000),
+            );
         }
 
         assert!(
             the_controller.output < the_elevated_output,
             "🎯 Output should decrease when CPU is sustained above setpoint — got {} vs {}",
-            the_controller.output, the_elevated_output
+            the_controller.output,
+            the_elevated_output
         );
     }
 
@@ -243,22 +280,36 @@ mod tests {
 
         // 🚀 Feed it super low CPU — should try to max out but respect ceiling
         for _ in 0..100 {
-            the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 10 }, Duration::from_millis(3000));
+            the_controller.regulate(
+                GaugeReading::DrainResult {
+                    payload_bytes: 0,
+                    latency_ms: 10,
+                },
+                Duration::from_millis(3000),
+            );
         }
         assert!(
             the_controller.output <= the_max,
             "🎯 Output {} should not exceed max {}",
-            the_controller.output, the_max
+            the_controller.output,
+            the_max
         );
 
         // 💀 Feed it super high CPU — should try to min out but respect floor
         for _ in 0..100 {
-            the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 99 }, Duration::from_millis(3000));
+            the_controller.regulate(
+                GaugeReading::DrainResult {
+                    payload_bytes: 0,
+                    latency_ms: 99,
+                },
+                Duration::from_millis(3000),
+            );
         }
         assert!(
             the_controller.output >= the_min,
             "🎯 Output {} should not go below min {}",
-            the_controller.output, the_min
+            the_controller.output,
+            the_min
         );
     }
 
@@ -269,10 +320,22 @@ mod tests {
         let mut the_controller = PidController::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
 
         // 📊 Alternate between extremes — EMA should dampen the oscillation
-        the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 100 }, Duration::from_millis(3000));
+        the_controller.regulate(
+            GaugeReading::DrainResult {
+                payload_bytes: 0,
+                latency_ms: 100,
+            },
+            Duration::from_millis(3000),
+        );
         let after_high = the_controller.ema_average;
 
-        the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 0 }, Duration::from_millis(3000));
+        the_controller.regulate(
+            GaugeReading::DrainResult {
+                payload_bytes: 0,
+                latency_ms: 0,
+            },
+            Duration::from_millis(3000),
+        );
         let after_low = the_controller.ema_average;
 
         // 📊 EMA should NOT be at 0 — it should still remember the 100 reading
@@ -296,7 +359,13 @@ mod tests {
         let mut the_controller = PidController::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
 
         // 📊 Zero dt — derivative should be 0, no NaN, no panic
-        let the_result = the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 80 }, Duration::from_millis(0));
+        let the_result = the_controller.regulate(
+            GaugeReading::DrainResult {
+                payload_bytes: 0,
+                latency_ms: 80,
+            },
+            Duration::from_millis(0),
+        );
         assert!(
             the_result.is_finite(),
             "🎯 Output should be finite even with zero dt — got {}",
@@ -313,14 +382,26 @@ mod tests {
 
         // 📊 Feed exactly the setpoint for many iterations — should converge
         for _ in 0..100 {
-            the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 75 }, Duration::from_millis(3000));
+            the_controller.regulate(
+                GaugeReading::DrainResult {
+                    payload_bytes: 0,
+                    latency_ms: 75,
+                },
+                Duration::from_millis(3000),
+            );
         }
 
         let the_settled_output = the_controller.output;
 
         // 📊 Run 20 more — output should barely change (steady state)
         for _ in 0..20 {
-            the_controller.regulate(GaugeReading::DrainResult { payload_bytes: 0, latency_ms: 75 }, Duration::from_millis(3000));
+            the_controller.regulate(
+                GaugeReading::DrainResult {
+                    payload_bytes: 0,
+                    latency_ms: 75,
+                },
+                Duration::from_millis(3000),
+            );
         }
 
         let the_drift = (the_controller.output - the_settled_output).abs();
@@ -330,7 +411,9 @@ mod tests {
             the_drift_percent < 1.0,
             "🎯 Output should be stable at setpoint — drifted {:.4}% ({} → {}). \
              The PID is restless. It needs therapy.",
-            the_drift_percent, the_settled_output, the_controller.output
+            the_drift_percent,
+            the_settled_output,
+            the_controller.output
         );
     }
 

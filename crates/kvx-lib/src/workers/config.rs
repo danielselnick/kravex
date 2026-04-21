@@ -65,19 +65,27 @@ impl Default for DrainerConfig {
 
 // 🔄 3 retries: the magic number. Any less and you're impatient.
 // -- Any more and you're in denial. Like refreshing your email after sending a risky text.
-fn default_max_retries() -> usize { 3 }
+fn default_max_retries() -> usize {
+    3
+}
 
 // ⏱️ 1 second: long enough to seem polite, short enough to seem urgent.
 // -- Like the pause before "per my last email." 🦆
-fn default_initial_backoff_ms() -> u64 { 1_000 }
+fn default_initial_backoff_ms() -> u64 {
+    1_000
+}
 
 // 📈 2x: doubles every time, like my anxiety before a deploy.
 // -- Attempt 1: 1s. Attempt 2: 2s. Attempt 3: 4s. Attempt 4: "maybe I should update my resume."
-fn default_backoff_multiplier() -> f64 { 2.0 }
+fn default_backoff_multiplier() -> f64 {
+    2.0
+}
 
 // 🛑 30 seconds: the maximum amount of time we'll wait before accepting our fate.
 // -- Like waiting for a reply to "we need to talk." 💀
-fn default_max_backoff_ms() -> u64 { 30_000 }
+fn default_max_backoff_ms() -> u64 {
+    30_000
+}
 
 #[derive(Debug, Deserialize, Clone)]
 pub enum GovernorConfig {
@@ -99,7 +107,9 @@ impl std::fmt::Display for GovernorConfig {
 impl Default for GovernorConfig {
     // 📏 Default: static 4 MiB — the same safe starting point the PID controller uses
     fn default() -> Self {
-        GovernorConfig::Static(StaticRegulatorConfig { output_bytes: 4 * 1024 * 1024 })
+        GovernorConfig::Static(StaticRegulatorConfig {
+            output_bytes: 4 * 1024 * 1024,
+        })
     }
 }
 
@@ -157,11 +167,26 @@ mod tests {
 
         match the_config {
             GovernorConfig::Throughput(cfg) => {
-                assert_eq!(cfg.min_request_size_bytes, 262_144, "🎯 min should be 256 KiB");
-                assert_eq!(cfg.initial_output_bytes, 8_388_608, "🎯 initial should be 8 MiB");
-                assert_eq!(cfg.window_duration_secs, 5, "🎯 window_duration should default to 5s");
-                assert!((cfg.improvement_threshold_pct - 10.0).abs() < f64::EPSILON, "🎯 improvement default 10%");
-                assert!((cfg.degradation_threshold_pct - 35.0).abs() < f64::EPSILON, "🎯 degradation default 35%");
+                assert_eq!(
+                    cfg.min_request_size_bytes, 262_144,
+                    "🎯 min should be 256 KiB"
+                );
+                assert_eq!(
+                    cfg.initial_output_bytes, 8_388_608,
+                    "🎯 initial should be 8 MiB"
+                );
+                assert_eq!(
+                    cfg.window_duration_secs, 5,
+                    "🎯 window_duration should default to 5s"
+                );
+                assert!(
+                    (cfg.improvement_threshold_pct - 10.0).abs() < f64::EPSILON,
+                    "🎯 improvement default 10%"
+                );
+                assert!(
+                    (cfg.degradation_threshold_pct - 35.0).abs() < f64::EPSILON,
+                    "🎯 degradation default 35%"
+                );
                 assert_eq!(cfg.re_explore_after_windows, 30, "🎯 re-explore default 30");
             }
             _ => panic!("💀 Expected Throughput variant, got {:?}", the_config),
@@ -173,13 +198,21 @@ mod tests {
     #[test]
     fn the_one_where_throughput_defaults_are_not_insane() {
         let the_toml = "[Throughput]";
-        let the_config: GovernorConfig = toml::from_str(the_toml)
-            .expect("💀 Empty Throughput section should use defaults");
+        let the_config: GovernorConfig =
+            toml::from_str(the_toml).expect("💀 Empty Throughput section should use defaults");
 
         match the_config {
             GovernorConfig::Throughput(cfg) => {
-                assert_eq!(cfg.min_request_size_bytes, 128 * 1024, "🎯 Default min is 128 KiB");
-                assert_eq!(cfg.initial_output_bytes, 4 * 1024 * 1024, "🎯 Default initial is 4 MiB");
+                assert_eq!(
+                    cfg.min_request_size_bytes,
+                    128 * 1024,
+                    "🎯 Default min is 128 KiB"
+                );
+                assert_eq!(
+                    cfg.initial_output_bytes,
+                    4 * 1024 * 1024,
+                    "🎯 Default initial is 4 MiB"
+                );
             }
             _ => panic!("💀 Expected Throughput variant"),
         }

@@ -5,10 +5,10 @@
 // ai
 // 🧠 The lines of NDJSON are raw json docs — they have no bulk action metadata.
 // 📡 This caster adds the ES bulk index action line before each doc.
-use anyhow::Result;
 use crate::Entry;
 use crate::Page;
 use crate::casts::Caster;
+use anyhow::Result;
 const THE_BULK_ACTION_LINE: &str = "{\"index\":{}}";
 
 /// 📡 Casts raw NDJSON docs into ES bulk format (action line + source doc).
@@ -67,7 +67,10 @@ mod tests {
 
         // ✅ Verify line count: action line + doc line = 2 lines
         let line_count = the_bulk_body.lines().count();
-        assert_eq!(line_count, 2, "💀 Expected 2 lines (action + doc), got {line_count}");
+        assert_eq!(
+            line_count, 2,
+            "💀 Expected 2 lines (action + doc), got {line_count}"
+        );
 
         Ok(())
     }
@@ -87,14 +90,20 @@ mod tests {
 
         // 🎯 Should produce 3 action+doc pairs = 6 lines
         let lines: Vec<&str> = the_bulk_body.lines().collect();
-        assert_eq!(lines.len(), 6, "💀 Expected 6 lines for 3 docs, got {}", lines.len());
+        assert_eq!(
+            lines.len(),
+            6,
+            "💀 Expected 6 lines for 3 docs, got {}",
+            lines.len()
+        );
 
         // ✅ Verify the interleaving pattern: action, doc, action, doc, action, doc
         let the_action_line = r#"{"index":{}}"#;
         for i in (0..lines.len()).step_by(2) {
             assert_eq!(
                 lines[i], the_action_line,
-                "💀 Line {i} should be the action line, got: {}", lines[i]
+                "💀 Line {i} should be the action line, got: {}",
+                lines[i]
             );
         }
         assert_eq!(lines[1], doc_a, "💀 Line 1 should be doc_a");
@@ -115,7 +124,8 @@ mod tests {
         // 🎯 Empty in, empty out — no phantom action lines
         assert!(
             entries.is_empty(),
-            "💀 Empty input should produce empty output, but got {} entries", entries.len()
+            "💀 Empty input should produce empty output, but got {} entries",
+            entries.len()
         );
 
         Ok(())
@@ -135,8 +145,10 @@ mod tests {
         // 🎯 Should still be exactly 1 action+doc pair, no ghost at the end
         let lines: Vec<&str> = the_bulk_body.lines().collect();
         assert_eq!(
-            lines.len(), 2,
-            "💀 Trailing newline created ghost lines. Expected 2, got {}", lines.len()
+            lines.len(),
+            2,
+            "💀 Trailing newline created ghost lines. Expected 2, got {}",
+            lines.len()
         );
 
         Ok(())
@@ -157,8 +169,10 @@ mod tests {
         // 🎯 Only 2 real docs = 4 lines total (2 action + 2 doc)
         let lines: Vec<&str> = the_bulk_body.lines().collect();
         assert_eq!(
-            lines.len(), 4,
-            "💀 Blank lines leaked through! Expected 4 lines, got {}", lines.len()
+            lines.len(),
+            4,
+            "💀 Blank lines leaked through! Expected 4 lines, got {}",
+            lines.len()
         );
 
         Ok(())

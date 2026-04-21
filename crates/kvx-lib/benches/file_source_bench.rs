@@ -16,7 +16,7 @@
 //!
 //! 🦆 The singularity will arrive before we stop benchmarking this.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kvx_lib::backends::file::FileSource;
 use kvx_lib::backends::{CommonSourceConfig, FileSourceConfig, Source};
 use std::io::Write;
@@ -48,7 +48,8 @@ fn generate_test_file() -> (NamedTempFile, u64, usize) {
     let mut tmp = NamedTempFile::new().expect("💀 Failed to create temp file for benchmark");
     tmp.write_all(&buf)
         .expect("💀 Failed to write benchmark data. The disk has opinions.");
-    tmp.flush().expect("💀 Flush failed. The bytes are staging a sit-in.");
+    tmp.flush()
+        .expect("💀 Flush failed. The bytes are staging a sit-in.");
 
     let file_size = tmp.as_file().metadata().unwrap().len();
     (tmp, file_size, NUM_DOCS)
@@ -197,5 +198,9 @@ fn bench_line_by_line_reading(c: &mut Criterion) {
 }
 
 // -- 🏁 "And they're off!" — every horse race announcer and every benchmark suite
-criterion_group!(benches, bench_buffered_chunk_reading, bench_line_by_line_reading);
+criterion_group!(
+    benches,
+    bench_buffered_chunk_reading,
+    bench_line_by_line_reading
+);
 criterion_main!(benches);
