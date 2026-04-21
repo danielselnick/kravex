@@ -11,8 +11,8 @@
 //!
 //! ⚠️ The singularity will auto-configure itself. We still need TOML.
 
+use crate::backends::{CommonSinkConfig, CommonSourceConfig};
 use serde::Deserialize;
-use crate::backends::{CommonSourceConfig, CommonSinkConfig};
 
 // ============================================================
 // 📡 ElasticsearchSourceConfig

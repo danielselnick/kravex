@@ -150,8 +150,8 @@ impl ThroughputSeeker {
         // ═══════════════════════════════════════════════════════════════════
         self.the_nervous_average = THE_NERVOUS_ALPHA * the_throughput
             + (1.0 - THE_NERVOUS_ALPHA) * self.the_nervous_average;
-        self.the_chill_average = THE_CHILL_ALPHA * the_throughput
-            + (1.0 - THE_CHILL_ALPHA) * self.the_chill_average;
+        self.the_chill_average =
+            THE_CHILL_ALPHA * the_throughput + (1.0 - THE_CHILL_ALPHA) * self.the_chill_average;
         self.the_ema_warmup_counter += 1;
 
         // Gate the trip on: not in cooldown, not at floor, and EMAs have had
@@ -165,8 +165,7 @@ impl ThroughputSeeker {
             && the_not_pinned_to_floor
             && the_emas_have_settled
             && self.the_chill_average > 0.0
-            && self.the_nervous_average
-                < self.the_chill_average * (1.0 - self.the_degradation_bar)
+            && self.the_nervous_average < self.the_chill_average * (1.0 - self.the_degradation_bar)
         {
             // ⚡ CIRCUIT BREAKER TRIPPED
             let the_old_size = self.the_current_request_size;
@@ -263,8 +262,7 @@ impl ThroughputSeeker {
                             self.the_step_size, THE_MINIMUM_STEP_WORTH_TAKING as usize
                         );
                     } else {
-                        self.the_current_request_size +=
-                            self.the_heading * self.the_step_size;
+                        self.the_current_request_size += self.the_heading * self.the_step_size;
                         debug!(
                             "🔄 Hill climber: worsened {:.1}% — reversed to {} bytes (step={:.0})",
                             the_delta * 100.0,
@@ -279,12 +277,12 @@ impl ThroughputSeeker {
 
                     if self.the_boredom_counter >= self.the_boredom_threshold {
                         // 🔍 Re-explore — been too quiet for too long, the landscape may have shifted
-                        self.the_step_size = (self.the_current_request_size / 4.0).max(THE_MINIMUM_STEP_WORTH_TAKING);
+                        self.the_step_size = (self.the_current_request_size / 4.0)
+                            .max(THE_MINIMUM_STEP_WORTH_TAKING);
                         self.the_heading = 1.0;
                         self.the_seeker_found_peace = false;
                         self.the_boredom_counter = 0;
-                        self.the_current_request_size +=
-                            self.the_heading * self.the_step_size;
+                        self.the_current_request_size += self.the_heading * self.the_step_size;
 
                         info!(
                             "🔍 Hill climber re-exploring after {} quiet windows — \
@@ -311,8 +309,7 @@ impl ThroughputSeeker {
     ///  Like a rejected Tinder match — swipe left on the request size." 💔
     fn on_error(&mut self) -> f64 {
         let the_old_size = self.the_current_request_size;
-        self.the_current_request_size =
-            (self.the_current_request_size * 0.5).max(self.the_floor);
+        self.the_current_request_size = (self.the_current_request_size * 0.5).max(self.the_floor);
         self.the_mandatory_chill_until = Instant::now() + THE_ERROR_COOLDOWN;
         self.reset_the_hill_climber();
 
@@ -334,7 +331,8 @@ impl ThroughputSeeker {
     fn reset_the_hill_climber(&mut self) {
         // Step must be at least the minimum — otherwise a reset at the floor
         // produces step=32K < 64K → instant convergence → climber never climbs back
-        self.the_step_size = (self.the_current_request_size / 4.0).max(THE_MINIMUM_STEP_WORTH_TAKING);
+        self.the_step_size =
+            (self.the_current_request_size / 4.0).max(THE_MINIMUM_STEP_WORTH_TAKING);
         self.the_heading = 1.0;
         self.the_throughput_samples.clear();
         self.the_window_start = Instant::now();
@@ -434,7 +432,8 @@ mod tests {
         assert!(
             the_ascending_peak >= the_initial,
             "🎯 Improving throughput should increase request size — {} >= {}",
-            the_ascending_peak, the_initial
+            the_ascending_peak,
+            the_initial
         );
 
         // 📉 Phase 2: worsening throughput — 20 MB/s (5x worse than peak)
@@ -448,7 +447,8 @@ mod tests {
         assert!(
             the_after_decline < the_ascending_peak,
             "🎯 Declining throughput should reduce request size — {} < {}",
-            the_after_decline, the_ascending_peak
+            the_after_decline,
+            the_ascending_peak
         );
     }
 
@@ -507,7 +507,8 @@ mod tests {
             the_size_after_trip < the_size_before_trip,
             "🎯 Circuit breaker should reduce request size on throughput collapse — \
              before={}, after={}. The breaker didn't break.",
-            the_size_before_trip, the_size_after_trip
+            the_size_before_trip,
+            the_size_after_trip
         );
     }
 
@@ -559,7 +560,8 @@ mod tests {
         assert!(
             (the_output - the_expected).abs() < 1.0,
             "🎯 Error should halve request size — expected {}, got {}",
-            the_expected, the_output
+            the_expected,
+            the_output
         );
 
         // 🎯 Double error → halve again
@@ -568,7 +570,8 @@ mod tests {
         assert!(
             (the_double_output - the_double_expected).abs() < 1.0,
             "🎯 Double error should halve again — expected {}, got {}",
-            the_double_expected, the_double_output
+            the_double_expected,
+            the_double_output
         );
     }
 
@@ -685,7 +688,8 @@ mod tests {
         assert!(
             the_after_error < the_initial,
             "🎯 Error should reduce request size — {} vs {}",
-            the_after_error, the_initial
+            the_after_error,
+            the_initial
         );
     }
 }

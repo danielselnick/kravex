@@ -10,9 +10,9 @@
 //! 🏗️ Powered by Figment, because manually parsing env vars is a form of
 //! self-harm that even the borrow checker wouldn't approve of.
 
-use anyhow::Context;
 use crate::workers::DrainerConfig;
 use crate::workers::GovernorConfig;
+use anyhow::Context;
 use serde::Deserialize;
 // -- 🔧 To load the configuration, so I don't have to manually parse
 // -- environment variables or files. Bleh. Like doing taxes but for bytes.
@@ -41,13 +41,20 @@ use tracing::info;
 #[derive(Debug, Deserialize, Clone)]
 pub struct RuntimeConfig {
     /// 📬 Bounded channel capacity for ch1 (pumper → joiners) — raw feeds in transit 🚚
-    #[serde(default = "default_pumper_to_joiner_capacity", alias = "channel_size", alias = "queue_capacity")]
+    #[serde(
+        default = "default_pumper_to_joiner_capacity",
+        alias = "channel_size",
+        alias = "queue_capacity"
+    )]
     pub pumper_to_joiner_capacity: usize,
     /// 📬 Bounded channel capacity for ch2 (joiners → drainers) — assembled payloads in transit 🚛
     /// Separate from pumper_to_joiner_capacity because payloads are larger than raw feeds —
     /// think of ch1 as the loading dock and ch2 as the dispatch bay 🏗️
     // The byte size of this effectively becomes source max bytes * this capacity
-    #[serde(default = "default_joiner_to_drainer_capacity", alias = "payload_channel_capacity")]
+    #[serde(
+        default = "default_joiner_to_drainer_capacity",
+        alias = "payload_channel_capacity"
+    )]
     pub joiner_to_drainer_capacity: usize,
     /// 🧵 How many sink workers run in parallel — more lanes, more throughput, more debugging
     #[serde(default = "default_sink_parallelism", alias = "num_sink_workers")]
@@ -255,8 +262,14 @@ mod tests {
             .extract()
             .expect("💀 Default runtime config should exist. Serde left us on read otherwise.");
 
-        assert_eq!(app_config.runtime.pumper_to_joiner_capacity, RuntimeConfig::default().pumper_to_joiner_capacity);
-        assert_eq!(app_config.runtime.sink_parallelism, RuntimeConfig::default().sink_parallelism);
+        assert_eq!(
+            app_config.runtime.pumper_to_joiner_capacity,
+            RuntimeConfig::default().pumper_to_joiner_capacity
+        );
+        assert_eq!(
+            app_config.runtime.sink_parallelism,
+            RuntimeConfig::default().sink_parallelism
+        );
 
         // 🧹 TempPath auto-deletes on drop — no manual cleanup needed
     }
@@ -306,7 +319,10 @@ mod tests {
 
         match app_config.governor {
             GovernorConfig::Static(cfg) => {
-                assert_eq!(cfg.output_bytes, 777_777, "🎯 Legacy alias should map to governor static output");
+                assert_eq!(
+                    cfg.output_bytes, 777_777,
+                    "🎯 Legacy alias should map to governor static output"
+                );
             }
             honestly_who_knows => panic!(
                 "💀 Expected GovernorConfig::Static from legacy [flow_master.Static], got {:?}",

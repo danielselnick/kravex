@@ -10,9 +10,9 @@ use tokio::{
 };
 use tracing::trace;
 
+use super::config::FileSinkConfig;
 use crate::Payload;
 use crate::backends::Sink;
-use super::config::FileSinkConfig;
 /// 🚰 FileSink — receives fully rendered payload strings and writes them to disk. I/O only.
 ///
 /// It's a BufWriter around a tokio `File`. Simple. Honest. Does not complain.

@@ -24,9 +24,9 @@ use reqwest::RequestBuilder;
 use serde_json::Value;
 use tracing::{debug, warn};
 
+use super::config::ElasticsearchSourceConfig;
 use crate::Page;
 use crate::backends::Source;
-use super::config::ElasticsearchSourceConfig;
 
 // -- 🦆 A duck walked into an Elasticsearch cluster. It asked for all documents. It got a 429.
 
@@ -103,10 +103,14 @@ impl Source for ElasticsearchSource {
 
         let status = response.status();
         if !status.is_success() {
-            let error_body = response.text().await.unwrap_or_else(|_| "no body".to_string());
+            let error_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "no body".to_string());
             anyhow::bail!(
                 "💀 _search returned {} — the cluster spoke, and what it said was not kind. Body: {}",
-                status, error_body
+                status,
+                error_body
             );
         }
 
@@ -117,7 +121,8 @@ impl Source for ElasticsearchSource {
         let parsed: Value = serde_json::from_str(&response_body)
             .context("💀 Elasticsearch returned valid HTTP but invalid JSON. This is like receiving a beautifully wrapped gift box containing bees.")?;
 
-        let hits = parsed.get("hits")
+        let hits = parsed
+            .get("hits")
             .and_then(|h| h.get("hits"))
             .and_then(|h| h.as_array());
 
@@ -132,11 +137,8 @@ impl Source for ElasticsearchSource {
                 // 🔄 Update search_after with the sort values from the last hit
                 if let Some(last_hit) = hit_array.last() {
                     if let Some(sort_values) = last_hit.get("sort") {
-                        self.search_after = Some(
-                            sort_values.as_array()
-                                .cloned()
-                                .unwrap_or_default()
-                        );
+                        self.search_after =
+                            Some(sort_values.as_array().cloned().unwrap_or_default());
                     }
                 }
 
@@ -218,11 +220,15 @@ impl ElasticsearchSource {
         if !index_response.status().is_success() {
             anyhow::bail!(
                 "💀 Source index '{}' does not exist (status {}). We looked. It wasn't there. Like my motivation on Monday mornings.",
-                config.index, index_response.status()
+                config.index,
+                index_response.status()
             );
         }
 
-        debug!("✅ Source index '{}' exists and is ready for extraction", config.index);
+        debug!(
+            "✅ Source index '{}' exists and is ready for extraction",
+            config.index
+        );
 
         Ok(Self {
             config,
@@ -252,18 +258,24 @@ impl ElasticsearchSource {
 
         let status = response.status();
         if !status.is_success() {
-            let error_body = response.text().await.unwrap_or_else(|_| "no body".to_string());
+            let error_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "no body".to_string());
             anyhow::bail!(
                 "💀 PIT open returned {} — cluster refused our snapshot request. Body: {}",
-                status, error_body
+                status,
+                error_body
             );
         }
 
-        let response_text = response.text().await
-            .context("💀 PIT open response body evaporated. The cluster giveth and the network taketh away.")?;
+        let response_text = response.text().await.context(
+            "💀 PIT open response body evaporated. The cluster giveth and the network taketh away.",
+        )?;
 
-        let body: Value = serde_json::from_str(&response_text)
-            .context("💀 PIT open response was not valid JSON. The cluster is speaking in tongues.")?;
+        let body: Value = serde_json::from_str(&response_text).context(
+            "💀 PIT open response was not valid JSON. The cluster is speaking in tongues.",
+        )?;
 
         let pit_id = body.get("id")
             .and_then(|v| v.as_str())
@@ -285,7 +297,8 @@ impl ElasticsearchSource {
             let pit_url = format!("{}/_pit", self.config.url.trim_end_matches('/'));
             let body = serde_json::json!({ "id": pit_id });
 
-            let result = self.apply_auth(self.client.delete(&pit_url))
+            let result = self
+                .apply_auth(self.client.delete(&pit_url))
                 .header("Content-Type", "application/json")
                 .body(body.to_string())
                 .send()
@@ -293,7 +306,9 @@ impl ElasticsearchSource {
 
             match result {
                 Ok(resp) if resp.status().is_success() => {
-                    debug!("🗑️ PIT closed successfully — snapshot released, memory freed, closure achieved");
+                    debug!(
+                        "🗑️ PIT closed successfully — snapshot released, memory freed, closure achieved"
+                    );
                 }
                 Ok(resp) => {
                     // -- ⚠️ PIT close returned non-2xx but we don't care enough to fail
@@ -304,7 +319,10 @@ impl ElasticsearchSource {
                 }
                 Err(e) => {
                     // -- ⚠️ Network error on PIT close. The PIT will expire. Life goes on.
-                    warn!("⚠️ Failed to close PIT: {} — it'll self-destruct in 5 minutes anyway", e);
+                    warn!(
+                        "⚠️ Failed to close PIT: {} — it'll self-destruct in 5 minutes anyway",
+                        e
+                    );
                 }
             }
         }
@@ -365,7 +383,10 @@ mod tests {
         assert!(result.is_none(), "🎯 Exhausted source should return None");
 
         let result2 = source.pump().await.unwrap();
-        assert!(result2.is_none(), "🎯 Still None. Still exhausted. Still relatable.");
+        assert!(
+            result2.is_none(),
+            "🎯 Still None. Still exhausted. Still relatable."
+        );
     }
 
     #[test]
@@ -382,8 +403,16 @@ mod tests {
 
         // 🎯 Build the request and inspect — API key should be present
         let built = request.build().unwrap();
-        let auth_header = built.headers().get("Authorization").unwrap().to_str().unwrap();
-        assert_eq!(auth_header, "ApiKey my-secret-key", "🎯 API key must take priority");
+        let auth_header = built
+            .headers()
+            .get("Authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(
+            auth_header, "ApiKey my-secret-key",
+            "🎯 API key must take priority"
+        );
     }
 
     #[test]
@@ -398,8 +427,16 @@ mod tests {
         let request = source.apply_auth(client.get("http://example.com"));
 
         let built = request.build().unwrap();
-        let auth_header = built.headers().get("Authorization").unwrap().to_str().unwrap();
-        assert!(auth_header.starts_with("Basic "), "🎯 Should use Basic auth as fallback");
+        let auth_header = built
+            .headers()
+            .get("Authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            auth_header.starts_with("Basic "),
+            "🎯 Should use Basic auth as fallback"
+        );
     }
 
     #[test]
@@ -430,10 +467,16 @@ mod tests {
             "sort": [{"_doc": "asc"}]
         });
 
-        assert_eq!(body["size"], source.config.common_config.max_batch_size_docs);
+        assert_eq!(
+            body["size"],
+            source.config.common_config.max_batch_size_docs
+        );
         assert_eq!(body["pit"]["keep_alive"], "5m");
         assert_eq!(body["sort"][0]["_doc"], "asc");
-        assert!(body.get("search_after").is_none(), "🎯 First call should not have search_after");
+        assert!(
+            body.get("search_after").is_none(),
+            "🎯 First call should not have search_after"
+        );
     }
 
     #[test]
@@ -455,6 +498,9 @@ mod tests {
             body["search_after"] = Value::Array(cursor.clone());
         }
 
-        assert_eq!(body["search_after"][0], 42, "🎯 search_after should carry the cursor from previous page");
+        assert_eq!(
+            body["search_after"][0], 42,
+            "🎯 search_after should carry the cursor from previous page"
+        );
     }
 }

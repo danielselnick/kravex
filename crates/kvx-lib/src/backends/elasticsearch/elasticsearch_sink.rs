@@ -10,9 +10,9 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use tracing::{debug, trace, warn};
 
+use super::config::ElasticsearchSinkConfig;
 use crate::Payload;
 use crate::backends::Sink;
-use super::config::ElasticsearchSinkConfig;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  📦 Bulk Response Types — Elasticsearch's confessional booth
@@ -229,7 +229,9 @@ impl ElasticsearchSink {
 
             // Fast path: empty body means ES gave us nothing to parse — treat as success.
             if the_body_text.is_empty() {
-                trace!("🚀 Bulk request landed — empty response body, assuming all docs indexed (living dangerously)");
+                trace!(
+                    "🚀 Bulk request landed — empty response body, assuming all docs indexed (living dangerously)"
+                );
                 return Ok(());
             }
 
@@ -238,7 +240,9 @@ impl ElasticsearchSink {
 
             if !the_bulk_response.errors {
                 // -- ✅ No errors! Every doc made it! The singularity will happen before we see this log line in prod.
-                trace!("🚀 Bulk request landed successfully — all documents accepted, zero casualties");
+                trace!(
+                    "🚀 Bulk request landed successfully — all documents accepted, zero casualties"
+                );
                 return Ok(());
             }
 
@@ -254,8 +258,11 @@ impl ElasticsearchSink {
                             let the_doc_id = result._id.as_deref().unwrap_or("unknown");
                             the_reasons_for_grief.push(format!(
                                 "item[{}] id={} status={} type={} reason={}",
-                                the_item_index, the_doc_id, result.status,
-                                the_rejection_letter.error_type, the_rejection_letter.reason
+                                the_item_index,
+                                the_doc_id,
+                                result.status,
+                                the_rejection_letter.error_type,
+                                the_rejection_letter.reason
                             ));
                         }
                     }
@@ -269,7 +276,8 @@ impl ElasticsearchSink {
             if the_body_count > MAX_GRIEF_SAMPLES {
                 warn!(
                     "💀 ... and {} more failed items not shown (we capped the grief at {})",
-                    the_body_count - MAX_GRIEF_SAMPLES, MAX_GRIEF_SAMPLES
+                    the_body_count - MAX_GRIEF_SAMPLES,
+                    MAX_GRIEF_SAMPLES
                 );
             }
 
@@ -303,7 +311,9 @@ impl ElasticsearchSink {
             warn!(
                 "🔄 Retrying {} failed docs (attempt {}/{}) — the rest made it through, \
                  these just need another chance, like a second audition",
-                the_body_count, the_attempt + 1, MAX_PARTIAL_RETRIES
+                the_body_count,
+                the_attempt + 1,
+                MAX_PARTIAL_RETRIES
             );
 
             the_current_ndjson = the_retry_payload;
@@ -320,8 +330,12 @@ impl ElasticsearchSink {
     /// -- 🦆 "I'm just the postman, I don't read the mail."
     async fn send_bulk_post(&self, the_ndjson_body: &str) -> Result<String> {
         let bulk_url = match self.sink_config.index {
-            Some(ref index_name) => format!("{}/{}/_bulk", self.sink_config.url.trim_end_matches('/'), index_name),
-            None => format!("{}/_bulk", self.sink_config.url.trim_end_matches('/'))
+            Some(ref index_name) => format!(
+                "{}/{}/_bulk",
+                self.sink_config.url.trim_end_matches('/'),
+                index_name
+            ),
+            None => format!("{}/_bulk", self.sink_config.url.trim_end_matches('/')),
         };
 
         let mut request = self
@@ -514,7 +528,10 @@ mod tests {
         // 📡 dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk = base64("the_user:the_password")
         Mock::given(method("GET"))
             .and(path("/"))
-            .and(header("Authorization", "Basic dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk"))
+            .and(header(
+                "Authorization",
+                "Basic dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk",
+            ))
             .respond_with(ResponseTemplate::new(200))
             .expect(1)
             .mount(&mock_server)
@@ -661,7 +678,10 @@ mod tests {
         // 📡 dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk = base64("the_user:the_password")
         Mock::given(method("GET"))
             .and(path("/economy-index"))
-            .and(header("Authorization", "Basic dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk"))
+            .and(header(
+                "Authorization",
+                "Basic dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk",
+            ))
             .respond_with(ResponseTemplate::new(200))
             .expect(1)
             .mount(&mock_server)
@@ -750,8 +770,9 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/_bulk"))
             .respond_with(
-                ResponseTemplate::new(400)
-                    .set_body_string("mapping_exception: your docs are bad and you should feel bad"),
+                ResponseTemplate::new(400).set_body_string(
+                    "mapping_exception: your docs are bad and you should feel bad",
+                ),
             )
             .mount(&mock_server)
             .await;
@@ -766,7 +787,10 @@ mod tests {
         // 🎯 Assert — should fail, error chain should contain status info
         // ⚠️ anyhow's .to_string() only shows the outermost .context() message.
         // The "400 Bad Request" lives deeper in the chain. Use {:?} to see the full story.
-        assert!(the_harsh_verdict.is_err(), "💀 400 response should cause drain() to fail");
+        assert!(
+            the_harsh_verdict.is_err(),
+            "💀 400 response should cause drain() to fail"
+        );
         let the_full_error_chain = format!("{:?}", the_harsh_verdict.unwrap_err());
         assert!(
             the_full_error_chain.contains("400"),
@@ -797,7 +821,9 @@ mod tests {
         let mut the_unlucky_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        let the_500_result = the_unlucky_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
+        let the_500_result = the_unlucky_sink
+            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
+            .await;
 
         // 🎯 Assert — 500 is not 200. Math checks out.
         assert!(
@@ -827,7 +853,9 @@ mod tests {
         let mut the_proper_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_proper_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_proper_sink
+            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
+            .await?;
 
         // 🎯 Assert — wiremock's header matcher confirms Content-Type ✅
 
@@ -855,7 +883,9 @@ mod tests {
         let mut the_vip_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_vip_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_vip_sink
+            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
+            .await?;
 
         // 🎯 Assert — wiremock confirms ApiKey header was sent ✅
 
@@ -878,7 +908,10 @@ mod tests {
         // 📡 dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk = base64("the_user:the_password")
         Mock::given(method("POST"))
             .and(path("/_bulk"))
-            .and(header("Authorization", "Basic dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk"))
+            .and(header(
+                "Authorization",
+                "Basic dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk",
+            ))
             .respond_with(ResponseTemplate::new(200))
             .expect(1)
             .mount(&mock_server)
@@ -891,7 +924,9 @@ mod tests {
         let mut the_basic_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_basic_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_basic_sink
+            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
+            .await?;
 
         // 🎯 Assert — wiremock confirms Basic auth was sent ✅
 
@@ -918,7 +953,9 @@ mod tests {
         let mut the_naked_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_naked_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_naked_sink
+            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
+            .await?;
 
         // 🎯 Assert — request was received. No auth configured = no auth sent. ✅
 
@@ -949,7 +986,9 @@ mod tests {
         let mut the_decisive_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_decisive_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_decisive_sink
+            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
+            .await?;
 
         // 🎯 Assert — wiremock confirms ApiKey won the auth battle ✅
 
@@ -978,7 +1017,9 @@ mod tests {
         let mut the_faithful_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_faithful_sink.drain(Payload::from(the_sacred_payload.to_string())).await?;
+        the_faithful_sink
+            .drain(Payload::from(the_sacred_payload.to_string()))
+            .await?;
 
         // 🎯 Assert — wiremock's body_string matcher confirms byte-perfect delivery ✅
 
@@ -1009,7 +1050,9 @@ mod tests {
         let mut the_trusting_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — send docs into the welcoming void
-        let the_result = the_trusting_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
+        let the_result = the_trusting_sink
+            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
+            .await;
 
         // 🎯 Assert — errors: false means genuine success, not polite lying ✅
         assert!(
@@ -1040,7 +1083,8 @@ mod tests {
 
         // -- 📡 First call: 4 items, 2 fail. Subsequent calls: 2 items, both still fail.
         let the_dynamic_responder = move |_req: &wiremock::Request| {
-            let the_call_number = the_counter_for_closure.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let the_call_number =
+                the_counter_for_closure.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let the_body = if the_call_number == 0 {
                 // -- 💀 Round 1: 4 docs sent, 2 rejected. Items 1 and 3 succeed, 2 and 4 fail.
                 json!({
@@ -1097,7 +1141,10 @@ mod tests {
         let the_bitter_truth = the_deceived_sink.drain(the_four_doc_payload).await;
 
         // 🎯 Assert — drain() must fail after retrying the 2 rejected docs
-        assert!(the_bitter_truth.is_err(), "💀 200 with errors:true must cause drain() to fail. Silent doc loss is not a feature.");
+        assert!(
+            the_bitter_truth.is_err(),
+            "💀 200 with errors:true must cause drain() to fail. Silent doc loss is not a feature."
+        );
 
         let the_autopsy_report = format!("{:?}", the_bitter_truth.unwrap_err());
         // -- 🧮 Verify the error mentions the failure count and retry exhaustion
@@ -1155,10 +1202,14 @@ mod tests {
         let the_massacre = the_doomed_sink.drain(the_two_doc_payload).await;
 
         // 🎯 Assert — 2 out of 2 failed after 10 retries
-        assert!(the_massacre.is_err(), "💀 100% rejection rate should absolutely be an error");
+        assert!(
+            the_massacre.is_err(),
+            "💀 100% rejection rate should absolutely be an error"
+        );
         let the_damage_report = format!("{:?}", the_massacre.unwrap_err());
         assert!(
-            the_damage_report.contains("2") && the_damage_report.contains("strict_dynamic_mapping_exception"),
+            the_damage_report.contains("2")
+                && the_damage_report.contains("strict_dynamic_mapping_exception"),
             "💀 Error should count all failures and name the error type, got: {the_damage_report}"
         );
 
@@ -1183,7 +1234,9 @@ mod tests {
         let mut the_flexible_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — send docs, get a weird response
-        let the_result = the_flexible_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
+        let the_result = the_flexible_sink
+            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
+            .await;
 
         // 🎯 Assert — serde defaults mean errors=false, so we treat it as success ✅
         assert!(
@@ -1203,7 +1256,9 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/_bulk"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("<html>502 Bad Gateway</html>"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string("<html>502 Bad Gateway</html>"),
+            )
             .mount(&mock_server)
             .await;
 
@@ -1211,7 +1266,9 @@ mod tests {
         let mut the_confused_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — send docs, receive HTML. A nightmare scenario.
-        let the_what = the_confused_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
+        let the_what = the_confused_sink
+            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
+            .await;
 
         // 🎯 Assert — invalid JSON body on a 200 should fail, not silently succeed
         assert!(
@@ -1240,7 +1297,9 @@ mod tests {
         let mut the_optimist_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        let the_result = the_optimist_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
+        let the_result = the_optimist_sink
+            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
+            .await;
 
         // 🎯 Assert — empty body = fast path success ✅
         assert!(
@@ -1369,7 +1428,10 @@ mod tests {
         let the_inevitable = the_persistent_sink.drain(the_doomed_payload).await;
 
         // 🎯 Assert — Err after exhausting all retries
-        assert!(the_inevitable.is_err(), "💀 11 rejections should mean we give up");
+        assert!(
+            the_inevitable.is_err(),
+            "💀 11 rejections should mean we give up"
+        );
 
         let the_epitaph = format!("{:?}", the_inevitable.unwrap_err());
         assert!(
@@ -1442,7 +1504,9 @@ mod tests {
         let mut the_slash_aware_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_slash_aware_sink.drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
+        the_slash_aware_sink
+            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
+            .await?;
 
         // 🎯 Assert — wiremock's path("/_bulk") + expect(1) confirms correct URL ✅
 

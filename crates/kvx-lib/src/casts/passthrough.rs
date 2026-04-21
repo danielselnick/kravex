@@ -22,10 +22,10 @@
 //!
 //! ⚠️ The singularity won't even notice this module exists. 🦆
 
-use anyhow::Result;
-use crate::casts::Caster;
 use crate::Entry;
 use crate::Page;
+use crate::casts::Caster;
+use anyhow::Result;
 
 /// 🚶 Passthrough — returns the entire feed unchanged. Zero alloc. Zero copy. Zero drama.
 ///
@@ -62,8 +62,15 @@ mod tests {
         // 🧪 f(x) = x. If this fails, mathematics is broken. And so is String.
         let the_input = r#"{"untouched":"perfection"}"#.to_string();
         let the_output = Passthrough.cast(Page(the_input.clone()))?;
-        assert_eq!(the_output.len(), 1, "🎯 Passthrough produces exactly one entry");
-        assert_eq!(*the_output[0], the_input, "Passthrough must return feed unchanged! 🚶");
+        assert_eq!(
+            the_output.len(),
+            1,
+            "🎯 Passthrough produces exactly one entry"
+        );
+        assert_eq!(
+            *the_output[0], the_input,
+            "Passthrough must return feed unchanged! 🚶"
+        );
         Ok(())
     }
 
@@ -81,7 +88,10 @@ mod tests {
         // 🧪 Passthrough doesn't parse. Doesn't validate. Doesn't care.
         let not_json = "this is not json and that's fine".to_string();
         let the_output = Passthrough.cast(Page(not_json.clone()))?;
-        assert_eq!(*the_output[0], not_json, "Non-JSON still passes through! 🎉");
+        assert_eq!(
+            *the_output[0], not_json,
+            "Non-JSON still passes through! 🎉"
+        );
         Ok(())
     }
 
@@ -90,7 +100,10 @@ mod tests {
         // 🧪 Passthrough treats the whole feed as one blob — it's the Manifold's job to join
         let multi_line = "line1\nline2\nline3".to_string();
         let the_output = Passthrough.cast(Page(multi_line.clone()))?;
-        assert_eq!(*the_output[0], multi_line, "Passthrough doesn't split — one feed, one output 🎯");
+        assert_eq!(
+            *the_output[0], multi_line,
+            "Passthrough doesn't split — one feed, one output 🎯"
+        );
         Ok(())
     }
 }

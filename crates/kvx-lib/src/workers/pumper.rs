@@ -21,8 +21,8 @@
 //! It respects `None`. It knows when to let go. Unlike the rest of us.
 
 use super::Worker;
-use crate::backends::{Source, SourceBackend};
 use crate::Page;
+use crate::backends::{Source, SourceBackend};
 use anyhow::{Context, Result};
 use async_channel::Sender;
 use tokio::task::JoinHandle;

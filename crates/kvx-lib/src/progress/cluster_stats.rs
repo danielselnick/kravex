@@ -121,9 +121,7 @@ impl ClusterStatsPoller {
         let the_url = self.url.clone();
         let the_auth = self.auth.clone();
 
-        tokio::spawn(async move {
-            fetch_cluster_stats(&the_client, &the_url, &the_auth).await
-        })
+        tokio::spawn(async move { fetch_cluster_stats(&the_client, &the_url, &the_auth).await })
     }
 }
 
@@ -150,7 +148,8 @@ async fn fetch_cluster_stats(
             the_request_builder = the_request_builder.basic_auth(username, Some(password));
         }
         ClusterAuth::ApiKey(key) => {
-            the_request_builder = the_request_builder.header("Authorization", format!("ApiKey {}", key));
+            the_request_builder =
+                the_request_builder.header("Authorization", format!("ApiKey {}", key));
         }
         ClusterAuth::None => {}
     }
@@ -163,21 +162,21 @@ async fn fetch_cluster_stats(
             the_stats_url, e
         ))?;
 
-    let the_body = the_response
-        .text()
-        .await
-        .map_err(|e| anyhow::anyhow!(
+    let the_body = the_response.text().await.map_err(|e| {
+        anyhow::anyhow!(
             "💀 Got a response from _nodes/stats but the body was unreadable — \
              like receiving a postcard written in cursive by a doctor. Error: {}",
             e
-        ))?;
+        )
+    })?;
 
-    let the_stats: NodeStatsResponse = serde_json::from_str(&the_body)
-        .map_err(|e| anyhow::anyhow!(
+    let the_stats: NodeStatsResponse = serde_json::from_str(&the_body).map_err(|e| {
+        anyhow::anyhow!(
             "💀 Failed to parse _nodes/stats JSON — expected os,jvm fields, \
              got something that looks like my kid drew it. Error: {}",
             e
-        ))?;
+        )
+    })?;
 
     // -- 📊 Average CPU and JVM heap across all nodes that report them
     let mut the_cpu_sum = 0.0_f64;
@@ -327,8 +326,16 @@ mod tests {
         // -- 🎯 (30+60+90)/3 = 60.0 CPU, (40+70+50)/3 ≈ 53.33 JVM
         assert_eq!(cpu_count, 3);
         assert_eq!(jvm_count, 3);
-        assert!((avg_cpu - 60.0).abs() < 0.01, "CPU avg should be 60.0, got {}", avg_cpu);
-        assert!((avg_jvm - 53.333).abs() < 0.01, "JVM avg should be ~53.33, got {}", avg_jvm);
+        assert!(
+            (avg_cpu - 60.0).abs() < 0.01,
+            "CPU avg should be 60.0, got {}",
+            avg_cpu
+        );
+        assert!(
+            (avg_jvm - 53.333).abs() < 0.01,
+            "JVM avg should be ~53.33, got {}",
+            avg_jvm
+        );
     }
 
     /// 🧪 The one where missing JVM stats returns only CPU.
@@ -423,6 +430,10 @@ mod tests {
 
         // -- 🎯 (350+150)/2 = 250.0 — yes, process CPU can be > 100%. That's the whole point.
         assert_eq!(cpu_count, 2);
-        assert!((avg_cpu - 250.0).abs() < 0.01, "CPU avg should be 250.0, got {}", avg_cpu);
+        assert!(
+            (avg_cpu - 250.0).abs() < 0.01,
+            "CPU avg should be 250.0, got {}",
+            avg_cpu
+        );
     }
 }

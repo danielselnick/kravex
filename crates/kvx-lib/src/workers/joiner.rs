@@ -29,16 +29,15 @@
 //!
 //! ⚠️ The singularity will parse JSON in constant time. Until then, we have threads.
 
-use crate::{Entry, Page, Payload};
+use crate::FlowKnob;
 use crate::casts::{Caster, PageToEntriesCaster};
 use crate::manifolds::{Manifold, ManifoldBackend};
-use crate::FlowKnob;
+use crate::{Entry, Page, Payload};
 use anyhow::{Context, Result};
 use async_channel::{Receiver, Sender};
+use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use tracing::debug;
-use std::collections::VecDeque;
-
 
 /// 🧮 Epsilon buffer — headroom so casting overhead doesn't push us over the limit.
 /// 64 KiB of breathing room because payloads expand during casting
@@ -81,7 +80,7 @@ pub struct Joiner {
     /// Like a volume knob that someone else might be turning while you're listening. 🎚️
     the_throttle_knob: FlowKnob,
     entries_buffer: VecDeque<Entry>,
-    the_running_byte_tab: usize
+    the_running_byte_tab: usize,
 }
 
 impl Joiner {
@@ -102,7 +101,7 @@ impl Joiner {
             caster,
             manifold,
             the_throttle_knob,
-            entries_buffer : VecDeque::new(),
+            entries_buffer: VecDeque::new(),
             the_running_byte_tab: 0,
         }
     }
@@ -124,15 +123,23 @@ impl Joiner {
                 match self.rx.recv_blocking() {
                     Ok(page) => {
                         // 📜 Page arrives → cast into entries → buffer → flush when full
-                        let entries = self.caster.cast(page).context("💀 Caster failed — the data fought back")?;
+                        let entries = self
+                            .caster
+                            .cast(page)
+                            .context("💀 Caster failed — the data fought back")?;
                         for entry in entries {
                             self.the_running_byte_tab += entry.len();
                             self.entries_buffer.push_back(entry);
 
-                            let the_ceiling = self.the_throttle_knob.load(Ordering::Relaxed).saturating_sub(BUFFER_EPSILON_BYTES);
+                            let the_ceiling = self
+                                .the_throttle_knob
+                                .load(Ordering::Relaxed)
+                                .saturating_sub(BUFFER_EPSILON_BYTES);
                             if self.the_running_byte_tab > the_ceiling {
                                 let the_payload = self.manifold.join(&mut self.entries_buffer)?;
-                                self.tx.send_blocking(the_payload).context("💀 ch2 closed — the drainers left without saying goodbye")?;
+                                self.tx.send_blocking(the_payload).context(
+                                    "💀 ch2 closed — the drainers left without saying goodbye",
+                                )?;
                                 self.the_running_byte_tab = 0;
                             }
                         }
@@ -141,7 +148,9 @@ impl Joiner {
                         // 🏁 Channel closed — flush whatever's left in the buffer
                         if !self.entries_buffer.is_empty() {
                             let the_payload = self.manifold.join(&mut self.entries_buffer)?;
-                            self.tx.send_blocking(the_payload).context("💀 ch2 closed during final flush — so close, yet so far")?;
+                            self.tx.send_blocking(the_payload).context(
+                                "💀 ch2 closed during final flush — so close, yet so far",
+                            )?;
                         }
                         // tx drops here naturally — when all joiners drop their tx,
                         // ch2 closes and drainers get the signal 🏊
@@ -194,7 +203,10 @@ mod tests {
 
         // 📥 The joiner should have flushed and sent a JSON array payload to ch2
         let the_payload = rx2.recv_blocking().unwrap();
-        assert_eq!(*the_payload, r#"[{"doc":1}]"#, "🎯 Joiner should produce a JSON array wrapping the feed");
+        assert_eq!(
+            *the_payload, r#"[{"doc":1}]"#,
+            "🎯 Joiner should produce a JSON array wrapping the feed"
+        );
 
         // 🧵 Thread should exit cleanly after ch1 closes
         the_joiner_thread
@@ -230,8 +242,7 @@ mod tests {
         // 📥 All three should arrive as one JSON array payload
         let the_payload = rx2.recv_blocking().unwrap();
         assert_eq!(
-            the_payload,
-            r#"[{"doc":1},{"doc":2},{"doc":3}]"#,
+            the_payload, r#"[{"doc":1},{"doc":2},{"doc":3}]"#,
             "🎯 Three feeds should join into one JSON array"
         );
 
@@ -260,16 +271,24 @@ mod tests {
         let the_joiner_thread = joiner.start();
 
         // 📤 Send two feeds — each should flush independently due to tiny max
-        tx1.send_blocking(Page(r#"{"doc":"first"}"#.to_string())).unwrap();
-        tx1.send_blocking(Page(r#"{"doc":"second"}"#.to_string())).unwrap();
+        tx1.send_blocking(Page(r#"{"doc":"first"}"#.to_string()))
+            .unwrap();
+        tx1.send_blocking(Page(r#"{"doc":"second"}"#.to_string()))
+            .unwrap();
         tx1.close();
 
         // 📥 Should get two separate payloads (one per flush)
         let payload_one = rx2.recv_blocking().unwrap();
         let payload_two = rx2.recv_blocking().unwrap();
 
-        assert_eq!(*payload_one, r#"[{"doc":"first"}]"#, "🎯 First feed should flush on its own");
-        assert_eq!(*payload_two, r#"[{"doc":"second"}]"#, "🎯 Second feed should flush on its own");
+        assert_eq!(
+            *payload_one, r#"[{"doc":"first"}]"#,
+            "🎯 First feed should flush on its own"
+        );
+        assert_eq!(
+            *payload_two, r#"[{"doc":"second"}]"#,
+            "🎯 Second feed should flush on its own"
+        );
 
         the_joiner_thread.join().unwrap().unwrap();
     }
@@ -326,13 +345,15 @@ mod tests {
         let the_joiner_thread = joiner.start();
 
         // 📤 Send first feed — won't flush yet (knob is huge)
-        tx1.send_blocking(Page(r#"{"doc":"before"}"#.to_string())).unwrap();
+        tx1.send_blocking(Page(r#"{"doc":"before"}"#.to_string()))
+            .unwrap();
 
         // 🔧 Now crank the knob down so small that the NEXT feed triggers a flush
         the_knob_clone.store(BUFFER_EPSILON_BYTES + 5, Ordering::Relaxed);
 
         // 📤 Send second feed — should trigger flush due to lowered knob
-        tx1.send_blocking(Page(r#"{"doc":"after"}"#.to_string())).unwrap();
+        tx1.send_blocking(Page(r#"{"doc":"after"}"#.to_string()))
+            .unwrap();
 
         // 📥 First payload should arrive (both feeds flushed together when threshold hit)
         let the_first_payload = rx2.recv_blocking().unwrap();

@@ -33,10 +33,9 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 
-use crate::casts::Caster;
 use crate::Entry;
 use crate::Page;
-
+use crate::casts::Caster;
 
 // 🧠 Field name constants — configurable extraction deferred to config layer.
 // -- "He who hardcodes field names, refactors in production." — Ancient DevOps proverb 🦆
@@ -95,8 +94,9 @@ impl Caster for PitToBulk {
     #[inline]
     fn cast(&self, page: Page) -> Result<Vec<Entry>> {
         // 🎭 Phase 1: Deserialize the search envelope — zero-copy for _source via RawValue
-        let the_envelope: SearchEnvelope<'_> = serde_json::from_str(page.0.as_ref())
-            .context("💀 Failed to parse _search response envelope. The JSON is cursed. Call a priest.")?;
+        let the_envelope: SearchEnvelope<'_> = serde_json::from_str(page.0.as_ref()).context(
+            "💀 Failed to parse _search response envelope. The JSON is cursed. Call a priest.",
+        )?;
 
         let the_hits = &the_envelope.hits.hits;
 
@@ -104,7 +104,6 @@ impl Caster for PitToBulk {
         if the_hits.is_empty() {
             return Ok(Vec::new());
         }
-        
 
         // 📏 Phase 2: Pre-size output buffer — ~80 bytes overhead per hit for the action line
         let the_estimated_size: usize = the_hits
@@ -177,7 +176,12 @@ mod tests {
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
         // 🎯 Exactly 2 lines: action + source
-        assert_eq!(lines.len(), 2, "💀 Expected 2 lines (action + source), got {}", lines.len());
+        assert_eq!(
+            lines.len(),
+            2,
+            "💀 Expected 2 lines (action + source), got {}",
+            lines.len()
+        );
 
         // ✅ Action line contains index and _id
         let the_action: serde_json::Value = serde_json::from_str(lines[0])?;
@@ -210,7 +214,12 @@ mod tests {
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
         // 🎯 3 hits × 2 lines each = 6 lines
-        assert_eq!(lines.len(), 6, "💀 Expected 6 lines for 3 hits, got {}", lines.len());
+        assert_eq!(
+            lines.len(),
+            6,
+            "💀 Expected 6 lines for 3 hits, got {}",
+            lines.len()
+        );
 
         // ✅ Verify order: Matrix, Inception, Interstellar — like a Nolan filmography
         let doc_1: serde_json::Value = serde_json::from_str(lines[1])?;
@@ -245,7 +254,10 @@ mod tests {
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
         let the_action: serde_json::Value = serde_json::from_str(lines[0])?;
-        assert_eq!(the_action["index"]["_routing"], "tenant_abc", "💀 Routing missing from action line!");
+        assert_eq!(
+            the_action["index"]["_routing"], "tenant_abc",
+            "💀 Routing missing from action line!"
+        );
         assert_eq!(the_action["index"]["_id"], "doc_99");
         assert_eq!(the_action["index"]["_index"], "tenants");
 
@@ -273,7 +285,10 @@ mod tests {
 
         let the_action: serde_json::Value = serde_json::from_str(lines[0])?;
         // 🎯 _id should be absent, not null
-        assert!(the_action["index"].get("_id").is_none(), "💀 _id should be absent when not in hit");
+        assert!(
+            the_action["index"].get("_id").is_none(),
+            "💀 _id should be absent when not in hit"
+        );
         assert_eq!(the_action["index"]["_index"], "logs");
 
         Ok(())
@@ -286,7 +301,10 @@ mod tests {
         let the_search_response = r#"{"hits": {"hits": []}}"#;
 
         let the_entries = the_caster.cast(Page(the_search_response.to_string()))?;
-        assert!(the_entries.is_empty(), "💀 Empty hits should produce empty output");
+        assert!(
+            the_entries.is_empty(),
+            "💀 Empty hits should produce empty output"
+        );
 
         Ok(())
     }
@@ -332,7 +350,10 @@ mod tests {
 
         let the_entries = the_caster.cast(Page(the_search_response.to_string()))?;
         let the_bulk_body = entries_to_bulk_body(&the_entries);
-        assert!(the_bulk_body.ends_with('\n'), "💀 Bulk body must end with \\n — ES will reject this");
+        assert!(
+            the_bulk_body.ends_with('\n'),
+            "💀 Bulk body must end with \\n — ES will reject this"
+        );
 
         Ok(())
     }
@@ -354,8 +375,9 @@ mod tests {
         let the_bulk_body = entries_to_bulk_body(&the_entries);
 
         for (i, line) in the_bulk_body.lines().enumerate() {
-            let _parsed: serde_json::Value = serde_json::from_str(line)
-                .map_err(|e| anyhow::anyhow!("💀 Line {i} is not valid JSON: '{line}' — error: {e}"))?;
+            let _parsed: serde_json::Value = serde_json::from_str(line).map_err(|e| {
+                anyhow::anyhow!("💀 Line {i} is not valid JSON: '{line}' — error: {e}")
+            })?;
         }
 
         Ok(())
@@ -387,7 +409,10 @@ mod tests {
 
         assert_eq!(the_index_meta["_index"], "employees", "💀 _index mismatch");
         assert_eq!(the_index_meta["_id"], "emp_42", "💀 _id mismatch");
-        assert_eq!(the_index_meta["_routing"], "dept_engineering", "💀 _routing mismatch");
+        assert_eq!(
+            the_index_meta["_routing"], "dept_engineering",
+            "💀 _routing mismatch"
+        );
 
         // ✅ Source doc integrity
         let the_source: serde_json::Value = serde_json::from_str(lines[1])?;
@@ -403,7 +428,10 @@ mod tests {
         let the_garbage = "this is not JSON and everyone knows it";
 
         let the_result = the_caster.cast(Page(the_garbage.to_string()));
-        assert!(the_result.is_err(), "💀 Invalid JSON should produce an error, not silence");
+        assert!(
+            the_result.is_err(),
+            "💀 Invalid JSON should produce an error, not silence"
+        );
     }
 
     /// 🧪 Response with extra fields (took, _shards, etc.) — ignored gracefully.

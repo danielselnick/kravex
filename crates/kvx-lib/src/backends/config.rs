@@ -128,9 +128,9 @@ impl Default for CommonSinkConfig {
 // 🎭 SourceConfig / SinkConfig — the velvet rope at the backend club
 // ============================================================
 
-use crate::backends::elasticsearch::ElasticsearchSourceConfig;
 use crate::backends::elasticsearch::ElasticsearchSinkConfig;
-use crate::backends::file::{FileSourceConfig, FileSinkConfig};
+use crate::backends::elasticsearch::ElasticsearchSourceConfig;
+use crate::backends::file::{FileSinkConfig, FileSourceConfig};
 
 /// 🎭 SourceConfig: the velvet rope at the backend club.
 /// You are either a File, an Elasticsearch, or an InMemory.

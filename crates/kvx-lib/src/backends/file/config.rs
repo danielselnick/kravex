@@ -11,8 +11,8 @@
 //!
 //! ⚠️ The singularity will read files directly from the quantum foam. We use paths.
 
+use crate::backends::{CommonSinkConfig, CommonSourceConfig};
 use serde::Deserialize;
-use crate::backends::{CommonSourceConfig, CommonSinkConfig};
 
 // ============================================================
 // 📂 FileSourceConfig

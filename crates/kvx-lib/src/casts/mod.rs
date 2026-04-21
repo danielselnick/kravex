@@ -22,16 +22,16 @@
 //!
 //! ⚠️ The singularity will cast its own feeds. Until then, we have enums.
 
-pub mod passthrough;
 pub mod ndjson_to_bulk;
+pub mod passthrough;
 pub mod pit_to_bulk;
 use ndjson_to_bulk::NdJsonToBulk;
 use pit_to_bulk::PitToBulk;
 
-use crate::config::{SourceConfig, SinkConfig};
-use anyhow::Result;
-use crate::Page;
 use crate::Entry;
+use crate::Page;
+use crate::config::{SinkConfig, SourceConfig};
+use anyhow::Result;
 
 // ===== Trait =====
 
@@ -71,7 +71,6 @@ impl Caster for PageToEntriesCaster {
         }
     }
 }
-
 
 // ===== Factory =====
 
@@ -135,13 +134,12 @@ impl PageToEntriesCaster {
 /// Same pattern as `impl Source for SourceBackend` in `backends.rs`.
 /// The borrow checker approves. The compiler inlines. Life is good. 🐄
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::backends::file::{FileSinkConfig, FileSourceConfig};
-    use crate::backends::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
     use crate::backends::{CommonSinkConfig, CommonSourceConfig};
+    use crate::backends::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
 
     /// 🧪 Resolve File→ES to NdJsonToBulk caster.
     #[test]
@@ -200,7 +198,10 @@ mod tests {
         // 🔄 Passthrough returns the feed unchanged — zero drama
         let the_input = r#"{"whatever":"goes"}"#.to_string();
         let the_output = the_caster.cast(Page(the_input.clone()))?;
-        assert_eq!(*the_output[0], the_input, "Passthrough must return feed unchanged! 🚶");
+        assert_eq!(
+            *the_output[0], the_input,
+            "Passthrough must return feed unchanged! 🚶"
+        );
 
         Ok(())
     }
@@ -251,7 +252,10 @@ mod tests {
 
         let the_output = the_caster.cast(Page(rally_feed))?;
         // ✅ NdJsonToBulk should produce non-empty output for a multi-doc feed
-        assert!(!the_output.is_empty(), "Cast output should not be empty for multi-doc feed 🎯");
+        assert!(
+            !the_output.is_empty(),
+            "Cast output should not be empty for multi-doc feed 🎯"
+        );
 
         Ok(())
     }
@@ -279,13 +283,18 @@ mod tests {
         let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
         assert!(
             matches!(the_caster, PageToEntriesCaster::PitToBulk(_)),
-            "💀 ES → ES should resolve to PitToBulk, not {:?}", the_caster
+            "💀 ES → ES should resolve to PitToBulk, not {:?}",
+            the_caster
         );
 
         // 🔄 Verify it actually casts a search response into bulk format
-        let the_search_response = r#"{"hits":{"hits":[{"_index":"src","_id":"1","_source":{"ok":true}}]}}"#.to_string();
+        let the_search_response =
+            r#"{"hits":{"hits":[{"_index":"src","_id":"1","_source":{"ok":true}}]}}"#.to_string();
         let the_output = the_caster.cast(Page(the_search_response))?;
-        assert!(!the_output.is_empty(), "💀 PitToBulk should produce output for a valid search response");
+        assert!(
+            !the_output.is_empty(),
+            "💀 PitToBulk should produce output for a valid search response"
+        );
 
         Ok(())
     }

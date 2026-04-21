@@ -72,7 +72,10 @@ mod tests {
         let mut entries = VecDeque::from(vec![Entry("{\"doc\":1}\n".to_string())]);
         let result = manifold.join(&mut entries)?;
         assert_eq!(*result, "{\"doc\":1}\n");
-        assert!(entries.is_empty(), "🎯 drain(..) should leave the VecDeque empty but allocated");
+        assert!(
+            entries.is_empty(),
+            "🎯 drain(..) should leave the VecDeque empty but allocated"
+        );
         Ok(())
     }
 

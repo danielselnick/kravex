@@ -25,8 +25,8 @@
 //! ⚠️ The singularity will drain data at the speed of light. We drain at the speed of HTTP,
 //! plus occasional exponential naps.
 
-use super::Worker;
 use super::DrainerConfig;
+use super::Worker;
 use crate::GaugeReading;
 use crate::Payload;
 use crate::backends::{Sink, SinkBackend};
@@ -81,7 +81,13 @@ impl Drainer {
         gauge_tx: Option<async_channel::Sender<GaugeReading>>,
         drain_metrics: Arc<DrainMetrics>,
     ) -> Self {
-        Self { rx, sink, retry_config, gauge_tx, drain_metrics }
+        Self {
+            rx,
+            sink,
+            retry_config,
+            gauge_tx,
+            drain_metrics,
+        }
     }
 }
 
@@ -120,7 +126,9 @@ async fn drain_with_retry(
 
                 // 📈 Calculate backoff: initial_ms * multiplier^attempt, capped at max_ms
                 let the_exponential_dread = (config.initial_backoff_ms as f64)
-                    * config.backoff_multiplier.powi(my_therapist_says_move_on as i32);
+                    * config
+                        .backoff_multiplier
+                        .powi(my_therapist_says_move_on as i32);
                 let the_actual_nap_ms = (the_exponential_dread as u64).min(config.max_backoff_ms);
 
                 warn!(
@@ -156,7 +164,10 @@ impl Worker for Drainer {
             loop {
                 match self.rx.recv().await {
                     Ok(the_payload) => {
-                        debug!("📄 Drainer received {} byte payload from ch2", the_payload.len());
+                        debug!(
+                            "📄 Drainer received {} byte payload from ch2",
+                            the_payload.len()
+                        );
 
                         // 📡 Send the assembled payload to the sink, with retries.
                         // Skip empty payloads — the joiner should filter these, but belt AND suspenders 🩳
@@ -176,7 +187,8 @@ impl Worker for Drainer {
                             let the_latency_ms = the_stopwatch.elapsed().as_millis() as u64;
 
                             // 📊 Record drain metrics — atomics, no lock, no drama
-                            self.drain_metrics.record_drain(the_payload_bytes, the_latency_ms);
+                            self.drain_metrics
+                                .record_drain(the_payload_bytes, the_latency_ms);
 
                             // 📡 Report drain result to Governor — non-blocking, drops if channel full
                             if let Some(tx) = &self.gauge_tx {
@@ -189,11 +201,12 @@ impl Worker for Drainer {
                     }
                     Err(_) => {
                         // 🏁 ch2 closed — all joiners are done. Close the sink and exit.
-                        debug!("🏁 Drainer: ch2 closed. All joiners done. Closing sink. Goodnight. 💤");
-                        self.sink
-                            .close()
-                            .await
-                            .context("💀 Drainer failed to close sink — the farewell was awkward")?;
+                        debug!(
+                            "🏁 Drainer: ch2 closed. All joiners done. Closing sink. Goodnight. 💤"
+                        );
+                        self.sink.close().await.context(
+                            "💀 Drainer failed to close sink — the farewell was awkward",
+                        )?;
                         return Ok(());
                     }
                 }
@@ -205,9 +218,9 @@ impl Worker for Drainer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
     use async_trait::async_trait;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// 🧪 A sink that fails N times then succeeds — like a vending machine
     /// that needs exactly 3 kicks before dispensing your snack. 🦆
@@ -262,7 +275,9 @@ mod tests {
         // ⏱️ Time the drain and send result
         let the_stopwatch = std::time::Instant::now();
         let the_payload_bytes = the_payload.len() as u64;
-        drain_with_retry(&mut the_sink, the_payload, &the_config).await.unwrap();
+        drain_with_retry(&mut the_sink, the_payload, &the_config)
+            .await
+            .unwrap();
         let the_latency_ms = the_stopwatch.elapsed().as_millis() as u64;
         let _ = gauge_tx.try_send(GaugeReading::DrainResult {
             payload_bytes: the_payload_bytes,
@@ -273,7 +288,11 @@ mod tests {
         let the_reading = gauge_rx.try_recv().unwrap();
         match the_reading {
             GaugeReading::DrainResult { latency_ms, .. } => {
-                assert!(latency_ms < 1000, "🎯 Latency should be under 1s for an in-memory sink — got {}ms", latency_ms);
+                assert!(
+                    latency_ms < 1000,
+                    "🎯 Latency should be under 1s for an in-memory sink — got {}ms",
+                    latency_ms
+                );
             }
             _ => panic!("💀 Expected DrainResult reading, got something else entirely"),
         }
@@ -289,7 +308,10 @@ mod tests {
 
         // 📡 No gauge_tx — None path. Drain should work identically.
         let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
-        assert!(honestly_who_knows.is_ok(), "🎯 Drain should succeed without gauge channel");
+        assert!(
+            honestly_who_knows.is_ok(),
+            "🎯 Drain should succeed without gauge channel"
+        );
         assert_eq!(the_sink.the_survivors[0], "ungauged payload");
     }
 
@@ -300,7 +322,9 @@ mod tests {
     #[async_trait]
     impl Sink for AlwaysFailSink {
         async fn drain(&mut self, _payload: Payload) -> Result<()> {
-            anyhow::bail!("💀 AlwaysFailSink: I reject all payloads on principle. Nothing personal.")
+            anyhow::bail!(
+                "💀 AlwaysFailSink: I reject all payloads on principle. Nothing personal."
+            )
         }
 
         async fn close(&mut self) -> Result<()> {
@@ -326,7 +350,10 @@ mod tests {
         let the_config = test_config(3);
 
         let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
-        assert!(honestly_who_knows.is_ok(), "🎯 First-try success should just work");
+        assert!(
+            honestly_who_knows.is_ok(),
+            "🎯 First-try success should just work"
+        );
         assert_eq!(the_sink.the_survivors.len(), 1);
         assert_eq!(the_sink.the_survivors[0], "test payload");
     }
@@ -339,7 +366,10 @@ mod tests {
         let the_config = test_config(3);
 
         let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
-        assert!(honestly_who_knows.is_ok(), "🎯 Should succeed after retries");
+        assert!(
+            honestly_who_knows.is_ok(),
+            "🎯 Should succeed after retries"
+        );
         assert_eq!(the_sink.the_survivors.len(), 1);
         assert_eq!(the_sink.the_survivors[0], "persistent payload");
     }
@@ -352,9 +382,15 @@ mod tests {
         let the_config = test_config(2);
 
         let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
-        assert!(honestly_who_knows.is_err(), "💀 Should fail after exhausting retries");
+        assert!(
+            honestly_who_knows.is_err(),
+            "💀 Should fail after exhausting retries"
+        );
         let the_error_msg = format!("{}", honestly_who_knows.unwrap_err());
-        assert!(the_error_msg.contains("exhausted"), "🎯 Error should mention exhaustion");
+        assert!(
+            the_error_msg.contains("exhausted"),
+            "🎯 Error should mention exhaustion"
+        );
     }
 
     #[tokio::test]
@@ -365,7 +401,10 @@ mod tests {
         let the_config = test_config(0);
 
         let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
-        assert!(honestly_who_knows.is_err(), "💀 Zero retries = one attempt, one failure, one sadness");
+        assert!(
+            honestly_who_knows.is_err(),
+            "💀 Zero retries = one attempt, one failure, one sadness"
+        );
     }
 
     #[tokio::test]
@@ -376,7 +415,10 @@ mod tests {
         let the_config = test_config(3);
 
         let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
-        assert!(honestly_who_knows.is_ok(), "🎯 Should succeed on the last attempt — main character energy");
+        assert!(
+            honestly_who_knows.is_ok(),
+            "🎯 Should succeed on the last attempt — main character energy"
+        );
         assert_eq!(the_sink.the_survivors[0], "clutch payload");
     }
 
@@ -389,7 +431,10 @@ mod tests {
         let the_config = test_config(3);
 
         let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
-        assert!(honestly_who_knows.is_ok(), "🎯 Empty payload still sends successfully");
+        assert!(
+            honestly_who_knows.is_ok(),
+            "🎯 Empty payload still sends successfully"
+        );
         assert_eq!(the_sink.the_survivors[0], "");
     }
 }

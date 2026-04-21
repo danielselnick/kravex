@@ -48,8 +48,7 @@ impl Manifold for JsonArrayManifold {
         // -- This is exact capacity — no growth, no realloc, no drama.
         // -- No cap this capacity math slaps fr fr 🎯
         let commas = entries.len().saturating_sub(1);
-        let estimated_size: usize =
-            2 + entries.iter().map(|e| e.len()).sum::<usize>() + commas;
+        let estimated_size: usize = 2 + entries.iter().map(|e| e.len()).sum::<usize>() + commas;
         let mut payload = String::with_capacity(estimated_size);
         payload.push('[');
         for (i, entry) in entries.drain(..).enumerate() {
@@ -80,7 +79,10 @@ mod tests {
         ]);
         let result = manifold.join(&mut entries)?;
         assert_eq!(*result, r#"[{"doc":1},{"doc":2},{"doc":3}]"#);
-        assert!(entries.is_empty(), "🎯 drain(..) should leave the VecDeque empty but allocated");
+        assert!(
+            entries.is_empty(),
+            "🎯 drain(..) should leave the VecDeque empty but allocated"
+        );
         Ok(())
     }
 

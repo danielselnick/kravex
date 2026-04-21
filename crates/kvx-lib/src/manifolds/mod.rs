@@ -28,9 +28,9 @@
 //!
 //! ⚠️ The singularity will join its own payloads. Until then, we have this module.
 
-use anyhow::Result;
 use crate::Entry;
 use crate::Payload;
+use anyhow::Result;
 use std::collections::VecDeque;
 
 pub mod backend;
