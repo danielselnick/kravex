@@ -189,8 +189,8 @@
     "target/debug/incremental/kvx-2mlqribeoqg8k/s-hgeud1db0v-0e76g1b-59tu21410lhurqav7i0ur8h8f/ezhyxbv6gzlxqklznfase27iv.o",
     "target/debug/incremental/kvx-2mlqribeoqg8k/s-hgeud1db0v-0e76g1b-59tu21410lhurqav7i0ur8h8f/esa13yy7zz4thfpuevwafd6ql.o",
     "target/debug/incremental/kvx-2mlqribeoqg8k/s-hgeud1db0v-0e76g1b-59tu21410lhurqav7i0ur8h8f/eqm1ebv6cs63oa7ve2v76syaj.o",
-    "crates/kvx/src/regulators/readme.md",
-    "crates/kvx/src/manifolds/readme.md",
+    "crates/kvx-lib/src/regulators/readme.md",
+    "crates/kvx-lib/src/manifolds/readme.md",
     "AGENTS.md",
     "README.md"
   ]

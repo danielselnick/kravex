@@ -4,8 +4,8 @@
 
 ### Cluster Stats in Progress Display
 - **Feature**: Added source/sink cluster metrics (CPU%, MEM%) to progress display
-- **Files created**: `crates/kvx/src/progress/cluster_stats.rs`, `crates/kvx/src/progress/README.md`
-- **Files modified**: `crates/kvx/src/progress/renderer.rs`, `crates/kvx/src/progress/mod.rs`, `crates/kvx/src/foreman.rs`
+- **Files created**: `crates/kvx-lib/src/progress/cluster_stats.rs`, `crates/kvx-lib/src/progress/README.md`
+- **Files modified**: `crates/kvx-lib/src/progress/renderer.rs`, `crates/kvx-lib/src/progress/mod.rs`, `crates/kvx-lib/src/foreman.rs`
 - **Architecture**: `ClusterStatsPoller` is a stateless struct (URL + auth + HTTP client). `fetch()` spawns a background tokio task hitting `_nodes/stats/os,jvm`. Renderer checks `is_finished()` each tick — non-blocking. No coupling to foreman pipeline logic.
 - **Display**: 4-column mode when any ES poller exists (cols: drain rate, cumulative, source cluster, sink cluster). Classic 2-column when no pollers. `...` shown while first fetch is in-flight.
 - **Auth**: `ClusterAuth` enum — `Basic`, `ApiKey`, `None`. Resolved from ES config at poller construction.
@@ -71,8 +71,8 @@
 - 183 tests passed, 0 failed (29 elasticsearch_sink tests including 8 new)
 
 ### Files modified
-- `crates/kvx/src/backends/elasticsearch/elasticsearch_sink.rs` — bulk response types + parsing + per-item retry + 8 tests
-- `crates/kvx/src/backends/elasticsearch/README.md` — documented bulk response validation and per-item retry
+- `crates/kvx-lib/src/backends/elasticsearch/elasticsearch_sink.rs` — bulk response types + parsing + per-item retry + 8 tests
+- `crates/kvx-lib/src/backends/elasticsearch/README.md` — documented bulk response validation and per-item retry
 - `demo/demo.py` — stall detection in polling loop
 - `memory.md` — this entry
 
@@ -103,11 +103,11 @@
 - 175 tests passed, 0 failed
 
 ### Files modified
-- `crates/kvx/src/backends/elasticsearch/config.rs` — added `index: String` field
-- `crates/kvx/src/backends/elasticsearch/elasticsearch_source.rs` — full implementation
-- `crates/kvx/src/backends/elasticsearch/README.md` — updated docs
-- `crates/kvx/src/casts/mod.rs` — fixed test struct initializers (added index field)
-- `crates/kvx/src/lib.rs` — fixed test struct initializer (added index field)
+- `crates/kvx-lib/src/backends/elasticsearch/config.rs` — added `index: String` field
+- `crates/kvx-lib/src/backends/elasticsearch/elasticsearch_source.rs` — full implementation
+- `crates/kvx-lib/src/backends/elasticsearch/README.md` — updated docs
+- `crates/kvx-lib/src/casts/mod.rs` — fixed test struct initializers (added index field)
+- `crates/kvx-lib/src/lib.rs` — fixed test struct initializer (added index field)
 
 ### Architecture notes
 - PIT requires ES 7.10+

@@ -18,11 +18,11 @@
 //! 🦆 The duck wonders if we're benchmarking the joiner or the channel. Yes.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use kvx::casts::passthrough::Passthrough;
-use kvx::casts::PageToEntriesCaster;
-use kvx::manifolds::ManifoldBackend;
-use kvx::workers::Joiner;
-use kvx::{Page, Payload};
+use kvx_lib::casts::passthrough::Passthrough;
+use kvx_lib::casts::PageToEntriesCaster;
+use kvx_lib::manifolds::ManifoldBackend;
+use kvx_lib::workers::Joiner;
+use kvx_lib::{Page, Payload};
 use std::hint::black_box;
 
 // -- 📏 Doc counts to sweep — enough range to see if throughput scales linearly

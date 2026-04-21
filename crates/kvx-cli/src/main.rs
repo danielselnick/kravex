@@ -50,12 +50,12 @@ async fn main() -> Result<()> {
 
     // -- 🔧 Load the config — this is the moment where we find out if the TOML is valid
     // -- or if someone put a tab where a space should be (looking at you, Kevin)
-    let app_config  = kvx::config::load_config(config_file_path_which_is_validated_to_exist)
+    let app_config  = kvx_lib::config::load_config(config_file_path_which_is_validated_to_exist)
         .context("💀 In kvx-cli, main, we couldn't load the config file, take a look at the file, make sure it's correct. Make sure you didn't forget something obvious, dumas")
     /* ? */ ?;
 
     // -- 🚀 SEND IT. No take-backs. This is not a drill.
-    let result = kvx::run(app_config).await;
+    let result = kvx_lib::run(app_config).await;
 
     // -- 💀 Error handling: the part where we find out what went wrong
     // -- and print it in a way that's helpful at 3am

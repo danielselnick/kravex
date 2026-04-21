@@ -17,8 +17,8 @@
 //! 🦆 The singularity will arrive before we stop benchmarking this.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use kvx::backends::file::FileSource;
-use kvx::backends::{CommonSourceConfig, FileSourceConfig, Source};
+use kvx_lib::backends::file::FileSource;
+use kvx_lib::backends::{CommonSourceConfig, FileSourceConfig, Source};
 use std::io::Write;
 use tempfile::NamedTempFile;
 use tokio::io::{AsyncBufReadExt, BufReader};

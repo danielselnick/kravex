@@ -1066,7 +1066,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "kvx"
+name = "kvx-cli"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "kvx-lib",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "kvx-lib"
 version = "0.2.0"
 dependencies = [
  "anyhow",
@@ -1086,17 +1097,6 @@ dependencies = [
  "toml",
  "tracing",
  "wiremock",
-]
-
-[[package]]
-name = "kvx-cli"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "kvx",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

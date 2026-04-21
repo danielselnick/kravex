@@ -5,7 +5,7 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
-kvx = { path = "../kvx" }
+kvx-lib = { path = "../kvx-lib" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

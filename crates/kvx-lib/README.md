@@ -4,11 +4,13 @@ Core library for kravex — the data migration engine. 3-stage pipeline: Pumper 
 
 # Description
 
-`kvx` provides the foundational primitives for search migration: throttling, cutover logic, retry/recovery, and adaptive throughput. This crate is consumed by `kvx-cli` and any future integrations.
+`kvx-lib` provides the foundational primitives for search migration: throttling, cutover logic, retry/recovery, and adaptive throughput. This crate is consumed by `kvx-cli` and any future integrations through the `kvx_lib` Rust crate name.
 
 # Knowledge Graph
 
-- **Workspace member**: `crates/kvx`
+- **Workspace member**: `crates/kvx-lib`
+- **Package**: `kvx-lib`
+- **Rust crate**: `kvx_lib`
 - **Dependents**: `kvx-cli`
 - **Dependencies**: anyhow, async-channel, figment, memchr, reqwest, serde, serde_json, tokio, tracing, async-trait, futures, indicatif, comfy-table
 - **Dev-Dependencies**: wiremock, criterion, tempfile
