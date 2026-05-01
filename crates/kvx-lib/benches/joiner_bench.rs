@@ -46,7 +46,7 @@ const MAX_REQUEST_SIZE_BYTES: usize = 10 * 1024 * 1024;
 fn generate_feeds(count: usize) -> Vec<String> {
     // -- 🚀 pre-size the vec because reallocation mid-generation is for amateurs
     let mut feeds = Vec::with_capacity(count);
-    for j in 0..count {
+    for _ in 0..count {
         let mut feed = String::new();
         for i in 0..count {
             feed.push_str(&format!(

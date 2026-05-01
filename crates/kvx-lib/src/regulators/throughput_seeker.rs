@@ -380,7 +380,7 @@ fn the_wisdom_of_the_middle(the_values: &mut [f64]) -> f64 {
     }
     the_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let the_len = the_values.len();
-    if the_len % 2 == 0 {
+    if the_len.is_multiple_of(2) {
         (the_values[the_len / 2 - 1] + the_values[the_len / 2]) / 2.0
     } else {
         the_values[the_len / 2]

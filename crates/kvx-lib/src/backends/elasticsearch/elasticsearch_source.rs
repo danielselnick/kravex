@@ -135,11 +135,15 @@ impl Source for ElasticsearchSource {
                 );
 
                 // 🔄 Update search_after with the sort values from the last hit
-                if let Some(last_hit) = hit_array.last() {
-                    if let Some(sort_values) = last_hit.get("sort") {
-                        self.search_after =
-                            Some(sort_values.as_array().cloned().unwrap_or_default());
-                    }
+                if let Some(last_hit) = hit_array.last()
+                    && let Some(sort_values) = last_hit.get("sort")
+                {
+                    self.search_after = Some(
+                        sort_values.as_array()
+                            .cloned()
+                            .unwrap_or_default()
+                    );
+
                 }
 
                 // 🔖 PIT id can rotate between responses — always use the latest

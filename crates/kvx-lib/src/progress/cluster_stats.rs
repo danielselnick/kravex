@@ -184,20 +184,20 @@ async fn fetch_cluster_stats(
     let mut the_jvm_heap_sum = 0.0_f64;
     let mut the_jvm_count = 0_u64;
 
-    for (_node_id, node) in &the_stats.nodes {
+    for node in the_stats.nodes.values() {
         // -- 🧠 CPU: process → cpu → percent (the JVM's own CPU, not the container's system CPU)
-        if let Some(process) = &node.process {
-            if let Some(cpu) = &process.cpu {
-                the_cpu_sum += cpu.percent as f64;
-                the_cpu_count += 1;
-            }
+        if let Some(process) = &node.process
+            && let Some(cpu) = &process.cpu
+        {
+            the_cpu_sum += cpu.percent as f64;
+            the_cpu_count += 1;
         }
         // -- 📦 JVM heap: jvm → mem → heap_used_percent
-        if let Some(jvm) = &node.jvm {
-            if let Some(mem) = &jvm.mem {
-                the_jvm_heap_sum += mem.heap_used_percent as f64;
-                the_jvm_count += 1;
-            }
+        if let Some(jvm) = &node.jvm
+            && let Some(mem) = &jvm.mem
+        {
+            the_jvm_heap_sum += mem.heap_used_percent as f64;
+            the_jvm_count += 1;
         }
     }
 
@@ -305,18 +305,18 @@ mod tests {
         let mut jvm_sum = 0.0_f64;
         let mut jvm_count = 0_u64;
 
-        for (_id, node) in &the_stats.nodes {
-            if let Some(process) = &node.process {
-                if let Some(cpu) = &process.cpu {
-                    cpu_sum += cpu.percent as f64;
-                    cpu_count += 1;
-                }
+        for node in the_stats.nodes.values() {
+            if let Some(process) = &node.process
+                && let Some(cpu) = &process.cpu
+            {
+                cpu_sum += cpu.percent as f64;
+                cpu_count += 1;
             }
-            if let Some(jvm) = &node.jvm {
-                if let Some(mem) = &jvm.mem {
-                    jvm_sum += mem.heap_used_percent as f64;
-                    jvm_count += 1;
-                }
+            if let Some(jvm) = &node.jvm
+                && let Some(mem) = &jvm.mem
+            {
+                jvm_sum += mem.heap_used_percent as f64;
+                jvm_count += 1;
             }
         }
 
@@ -360,18 +360,18 @@ mod tests {
         let mut jvm_sum = 0.0_f64;
         let mut jvm_count = 0_u64;
 
-        for (_id, node) in &the_stats.nodes {
-            if let Some(process) = &node.process {
-                if let Some(cpu) = &process.cpu {
-                    cpu_sum += cpu.percent as f64;
-                    cpu_count += 1;
-                }
+        for node in the_stats.nodes.values() {
+            if let Some(process) = &node.process
+                && let Some(cpu) = &process.cpu
+            {
+                cpu_sum += cpu.percent as f64;
+                cpu_count += 1;
             }
-            if let Some(jvm) = &node.jvm {
-                if let Some(mem) = &jvm.mem {
-                    jvm_sum += mem.heap_used_percent as f64;
-                    jvm_count += 1;
-                }
+            if let Some(jvm) = &node.jvm
+                && let Some(mem) = &jvm.mem
+            {
+                jvm_sum += mem.heap_used_percent as f64;
+                jvm_count += 1;
             }
         }
 
@@ -417,12 +417,12 @@ mod tests {
         let mut cpu_sum = 0.0_f64;
         let mut cpu_count = 0_u64;
 
-        for (_id, node) in &the_stats.nodes {
-            if let Some(process) = &node.process {
-                if let Some(cpu) = &process.cpu {
-                    cpu_sum += cpu.percent as f64;
-                    cpu_count += 1;
-                }
+        for node in the_stats.nodes.values() {
+            if let Some(process) = &node.process
+                && let Some(cpu) = &process.cpu
+            {
+                cpu_sum += cpu.percent as f64;
+                cpu_count += 1;
             }
         }
 

@@ -130,9 +130,9 @@ impl PageToEntriesCaster {
     }
 }
 
-/// 🧠 `PageToEntriesCaster` dispatches to the concrete caster inside each variant.
-/// Same pattern as `impl Source for SourceBackend` in `backends.rs`.
-/// The borrow checker approves. The compiler inlines. Life is good. 🐄
+// -- 🧠 `PageToEntriesCaster` dispatches to the concrete caster inside each variant. 🦆
+// -- Same pattern as `impl Source for SourceBackend` in `backends.rs`. 🚀
+// -- The borrow checker approves. The compiler inlines. Life is good. 🧵
 
 #[cfg(test)]
 mod tests {

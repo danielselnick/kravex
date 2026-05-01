@@ -47,9 +47,7 @@ impl Caster for Passthrough {
     fn cast(&self, page: Page) -> Result<Vec<Entry>> {
         // -- 🚶 TSA PreCheck for data. Walk right through. Don't even slow down.
         let entry = Entry(page.0);
-        let mut result = Vec::new();
-        result.push(entry);
-        Ok(result)
+        Ok(vec![entry])
     }
 }
 

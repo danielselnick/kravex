@@ -27,6 +27,7 @@ Core library source for kravex — the zero-config search migration engine.
 | **Payload** | Wire-format string ready for the sink |
 | **Pump** | Read the next feed from a source |
 | **Drain** | Write a payload to a sink |
+| **Lint hygiene** | Keep module contracts and docs aligned with static analysis expectations |
 
 ## Architecture
 
@@ -43,4 +44,5 @@ lib.rs → AppConfig → Foreman → Workers (Pumper, Joiner, Drainer)
 lib.rs → Regulators → Manometer + Governor → FlowKnob
 Foreman → Source (via Pumper), Sink (via Drainer)
 Joiner → Caster + Manifold (cast feeds, assemble payloads)
+Quality loop → Compiler + Lints + Tests → stable migration behavior
 ```

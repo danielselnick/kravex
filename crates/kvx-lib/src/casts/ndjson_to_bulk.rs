@@ -183,7 +183,7 @@ mod tests {
     fn the_one_where_the_output_is_actually_valid_bulk_api_format() -> Result<()> {
         let caster = NdJsonToBulk {};
         // 📄 Real-ish documents, like the ones that haunt my dreams at 3am
-        let docs = vec![
+        let docs = [
             r#"{"ObjectID":99999,"FormattedID":"US001","Name":"The hero's journey"}"#,
             r#"{"ObjectID":88888,"FormattedID":"DE001","Name":"The bug that got away"}"#,
             r#"{"ObjectID":77777,"FormattedID":"TA001","Name":"The task that never ends"}"#,

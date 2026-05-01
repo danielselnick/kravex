@@ -251,7 +251,7 @@ impl ElasticsearchSink {
             let mut the_reasons_for_grief: Vec<String> = Vec::new();
 
             for (the_item_index, wrapper) in the_bulk_response.items.iter().enumerate() {
-                for (_action, result) in wrapper {
+                for result in wrapper.values() {
                     if let Some(ref the_rejection_letter) = result.error {
                         the_body_count += 1;
                         if the_reasons_for_grief.len() < MAX_GRIEF_SAMPLES {

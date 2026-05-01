@@ -141,8 +141,8 @@ pub struct AppConfig {
 /// 📐 DESIGN NOTE (no cap, this is tribal knowledge):
 ///   - If `config_file_name` is None  → env vars only. No file. No assumptions. No pizza defaults.
 ///   - If `config_file_name` is Some  → env vars + TOML file, merged. TOML wins on conflicts.
-///   Previously kravex always fell back to "config.toml" — like assuming everyone wants pineapple
-///   on their pizza. We fixed that. ethos showed us the light.
+///     Previously kravex always fell back to "config.toml" — like assuming everyone wants pineapple
+///     on their pizza. We fixed that. ethos showed us the light.
 ///
 /// 💀 Returns an error if config is unparseable. Which it will be. Check the error message though —
 /// it's contextual, informative, and written with love. Or despair. Hard to tell at 3am.
@@ -151,7 +151,7 @@ pub fn load_config(config_file_name: Option<&Path>) -> anyhow::Result<AppConfig>
     // -- of every 3am incident. "The config loaded fine." — famous last words.
     info!(
         "🔧 Loading configuration: {:#?}",
-        config_file_name.unwrap_or(&Path::new(""))
+        config_file_name.unwrap_or(Path::new(""))
     );
 
     // -- 🏗️ Start with env vars as the base layer — like a good sourdough starter.

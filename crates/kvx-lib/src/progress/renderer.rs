@@ -51,7 +51,7 @@ fn format_number(n: u64) -> String {
     // -- 🧵 pre-allocate like we know what we're doing (we do, we read the book)
     let mut result = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(c);
@@ -122,6 +122,12 @@ pub struct DrainMetrics {
     pub last_request_size_bytes: AtomicU64,
     /// 📡 most recent drain latency in ms — store (not add), always the latest
     pub last_latency_ms: AtomicU64,
+}
+
+impl Default for DrainMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DrainMetrics {
@@ -340,17 +346,17 @@ impl ProgressReporter {
     /// Non-blocking — tokio::spawn returns immediately. We'll check back next tick. 🔄
     fn kick_off_cluster_fetches(&mut self) {
         // -- 📡 source: only fetch if we have a poller and no fetch is in-flight
-        if self.source_fetch_handle.is_none() {
-            if let Some(poller) = &self.source_poller {
-                self.source_fetch_handle = Some(poller.fetch());
-            }
+        if self.source_fetch_handle.is_none()
+            && let Some(poller) = &self.source_poller
+        {
+            self.source_fetch_handle = Some(poller.fetch());
         }
 
         // -- 📡 sink: same deal — poller exists, no in-flight fetch → go
-        if self.sink_fetch_handle.is_none() {
-            if let Some(poller) = &self.sink_poller {
-                self.sink_fetch_handle = Some(poller.fetch());
-            }
+        if self.sink_fetch_handle.is_none()
+            && let Some(poller) = &self.sink_poller
+        {
+            self.sink_fetch_handle = Some(poller.fetch());
         }
     }
 

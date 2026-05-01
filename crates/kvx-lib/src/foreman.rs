@@ -93,6 +93,7 @@ impl Foreman {
     ///
     /// "In the beginning there was main(). And main() said 'let there be workers.'
     ///  And the Foreman made it so. And it was... mostly okay." — Genesis 1:1 (Cargo edition) 🦆
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_workers(
         &self,
         source_backend: crate::backends::SourceBackend,

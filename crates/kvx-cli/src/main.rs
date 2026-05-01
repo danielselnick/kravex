@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let path_arg = match args.get(1) {
         Some(s) => s,
-        None => &format!("kvx.toml"), // -- 🔧 default: the ol' reliable
+        None => "kvx.toml", // -- 🔧 default: the ol' reliable
     };
 
     // -- 🔒 Validate the config file exists before we get too emotionally attached
