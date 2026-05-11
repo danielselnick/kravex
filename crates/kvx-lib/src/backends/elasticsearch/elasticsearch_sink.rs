@@ -126,8 +126,8 @@ impl ElasticsearchSink {
     ///    Because indexing into a non-existent index is a skill issue we catch at init time,
     ///    not at 10,000 documents deep. You're welcome.
     ///
-    /// ⚠️ Basic auth is used for the connectivity ping. API key is used for the index check.
-    /// Pick your auth adventure, but be consistent about it in your config.
+    /// 🔒 Auth priority: API key > basic auth > anonymous. Same across ping, index check,
+    /// and bulk requests. Consistent like a good morning routine. ☕
     pub async fn new(config: ElasticsearchSinkConfig) -> Result<Self> {
         // 🔧 Build the HTTP client. 10 second connect timeout because if ES can't handshake
         // in 10 seconds, it's not having a good time and neither are we. 30 second response
@@ -145,12 +145,17 @@ impl ElasticsearchSink {
         // -- 📡 Connectivity ping — "Hello? Is this thing on?" — a developer, gesturing at a cluster.
         // We do a basic GET to the root to confirm the URL is real and auth works.
         // If this fails, we fail loudly here, rather than quietly 50,000 docs later.
-        let c = config.clone();
-        client
-            .get(&c.url)
-            .basic_auth(c.username.unwrap_or_default(), c.password)
-            .send()
-            .await?;
+        // Auth priority: API key > basic auth > anonymous. Same ladder as the source.
+        let ping_request = {
+            let mut req = client.get(&config.url);
+            if let Some(ref api_key) = config.api_key {
+                req = req.header("Authorization", format!("ApiKey {}", api_key));
+            } else if let Some(ref username) = config.username {
+                req = req.basic_auth(username, config.password.as_ref());
+            }
+            req
+        };
+        ping_request.send().await?;
 
         // 🔒 Optional index existence check — only runs if a static index is configured.
         // Per-doc index routing skips this, because checking every possible target index at

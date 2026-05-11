@@ -54,7 +54,7 @@ const THE_ERROR_COOLDOWN: Duration = Duration::from_secs(5);
 /// 🏔️ ThroughputSeeker — a dual-system regulator that climbs toward peak throughput.
 ///
 /// System 1 (Circuit Breaker): Dual EMA crossover detects sudden degradation.
-/// Fast EMA drops 20% below slow EMA? TRIP — immediate halve. Like a fuse box
+/// Fast EMA drops 35% below slow EMA? TRIP — immediate halve. Like a fuse box
 /// for your data pipeline. Except you can't just flip it back and pretend nothing happened. ⚡
 ///
 /// System 2 (Hill Climber): 5-second windowed median comparison.

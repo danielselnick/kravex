@@ -41,7 +41,7 @@ Drainer (error/429)      → GaugeReading::Error() → Governor → Regulator �
 ## Key Concepts
 
 - **ThroughputSeeker**: Dual-system design — fast circuit breaker (per-reading) + slow hill climber (5s windows)
-- **Circuit Breaker**: Dual EMA crossover — fast EMA drops 20% below slow EMA → immediate halve + cooldown
+- **Circuit Breaker**: Dual EMA crossover — fast EMA drops 35% below slow EMA → immediate halve + cooldown
 - **Hill Climbing**: Windowed median comparison — step forward on improvement, reverse + shrink (×0.618) on worsening
 - **Convergence**: Step size shrinks below 64 KiB → seeker holds position. Re-explores after 30 settled windows.
 - **PID Controller**: Proportional-Integral-Derivative feedback loop for latency setpoints
