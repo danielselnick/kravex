@@ -1,200 +1,130 @@
-# Plan: Complete Pipeline Terminology Rename → Unified Refinery Motif
+# 🗑️ Code Cleanup Plan — "Taking Out the Trash"
 
 ## Context
 
-The codebase underwent a partial refactor to rename pipeline components according to a
-consistent plumbing/refinery mental model. Several old terms remain in the codebase and
-need to be updated to fully realize the new naming. This plan catalogs every location.
+The codebase has undergone significant iteration — renames (`Page → Draft`, `FlowMaster → Governor`, `kvx → kvx-lib`), removed features (Meilisearch, OpenObserve, cpu_pressure gauge/regulator), and structural changes (configs moved to co-located backend files). The result is accumulated dead code, orphaned modules, unused constants, suppressed warnings, and stale comments that no longer match reality. Time to clean house.
 
-## Key Finding
+## Key Observations
 
-**The largest incomplete rename is `Joiner` → `Refiner`** — the struct, module, config field,
-benchmarks, and all documentation references still use the old name. Everything else
-(`Tapper`, `Barrel`, `Draft`, `Drum`, `Governor`, `Foreman`, `Manifold`) is already
-renamed or newly introduced. Only comments, idioms ("cast" → "tap", "buffer" → "plenum"),
-and a few terminological stragglers remain.
+1. **`#![allow(dead_code, unused_variables, unused_imports)]`** — These crate-level allows suppress ALL dead/unused warnings across both `lib.rs` and `kvx-cli/src/main.rs`. They were needed during rapid iteration but are now masking real problems.
 
----
+2. **Numerous renames left debris** — Old names and comments referencing `Page`, `FlowMaster`, `kvx` (pre-rename), `cpu_pressure`, `regulator` (old field name in config), `Drainer` doing CPU work (now in `Refiner`).
+
+3. **Orphaned/unused code** — Constants defined but never referenced, `pub` visibility on internal types, unused functions, redundant `#[serde(default)]` patterns.
+
+4. **Massive comment volume** — Every file has lengthy AI-generated movie-script doc comments. While entertaining, they significantly bloat the source and make real documentation harder to find.
+
+## Approach
+
+Work crate-by-crate, module-by-module, in dependency order. Each step removes the `#![allow(...)]` from that specific scope, builds, fixes warnings by removing or `#[allow]`-tagging specific items (only after determining they're truly dead), and commits. This is safer than a single big-bang removal because each compile failure reveals exactly one problem at a time.
 
 ## Files to Modify
 
-### Critical — structural renames
+### Primary targets (dead code removal):
 
-| File(s) | Issue | Action |
-|---------|-------|--------|
-| `crates/kvx-lib/src/workers/joiner.rs` | Module, struct `Joiner`, all comments, test names | Rename file to `refiner.rs`, rename struct to `Refiner`, update all internal references |
-| `crates/kvx-lib/src/workers/mod.rs` | `mod joiner; pub use joiner::Joiner;` | Update to `mod refiner; pub use refiner::Refiner;` |
-| `crates/kvx-lib/benches/joiner_bench.rs` | Entire file uses old term | Rename to `refiner_bench.rs`, update all content |
+| File | What to Clean |
+|------|---------------|
+| `crates/kvx-lib/src/lib.rs` | Remove `#![allow(dead_code, unused_variables, unused_imports)]` — this is the main gate. Also remove `stop()` (empty no-op function) |
+| `crates/kvx-cli/src/main.rs` | Remove `#![allow(dead_code, unused_variables, unused_imports)]` |
+| `crates/kvx-lib/src/taps/pit_to_bulk.rs` | Remove unused constants `_HIT_ID_FIELD`, `_HIT_INDEX_FIELD`, `_HIT_ROUTING_FIELD` |
+| `crates/kvx-lib/src/backends/file/file_sink.rs` | Remove unused `_sink_config` field (stored but never read after construction) |
+| `crates/kvx-lib/src/regulators/pid_controller.rs` | Remove unused `_HIT_ROUTING_FIELD` reference if exists |
+| `crates/kvx-lib/src/victory_laps.rs` | Consider trimming excessive victory messages (50+ scrolls is fun but adds build time/complexity for test verification) |
+| `crates/kvx-lib/src/progress/mod.rs` | Remove unused import `tokio::task::JoinHandle` if present |
+| `crates/kvx-lib/src/progress/cluster_stats.rs` | Remove unused import `std::sync::atomic::AtomicUsize` if present |
+| `crates/kvx-lib/src/backends/file/file_source.rs` | Remove unused `total_bytes_from_file` variable (assigned but never used outside tracing) |
 
-### Config — field names and serde aliases
+### Config/schema cleanup:
 
-| File(s) | Issue | Action |
-|---------|-------|--------|
-| `crates/kvx-lib/src/config.rs` | Field `joiner_parallelism`, serde alias `num_joiner_workers` | Rename to `refiner_count` (add `alias = "joiner_parallelism"` for compat) |
-| `crates/kvx-lib/src/config.rs` | Field `pumper_to_joiner_capacity` | Rename to `pumper_to_refiner_capacity` |
-| `crates/kvx-lib/src/config.rs` | Field `joiner_to_drainer_capacity` | Rename to `refiner_to_drainer_capacity` |
-| All `configs/*.toml` | `joiner_parallelism`, `pumper_to_joiner_capacity`, `joiner_to_drainer_capacity` | Update field names |
-| All `demo/*.toml` | Same fields | Update field names |
+| File | What to Clean |
+|------|---------------|
+| `crates/kvx-lib/src/regulators/config.rs` | `default_min_request_size_bytes()` and `default_initial_output_bytes()` — check if they're used or duplicated elsewhere |
+| `crates/kvx-lib/src/backends/config.rs` | `default_max_barrel_size_docs()` and `default_max_barrel_size_bytes()` — serde default vs `Default` trait have different values. Doc says this is intentional but should be reconciled or documented with a clear decision |
+| `crates/kvx-lib/src/backends/config.rs` | `default_max_drum_size_bytes()` — same dueling-defaults issue |
 
-### Foreman — spawns Joiners, references Joiner everywhere
+### Stale comments to update/remove:
 
-| File(s) | Issue | Action |
-|---------|-------|--------|
-| `crates/kvx-lib/src/foreman.rs` | `workers::Joiner::new(...)`, `the_joiner_thread_handles`, comments | Update to `Refiner`, rename variables |
+Many comments reference old architecture, wrong module locations, or are just movie scripts. Specific high-value targets:
 
-### Drainer — references Joiners in comments
+- `lib.rs` — comments mention "unimplemented mock mapping for now" — pipeline is working
+- `backends/file/file_source.rs` — "we rolled our own buffering" internals changed
+- `backends/sink.rs` — says "Drainer buffers" but Drainer no longer buffers
+- `taps/mod.rs` — says "Barrels go in, Drafts come out" but concept has been renamed
+- `workers/mod.rs` — "stop logic yet to be written" is stale (refers to `stop()`)
+- All README.md files in subdirectories — check if still accurate
 
-| File(s) | Issue | Action |
-|---------|-------|--------|
-| `crates/kvx-lib/src/workers/drainer.rs` | Doc comments: "Joiner(s) (std::thread) → ch2", "joiner thread pool" | Update to Refiner |
+**Note**: Comments are lower priority than dead code. We clean obvious stale comments as we touch files for dead code removal, but don't do a standalone comment-edit pass.
 
-### Governor — references Joiners and FlowKnob in comments
+### Documentation files:
 
-| File(s) | Issue | Action |
-|---------|-------|--------|
-| `crates/kvx-lib/src/workers/governor.rs` | Comments: "FlowKnob that Joiners read" | Update to Refiner |
-
-### Manifolds — comment cleanup
-
-| File(s) | Issue | Action |
-|---------|-------|--------|
-| `crates/kvx-lib/src/manifolds/mod.rs` | Doc: "buffer" → "Plenum", "tapper.cast(barrel)" → "tapper.tap(barrel)" | Update terminology |
-| `crates/kvx-lib/src/manifolds/backend.rs` | Comments: "cast" → "tap" | Update terminology |
-
-### Taps — comment cleanup
-
-| File(s) | Issue | Action |
-|---------|-------|--------|
-| `crates/kvx-lib/src/taps/mod.rs` | Trait doc: "Cast a raw barrel", comment "the cast is free" | Update to "Tap a raw barrel" |
-| `crates/kvx-lib/src/taps/pit_to_bulk.rs` | Comment: "Joiner calls `tapper.cast(barrel)`" | Update |
-| `crates/kvx-lib/src/taps/ndjson_to_bulk.rs` | Comment: "cast it into the bulk dimension" | Update verb |
-
-### lib.rs — integration test references
-
-| File(s) | Issue | Action |
-|---------|-------|--------|
-| `crates/kvx-lib/src/lib.rs` | Comments: "Joiner received 1 barrel", "Joiner buffers" | Update to Refiner |
-| `crates/kvx-lib/src/lib.rs` | Doc: "FlowKnob — The Governor writes it. The joiners read it." | "joiners" → "refiners" |
-| `crates/kvx-lib/src/lib.rs` | Test `RuntimeConfig` values: `joiner_parallelism`, `joiner_to_drainer_capacity` | Update field names |
-
-### regulators — comment
-
-| File(s) | Issue | Action |
-|---------|-------|--------|
-| `crates/kvx-lib/src/regulators/mod.rs` | Doc: "Joiner reads flow knob on every flush check" | Update to "Refiner reads..." |
-
-### Documentation — README files
-
-| File(s) | Issue | Action |
-|---------|-------|--------|
-| `README.md` | Architecture diagram, Terminology table, Configuration reference — "Joiner" everywhere | Update to "Refiner" |
-| `crates/kvx-lib/README.md` | All references | Update |
-| `crates/kvx-lib/src/README.md` | All references | Update |
-| `crates/kvx-lib/src/workers/README.md` | All references | Update |
-| `crates/kvx-lib/src/manifolds/README.md` | All references | Update |
-| `crates/kvx-lib/src/regulators/README.md` | `FlowKnob` + `Joiner` references | Update |
-
-### Demo configs
-
-| File(s) | Issue | Action |
-|---------|-------|--------|
-| `demo/*.toml` | Any `joiner_parallelism`, `pumper_to_joiner_capacity` | Update field names |
-
----
+| File | Action |
+|------|--------|
+| Multiple `README.md` files in `crates/kvx-lib/src/` subdirectories | Brief review for accuracy |
+| `PLAN.md` in repo root | Write new plan over this file (done) |
 
 ## Reuse
 
-The following renames have **already been completed** — no changes needed:
-
-| Old | New | Status |
-|-----|-----|--------|
-| `page` → `Barrel` | ✅ Done — `crate::Barrel` exists as a newtype |
-| `document/record in transit` → `Draft` | ✅ Done — `crate::Draft` exists as a newtype |
-| `Request Body / Payload` → `Drum` | ✅ Done — `crate::Drum` exists as a newtype |
-| `Caster` → `Tapper` + `BarrelToDraftsTapper` | ✅ Done — trait + enum already renamed |
-| `Buffer` → `Plenum` | ⚠️ Partially — type renamed but comments still say "buffer" |
-| `Flow Master` → `Governor` | ✅ Done — with serde `alias = "flow_master"` for config compat |
-| `Page Channel` / `Request Body Channel` → ch1/ch2 | ✅ Internal shorthand kept |
-| `Foreman` | ✅ Stays (the plumber / foreman fits the motif) |
-| `Manifold` | ✅ Stays |
-| `Regulator` | ✅ Stays |
-| `GaugeReading` | ✅ Stays |
-| `Drainer` | ✅ Stays |
-| `Pumper` | ✅ Stays |
-
-### Preserved backwards-compatible serde aliases (no need to remove):
-- `pumper_to_joiner_capacity` ← also accepts `channel_size`, `queue_capacity`
-- `joiner_to_drainer_capacity` ← also accepts `drum_channel_capacity`
-- `refiner_count` ← will also accept `num_joiner_workers` (old), `joiner_parallelism` (old)
-- `GovernorConfig` ← also accepts `flow_master` TOML section name
-
----
+No existing functions or utilities need to be reused for this cleanup. This is deletion work.
 
 ## Steps
 
-### Step 1: Rename `Joiner` struct + module → `Refiner`
-- [ ] Rename `workers/joiner.rs` → `workers/refiner.rs`
-- [ ] Rename struct `Joiner` → `Refiner` in `refiner.rs`
-- [ ] Update all doc comments (test names, module doc, inline comments)
-- [ ] Rename `the_joiner_thread` / `the_joiner_thread_handles` variables
+### Phase 1: Prepare (safe structural cleanup)
 
-### Step 2: Rename config fields + serde aliases
-- [ ] `joiner_parallelism` → `refiner_count` (add alias `joiner_parallelism` for compat)
-- [ ] `pumper_to_joiner_capacity` → `pumper_to_refiner_capacity` (add alias)
-- [ ] `joiner_to_drainer_capacity` → `refiner_to_drainer_capacity` (add alias)
-- [ ] `num_joiner_workers` alias → keep as is (backward compat)
+- [ ] 1.1 — Build the project with `cargo build` and `cargo test` to establish a known-good baseline.
+- [ ] 1.2 — Run `cargo clippy` to see current warnings (likely zero due to `#![allow]`).
+- [ ] 1.3 — Run `cargo +nightly udeps` or `cargo-unused-features` if available to detect unused workspace deps (optional).
 
-### Step 3: Update all references across source files
-- [ ] `workers/mod.rs` — module declaration + re-export
-- [ ] `foreman.rs` — `Joiner::new(...)`, variables, comments
-- [ ] `drainer.rs` — doc comments
-- [ ] `governor.rs` — doc comments
-- [ ] `regulators/mod.rs` — doc comments
-- [ ] `manifolds/mod.rs` — comments (buffer → Plenum, cast → tap)
-- [ ] `manifolds/backend.rs` — comments
-- [ ] `taps/mod.rs` — comments (cast → tap)
-- [ ] `taps/pit_to_bulk.rs` — comments
-- [ ] `taps/ndjson_to_bulk.rs` — comments
-- [ ] `lib.rs` — comments, test RuntimeConfig values
-- [ ] `progress/renderer.rs` — comments (FlowKnob pattern)
-- [ ] `backends/sink.rs` — comments (cast → tap)
-- [ ] `backends/file/mod.rs` — comments
-- [ ] `backends/elasticsearch/elasticsearch_sink.rs` — comments
-- [ ] `backends/in_mem/in_mem_sink.rs` — comments
+### Phase 2: Remove crate-level `#![allow]` from `kvx-cli`
 
-### Step 4: Rename benchmark file
-- [ ] Rename `benches/joiner_bench.rs` → `benches/refiner_bench.rs`
-- [ ] Update all references inside (test names, variable names, imports)
+- [ ] 2.1 — In `crates/kvx-cli/src/main.rs`, remove `#![allow(dead_code, unused_variables, unused_imports)]`.
+- [ ] 2.2 — `cargo build` in the CLI crate. Fix any warnings (likely none since main.rs is thin).
+- [ ] 2.3 — Commit.
 
-### Step 5: Update TOML config files
-- [ ] `configs/kvx.toml` — field names
-- [ ] `configs/kvx_file.toml` — field names
-- [ ] `configs/kvx_file_to_esdb.toml` — field names + `flow_master` comment
-- [ ] `demo/*.toml` — field names
+### Phase 3: Remove crate-level `#![allow]` from `kvx-lib`
 
-### Step 6: Update documentation
-- [ ] `README.md` — architecture diagram, terminology table, config reference
-- [ ] `crates/kvx-lib/README.md`
-- [ ] `crates/kvx-lib/src/README.md`
-- [ ] `crates/kvx-lib/src/workers/README.md`
-- [ ] `crates/kvx-lib/src/manifolds/README.md`
-- [ ] `crates/kvx-lib/src/regulators/README.md`
+- [ ] 3.1 — In `crates/kvx-lib/src/lib.rs`, remove `#![allow(dead_code, unused_variables, unused_imports)]`.
+- [ ] 3.2 — `cargo build`. The build will fail on the first dead/unused item. Fix it.
+  - **Dead items policy**: For each warning:
+    - If trivially unused (constants, variables, imports) → delete.
+    - If private function/struct that is clearly never called → delete.
+    - If `pub` function/struct that is unused within the crate but part of the intended public API → add `#[allow(dead_code)]` on just that item, with a brief comment.
+    - If a variant/enum is unused → delete unless it's part of a planned feature (add `#[allow]` with comment).
+  - **`stop()` function**: This is a public no-op function in `lib.rs`. The comment admits it does nothing. If no caller exists outside the crate, remove it. If it's part of the intended public API, keep it with a `#[allow(dead_code)]`.
+- [ ] 3.3 — Iterate until clean build. Commit.
 
-### Step 7: Verify compilation + tests pass
-- [ ] `cargo check --workspace` — make sure all renames resolve
-- [ ] `cargo test --workspace` — all tests pass after the rename
-- [ ] `cargo clippy --workspace` — no lint regressions
+### Phase 4: Specific cleanup targets
 
----
+- [ ] 4.1 — Remove unused constants from `pit_to_bulk.rs` (`_HIT_ID_FIELD`, `_HIT_INDEX_FIELD`, `_HIT_ROUTING_FIELD`).
+- [ ] 4.2 — Remove unused `_sink_config` field from `FileSink` struct (stored but never read after `new()`).
+- [ ] 4.3 — Remove unused `total_bytes_from_file` variable in `file_source.rs` `pump()` (assigned but only used in a trace that doesn't use it).
+- [ ] 4.4 — Remove `GaugeReading::Error()` variant if unused (depends on whether ThroughputSeeker actually uses it — yes it does, keep it).
+- [ ] 4.5 — Audit `pub` visibility on internal types and reduce to `pub(crate)` where possible (reducing public API surface to intentional boundaries).
+- [ ] 4.6 — Commit.
+
+### Phase 5: Config default reconciliation
+
+- [ ] 5.1 — `CommonSourceConfig` has different serde defaults (10k docs/10MB) vs `Default` trait (1k docs/1MB). Decide which is canonical and eliminate the duplication.
+  - **Recommendation**: Make serde defaults match the `Default` trait (1k/1MB) — these are safer and more conservative. Document the discrepancy and pick one.
+- [ ] 5.2 — `CommonSinkConfig` has serde default 10MB vs `Default` impl 64MB. Same issue. Pick one (recommend: keep `Default` = 64MB, serde default = 64MB).
+- [ ] 5.3 — Commit.
+
+### Phase 6: Verify
+
+- [ ] 6.1 — `cargo build` — clean build, zero warnings.
+- [ ] 6.2 — `cargo test --workspace` — all tests pass.
+- [ ] 6.3 — `cargo clippy --all-targets` — clean.
+- [ ] 6.4 — Run the integration tests (the ones using `wiremock` for ES sink/source).
+
+### Phase 7: Optional stretch goals
+
+- [ ] 7.1 — Trim `victory_laps.rs` down to ~20 messages (keep the best ones, remove the padding).
+- [ ] 7.2 — Remove stale `README.md` files inside `src/` subdirectories that just duplicate module-level doc comments.
+- [ ] 7.3 — Run `cargo +nightly udeps` for unused dependency detection.
 
 ## Verification
 
-1. **`cargo check --workspace`** — all path references in `use` statements and `mod` declarations must resolve.
-2. **`cargo test --workspace`** — full test suite including integration tests (`lib.rs`) and benchmark module.
-3. **`cargo doc --no-deps`** — ensure no broken doc links from README renames.
-4. **Manual grep sweep** — verify zero remaining instances of:
-   - `Joiner` / `joiner` (case-insensitive, code + comments)
-   - `flow_master` / `FlowMaster` (beyond the intentional backward-compat alias)
-   - Old "cast" verb in pipeline context (comments)
-   - Old "buffer" noun referring to the Plenum in pipeline context
-5. **Config loading tests** — verify TOML files with old field names still load via serde aliases.
+1. **`cargo build --workspace`** — must compile with zero warnings and zero errors.
+2. **`cargo test --workspace`** — all 140+ tests must pass.
+3. **`cargo clippy --all-targets`** — clean output.
+4. **Manual check**: The two `#[tokio::test]` integration tests in `lib.rs` and the ES sink/source tests use `wiremock` and exercise the full pipeline — they must pass.
+5. **No `#![allow(dead_code)]` at crate level should remain** — any remaining dead code suppression must be item-level with a justification comment.

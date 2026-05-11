@@ -163,7 +163,7 @@ The comedy is part of the project's identity. If you're reading the source and s
 ```
 kravex/
 ├── crates/
-│   ├── kvx/          # Core library
+│   ├── kvx-lib/       # Core library
 │   │   └── src/
 │   │       ├── backends/       # Source + Sink implementations (ES, File, InMemory)
 │   │       ├── taps/           # Barrel-to-Draft transformers
@@ -171,14 +171,13 @@ kravex/
 │   │       ├── regulators/     # Adaptive throttle controllers (hill-climbing, PID, static)
 │   │       ├── workers/        # Pumper, Refiner, Drainer, Governor
 │   │       └── foreman.rs      # Pipeline orchestrator
-│   └── kvx-cli/      # CLI binary wrapping kvx
-│   └── kvx-api/      # REST API binary wrapping kvx
-├── ee/                # Enterprise features (separate license)
-├── configs/           # Example TOML configurations
-├── datasets/          # Benchmark & demo data (gitignored — downloaded at runtime)
-├── benchmark/         # Benchmark scripts and attribution
-├── demo/              # End-to-end demo harness (File → ES → OpenSearch)
-└── docker-compose.yml # Local ES + OpenSearch (profile: demo | bench)
+│   └── kvx-cli/       # CLI binary wrapping kvx-lib
+├── ee/                 # Enterprise features (separate license)
+├── configs/            # Example TOML configurations
+├── datasets/           # Benchmark & demo data (gitignored — downloaded at runtime)
+├── benchmark/          # Benchmark scripts and attribution
+├── demo/               # End-to-end demo harness (File → ES → OpenSearch)
+└── docker-compose.yml  # Local ES + OpenSearch (profile: demo | bench)
 ```
 
 ## Configuration reference
