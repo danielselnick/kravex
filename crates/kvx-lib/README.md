@@ -39,7 +39,7 @@ Separating CPU work onto OS threads prevents starving tokio's async I/O workers.
 - **Sources return `Option<String>`**: one raw page per call, content uninterpreted. `None` = EOF
 - **Sinks are I/O-only**: accept a fully rendered payload `String`, send it
 - **Joiner buffers raw pages** by byte size, flushes via Manifold when buffer approaches `max_request_size_bytes`
-- **Caster** (`DraftToEntriesCaster`): per-page format conversion (NdJsonToBulk, Passthrough)
+- **Caster** (`BarrelToDraftsCaster`): per-page format conversion (NdJsonToBulk, Passthrough)
 - **Manifold** (`ManifoldBackend`): cast + assemble in one shot:
   - ES/File → `NdjsonManifold`: items joined with `\n`, trailing `\n`
   - InMemory → `JsonArrayManifold`: `[item,item,item]`, zero serde

@@ -24,7 +24,7 @@ use reqwest::RequestBuilder;
 use serde_json::Value;
 use tracing::{debug, warn};
 
-use crate::Draft;
+use crate::Barrel;
 use crate::backends::Source;
 use super::config::ElasticsearchSourceConfig;
 
@@ -56,13 +56,13 @@ impl Source for ElasticsearchSource {
     /// 📡 Returns the next raw page from Elasticsearch via PIT + search_after.
     ///
     // Lifecycle:
-    // 1st call: opens PIT, issues first _search, returns Draft
-    // Nth call: uses search_after cursor from last hit, returns Draft
+    // 1st call: opens PIT, issues first _search, returns Barrel
+    // Nth call: uses search_after cursor from last hit, returns Barrel
     // Final: hits.hits is empty, closes PIT, returns None (EOF)
     //
     // The raw _search response envelope is returned as-is — PitToBulk
     // downstream know how to extract hits from the `{"hits":{"hits":[...]}}` structure.
-    async fn pump(&mut self) -> Result<Option<Draft>> {
+    async fn pump(&mut self) -> Result<Option<Barrel>> {
         // -- 💀 "Are we there yet?" "We were there 3 calls ago." — backseat pagination
         if self.is_exhausted {
             return Ok(None);
@@ -79,7 +79,7 @@ impl Source for ElasticsearchSource {
 
         // 🔧 Build the _search request body
         let mut body = serde_json::json!({
-            "size": self.config.common_config.max_batch_size_docs,
+            "size": self.config.common_config.max_barrel_size_docs,
             "pit": {
                 "id": pit_id,
                 "keep_alive": "5m"
@@ -145,7 +145,7 @@ impl Source for ElasticsearchSource {
                     self.pit_id = Some(new_pit_id.to_string());
                 }
 
-                Ok(Some(Draft(response_body)))
+                Ok(Some(Barrel(response_body)))
             }
             _ => {
                 // 💤 No more hits — we've exhausted the index. Close the PIT and signal EOF.
@@ -422,7 +422,7 @@ mod tests {
         let source = test_source(test_config());
 
         let body = serde_json::json!({
-            "size": source.config.common_config.max_batch_size_docs,
+            "size": source.config.common_config.max_barrel_size_docs,
             "pit": {
                 "id": "test-pit-id",
                 "keep_alive": "5m"
@@ -430,7 +430,7 @@ mod tests {
             "sort": [{"_doc": "asc"}]
         });
 
-        assert_eq!(body["size"], source.config.common_config.max_batch_size_docs);
+        assert_eq!(body["size"], source.config.common_config.max_barrel_size_docs);
         assert_eq!(body["pit"]["keep_alive"], "5m");
         assert_eq!(body["sort"][0]["_doc"], "asc");
         assert!(body.get("search_after").is_none(), "🎯 First call should not have search_after");
@@ -443,7 +443,7 @@ mod tests {
         source.search_after = Some(vec![Value::Number(serde_json::Number::from(42))]);
 
         let mut body = serde_json::json!({
-            "size": source.config.common_config.max_batch_size_docs,
+            "size": source.config.common_config.max_barrel_size_docs,
             "pit": {
                 "id": "test-pit-id",
                 "keep_alive": "5m"

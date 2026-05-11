@@ -33,7 +33,7 @@
 //! 🔒 Like Fight Club, but for async tasks. First rule: you don't pub the workers.
 
 use crate::config::AppConfig;
-use crate::casts::DraftToEntriesCaster;
+use crate::casts::BarrelToDraftsCaster;
 use crate::manifolds::ManifoldBackend;
 use crate::progress::{DrainMetrics, spawn_progress_reporter};
 use crate::FlowKnob;
@@ -98,7 +98,7 @@ impl Foreman {
         &self,
         source_backend: crate::backends::SourceBackend,
         sink_backends: Vec<crate::backends::SinkBackend>,
-        caster: DraftToEntriesCaster,
+        caster: BarrelToDraftsCaster,
         manifold: ManifoldBackend,
         the_flow_knob: FlowKnob,
         the_governor_config: &GovernorConfig,

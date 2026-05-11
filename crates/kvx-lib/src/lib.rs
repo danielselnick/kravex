@@ -30,7 +30,7 @@ use crate::backends::{SinkBackend, SourceBackend};
 use crate::foreman::Foreman;
 use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
 use crate::manifolds::ManifoldBackend;
-use crate::casts::DraftToEntriesCaster;
+use crate::casts::BarrelToDraftsCaster;
 use crate::workers::GovernorConfig;
 use anyhow::{Context, Result};
 use std::ops::Deref;
@@ -63,10 +63,10 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     }
 
     // 🔄 Resolve the caster from source/sink config pair.
-    // 🧠 Knowledge graph: DraftToEntriesCaster::from_configs() matches (source, sink) → caster.
+    // 🧠 Knowledge graph: BarrelToDraftsCaster::from_configs() matches (source, sink) → caster.
     // File→ES = NdJsonToBulk, File→File = Passthrough, InMemory→InMemory = Passthrough, etc.
     let caster =
-        DraftToEntriesCaster::from_configs(&app_config.source_config, &app_config.sink_config);
+        BarrelToDraftsCaster::from_configs(&app_config.source_config, &app_config.sink_config);
 
     // 🎼 Resolve the manifold from sink config.
     // 🧠 ES/File → NdjsonManifold, InMemory → JsonArrayManifold.
@@ -74,23 +74,23 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
 
     // 📏 Extract max request size from sink config — the hard ceiling for payload size.
-    let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
+    let max_request_size_bytes = app_config.sink_config.max_payload_size_bytes();
 
     // 🔧 Create the FlowKnob — shared atomic valve between Governor and joiners.
     // 🧠 GovernorConfig determines the initial value:
     //   - Static: fixed at output_bytes, never changes (no Governor spawned)
     //   - Latency: starts at initial_output_bytes, PID adjusts based on drain latency
-    let the_initial_flow = match &app_config.governor {
+    let the_governator = match &app_config.governor {
         GovernorConfig::Static(cfg) => cfg.output_bytes,
         GovernorConfig::Latency(cfg) => cfg.initial_output_bytes,
         GovernorConfig::Throughput(cfg) => cfg.initial_output_bytes,
     };
-    let the_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(the_initial_flow));
+    let the_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(the_governator));
 
     info!(
         "🎛️ Governor mode: {} — initial flow: {} bytes",
         &app_config.governor,
-        the_initial_flow
+        the_governator
     );
 
     // 📏 Extract pipeline name and total_expected_bytes for progress reporting.
@@ -181,9 +181,9 @@ pub async fn stop() -> Result<()> {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Draft(pub String);
+pub struct Barrel(pub String);
 
-impl Deref for Draft {
+impl Deref for Barrel {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
@@ -191,9 +191,9 @@ impl Deref for Draft {
     }
 }
 
-impl From<String> for Draft {
+impl From<String> for Barrel {
     fn from(s: String) -> Self {
-        Draft(s)
+        Barrel(s)
     }
 }
 
@@ -222,8 +222,8 @@ impl PartialEq<&str> for Payload {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Entry(pub String);
-impl Deref for Entry {
+pub struct Draft(pub String);
+impl Deref for Draft {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
@@ -231,13 +231,13 @@ impl Deref for Entry {
     }
 }
 
-impl From<String> for Entry {
+impl From<String> for Draft {
     fn from(s: String) -> Self {
-        Entry(s)
+        Draft(s)
     }
 }
 
-impl PartialEq<&str> for Entry {
+impl PartialEq<&str> for Draft {
     fn eq(&self, other: &&str) -> bool {
         self.0 == *other
     }
@@ -289,7 +289,7 @@ mod tests {
         let sink = SinkBackend::InMemory(sink_inner.clone());
 
         // 🔄 InMemory→InMemory resolves to Passthrough caster
-        let caster = DraftToEntriesCaster::from_configs(
+        let caster = BarrelToDraftsCaster::from_configs(
             &app_config.source_config,
             &app_config.sink_config,
         );
@@ -298,7 +298,7 @@ mod tests {
         let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
 
         // 📏 Max request size from sink config
-        let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
+        let max_request_size_bytes = app_config.sink_config.max_payload_size_bytes();
 
         // 🔧 No regulator for tests — static flow knob at max 🎚️
         let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_request_size_bytes));
@@ -340,7 +340,7 @@ mod tests {
     /// This test exercises the full ES→ES migration path:
     /// - Source emits ES `_search` PIT response envelopes (2 pages, 3 hits total)
     /// - PitToBulk caster extracts hits → `_bulk` NDJSON action+source pairs
-    /// - NdjsonManifold joins entries with `\n`
+    /// - NdjsonManifold joins drafts with `\n`
     /// - InMemorySink captures the final `_bulk` payload for assertion
     ///
     /// 🧠 The trick: InMemorySource holds ES-format pages, but config enums say
@@ -381,12 +381,12 @@ mod tests {
             governor: Default::default(),
         };
 
-        // 📡 Draft 1: Two hits from the "movies" index — one with routing, because spicy data is best data
-        let the_first_pit_response = Draft(r#"{"hits":{"hits":[{"_index":"movies","_id":"neo_1","_source":{"title":"The Matrix","year":1999,"tagline":"Welcome to the real world"}},{"_index":"movies","_id":"inception_2","_routing":"scifi_shard","_source":{"title":"Inception","year":2010,"tagline":"Your mind is the scene of the crime"}}]}}"#.to_string());
+        // 📡 Barrel 1: Two hits from the "movies" index — one with routing, because spicy data is best data
+        let the_first_pit_response = Barrel(r#"{"hits":{"hits":[{"_index":"movies","_id":"neo_1","_source":{"title":"The Matrix","year":1999,"tagline":"Welcome to the real world"}},{"_index":"movies","_id":"inception_2","_routing":"scifi_shard","_source":{"title":"Inception","year":2010,"tagline":"Your mind is the scene of the crime"}}]}}"#.to_string());
 
-        // 📡 Draft 2: One hit from a DIFFERENT index — tests cross-index preservation through the pipeline
+        // 📡 Barrel 2: One hit from a DIFFERENT index — tests cross-index preservation through the pipeline
         // Because real migrations don't always stay in one index. Life is messy. Data is messier.
-        let the_second_pit_response = Draft(r#"{"hits":{"hits":[{"_index":"classics","_id":"casa_3","_source":{"title":"Casablanca","year":1942,"tagline":"Here is looking at you, kid"}}]}}"#.to_string());
+        let the_second_pit_response = Barrel(r#"{"hits":{"hits":[{"_index":"classics","_id":"casa_3","_source":{"title":"Casablanca","year":1942,"tagline":"Here is looking at you, kid"}}]}}"#.to_string());
 
         // 🏗️ Wire the actual backends — InMemory with ES-format pages
         let source = SourceBackend::InMemory(
@@ -396,7 +396,7 @@ mod tests {
         let sink = SinkBackend::InMemory(sink_inner.clone());
 
         // 🔄 ES→ES config resolution → PitToBulk caster (extracts hits from _search envelope)
-        let caster = DraftToEntriesCaster::from_configs(
+        let caster = BarrelToDraftsCaster::from_configs(
             &app_config.source_config,
             &app_config.sink_config,
         );
@@ -405,7 +405,7 @@ mod tests {
         let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
 
         // 📏 Max request size from sink config — with default 64MB, all 3 hits fit in one payload
-        let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
+        let max_request_size_bytes = app_config.sink_config.max_payload_size_bytes();
 
         // 🔧 Static flow knob — no regulator, full throttle, send it and pray 🙏
         let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_request_size_bytes));

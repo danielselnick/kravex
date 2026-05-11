@@ -11,7 +11,7 @@ use tokio::{
 };
 use tracing::trace;
 
-use crate::Draft;
+use crate::Barrel;
 use crate::backends::{CommonSourceConfig, Source};
 use super::config::FileSourceConfig;
 // 📏 128 KiB per OS read — the Goldilocks zone between "too many syscalls" and "too much RAM".
@@ -128,9 +128,9 @@ impl Source for FileSource {
     /// safe for any valid UTF-8 input. The final `String::from_utf8` validates the output.
     ///
     /// "He who reads the entire file into one String, OOMs in production." — Ancient proverb 📜
-    async fn pump(&mut self) -> Result<Option<Draft>> {
-        let max_docs = self.source_config.common_config.max_batch_size_docs;
-        let max_bytes = self.source_config.common_config.max_batch_size_bytes;
+    async fn pump(&mut self) -> Result<Option<Barrel>> {
+        let max_docs = self.source_config.common_config.max_barrel_size_docs;
+                let max_bytes = self.source_config.common_config.max_barrel_size_bytes;
 
         // 🧱 feed accumulator — raw bytes, converted to String at the end.
         // We work in bytes to avoid repeated UTF-8 validation on every append.
@@ -244,7 +244,7 @@ impl Source for FileSource {
                 Like trying to fit a square peg in a round hole, \
                 except the peg is binary garbage and the hole is Unicode.",
             )?;
-            Ok(Some(Draft(feed_string)))
+            Ok(Some(Barrel(feed_string)))
         }
     }
 }
@@ -280,8 +280,8 @@ mod tests {
         let config = FileSourceConfig {
             file_name: path,
             common_config: CommonSourceConfig {
-                max_batch_size_docs: max_docs,
-                max_batch_size_bytes: max_bytes,
+                max_barrel_size_docs: max_docs,
+                                max_barrel_size_bytes: max_bytes,
             },
         };
         let source = FileSource::new(config)
@@ -295,7 +295,7 @@ mod tests {
     /// 🔄 Drains every page from the source until EOF.
     /// Returns all non-None pages in order. Like squeezing a tube of toothpaste
     /// until nothing comes out. 🦷
-    async fn drain_all_pages(source: &mut FileSource) -> Result<Vec<Draft>> {
+    async fn drain_all_pages(source: &mut FileSource) -> Result<Vec<Barrel>> {
         // -- 🦆 this function exists because copy-pasting while loops is a code smell
         let mut pages = Vec::new();
         while let Some(page) = source.pump().await? {
@@ -313,7 +313,7 @@ mod tests {
         let page1 = source.pump().await?;
         assert_eq!(
             page1,
-            Some(Draft("line1\nline2\nline3".to_string())),
+            Some(Barrel("line1\nline2\nline3".to_string())),
             "💀 Expected all three lines in one feed, got something else. The vibes are off."
         );
 
@@ -400,7 +400,7 @@ mod tests {
         let page = source.pump().await?;
         assert_eq!(
             page,
-            Some(Draft("alpha\nbeta\ngamma".to_string())),
+            Some(Barrel("alpha\nbeta\ngamma".to_string())),
             "💀 Missing trailing newline should not eat the last doc. gamma deserves better."
         );
 
@@ -419,7 +419,7 @@ mod tests {
         let page = source.pump().await?;
         assert_eq!(
             page,
-            Some(Draft("hello\nworld".to_string())),
+            Some(Barrel("hello\nworld".to_string())),
             "💀 \\r\\n should be stripped to \\n. Windows line endings are not welcome here."
         );
         Ok(())
@@ -435,7 +435,7 @@ mod tests {
         let page = source.pump().await?;
         assert_eq!(
             page,
-            Some(Draft("a\nb\nc".to_string())),
+            Some(Barrel("a\nb\nc".to_string())),
             "💀 Empty lines should be ghosted. Only real docs make it to the feed."
         );
         Ok(())
@@ -468,7 +468,7 @@ mod tests {
         assert_eq!(
             doc_counts,
             vec![4, 4, 2],
-            "💀 Draft structure should be [4, 4, 2] with max_docs=4 and 10 docs."
+            "💀 Barrel structure should be [4, 4, 2] with max_docs=4 and 10 docs."
         );
         Ok(())
     }

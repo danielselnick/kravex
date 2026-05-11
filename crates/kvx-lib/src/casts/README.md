@@ -8,11 +8,11 @@ Feed format transformation layer. A Caster converts raw feeds from a Source into
 
 | Trait | Method | Returns | Purpose |
 |---|---|---|---|
-| `Caster` | `cast(page)` | `Result<Vec<Entry>>` | Transform one page into sink-ready entries |
+| `Caster` | `cast(page)` | `Result<Vec<Draft>>` | Transform one page into sink-ready drafts |
 
 ## Dispatcher Enum
 
-`DraftToEntriesCaster` — routes to concrete caster based on source/sink config combination.
+`BarrelToDraftsCaster` — routes to concrete caster based on source/sink config combination.
 
 ## Concrete Casters
 
@@ -34,7 +34,7 @@ Caster selection is determined by the **source x sink config** combination at st
 ## Knowledge Graph
 
 ```
-Caster trait → DraftToEntriesCaster enum → Passthrough | NdJsonToBulk | PitToBulk
-DraftToEntriesCaster → resolved by from_configs(SourceConfig, SinkConfig)
+Caster trait → BarrelToDraftsCaster enum → Passthrough | NdJsonToBulk | PitToBulk
+BarrelToDraftsCaster → resolved by from_configs(SourceConfig, SinkConfig)
 Caster → consumed by Manifold during join()
 ```

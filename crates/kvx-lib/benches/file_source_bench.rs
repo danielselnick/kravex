@@ -79,8 +79,8 @@ fn bench_buffered_chunk_reading(c: &mut Criterion) {
                     let config = FileSourceConfig {
                         file_name: path.clone(),
                         common_config: CommonSourceConfig {
-                            max_batch_size_docs: 10_000,
-                            max_batch_size_bytes: 10 * 1024 * 1024,
+                            max_barrel_size_docs: 10_000,
+                            max_barrel_size_bytes: 10 * 1024 * 1024,
                         },
                     };
                     let mut source = FileSource::new(config).await.unwrap();
@@ -111,8 +111,8 @@ fn bench_buffered_chunk_reading(c: &mut Criterion) {
                     let config = FileSourceConfig {
                         file_name: path.clone(),
                         common_config: CommonSourceConfig {
-                            max_batch_size_docs: 10_000,
-                            max_batch_size_bytes: 10 * 1024 * 1024,
+                            max_barrel_size_docs: 10_000,
+                            max_barrel_size_bytes: 10 * 1024 * 1024,
                         },
                     };
                     let mut source = FileSource::new(config).await.unwrap();

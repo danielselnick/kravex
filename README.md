@@ -114,7 +114,7 @@ Pumper (async) → ch1 → Joiner pool (std::thread) → ch2 → Drainer pool (a
 | **Source** | Faucet | Produces raw data one page at a time. Maximally ignorant of format — just emits bytes. |
 | **Pumper** | The handle you turn | Async tokio worker. Calls `source.pump()` in a loop, feeds raw pages into ch1 until EOF. |
 | **Caster** | Pipe fitting | Stateless transformer. Takes a raw page and casts it into the format the sink expects (e.g., PIT response → bulk NDJSON). |
-| **Manifold** | Collector pipe | Orchestrates cast-and-join. Buffers individual entries from the Caster and assembles them into wire-format payloads sized to the current flow rate. |
+| **Manifold** | Collector pipe | Orchestrates cast-and-join. Buffers individual drafts from the Caster and assembles them into wire-format payloads sized to the current flow rate. |
 | **Joiner** | The junction | CPU-bound `std::thread` worker. Sits between Pumper and Drainer. Receives raw pages from ch1, casts via Caster, buffers via Manifold, flushes assembled payloads to ch2. |
 | **Drainer** | The drain | Async tokio worker. Receives assembled payloads from ch2 and writes them to the Sink with retry logic and exponential backoff. |
 | **Sink** | Drain pipe | Pure I/O, zero logic. Accepts a fully rendered payload and sends it. Does not buffer, does not transform. |
@@ -128,7 +128,7 @@ Pumper (async) → ch1 → Joiner pool (std::thread) → ch2 → Drainer pool (a
 
 | Channel | Carries | From → To |
 |---------|---------|-----------|
-| **ch1** | Raw pages (`Draft`) | Pumper → Joiner pool |
+| **ch1** | Raw pages (`Barrel`) | Pumper → Joiner pool |
 | **ch2** | Assembled payloads (`Payload`) | Joiner pool → Drainer pool |
 | **ch3** | Latency/error readings (`GaugeReading`) | Drainers → Governor |
 
@@ -166,8 +166,8 @@ kravex/
 │   ├── kvx/          # Core library
 │   │   └── src/
 │   │       ├── backends/       # Source + Sink implementations (ES, File, InMemory)
-│   │       ├── casts/          # Draft-to-Entry transformers
-│   │       ├── manifolds/      # Entry-to-Payload assemblers
+│   │       ├── casts/          # Barrel-to-Draft transformers
+│   │       ├── manifolds/      # Draft-to-Payload assemblers
 │   │       ├── regulators/     # Adaptive throttle controllers (hill-climbing, PID, static)
 │   │       ├── workers/        # Pumper, Joiner, Drainer, Governor
 │   │       └── foreman.rs      # Pipeline orchestrator

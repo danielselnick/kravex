@@ -6,12 +6,12 @@ In-memory Source and Sink implementations for testing.
 
 ## Source
 
-Vec-backed source that yields pre-loaded pages via a `VecDeque<Draft>`. Pages are popped front on each `pump()` call (FIFO). When the queue is empty, returns `None`.
+Vec-backed source that yields pre-loaded pages via a `VecDeque<Barrel>`. Pages are popped front on each `pump()` call (FIFO). When the queue is empty, returns `None`.
 
 ### Constructors
 
 - **`new()`** — Async. Loads the classic 4-doc sacred corpus (`{"doc":1}` through `{"doc":4}`) as a single newline-delimited page. Backward-compatible default.
-- **`with_pages(pages: Vec<Draft>)`** — Sync. Accepts arbitrary page data for injection into the pipeline. Enables integration tests that exercise specific caster paths (e.g., ES PIT responses for PitToBulk, NDJSON feeds for NdJsonToBulk) without needing real backends.
+- **`with_pages(pages: Vec<Barrel>)`** — Sync. Accepts arbitrary page data for injection into the pipeline. Enables integration tests that exercise specific caster paths (e.g., ES PIT responses for PitToBulk, NDJSON feeds for NdJsonToBulk) without needing real backends.
 
 ## Sink
 

@@ -18,7 +18,7 @@
 //! 🦆 The duck asked why we don't use serde. We said "trust the process." It nodded.
 
 use super::Manifold;
-use crate::{Entry, Payload};
+use crate::{Draft, Payload};
 use anyhow::Result;
 use std::collections::VecDeque;
 
@@ -43,20 +43,21 @@ pub struct JsonArrayManifold;
 
 impl Manifold for JsonArrayManifold {
     #[inline]
-    fn join(&self, entries: &mut VecDeque<Entry>) -> Result<Payload> {
-        // -- 🧮 Pre-allocate: brackets(2) + sum of entries + commas(max n-1).
+    fn join(&self, drafts: &mut VecDeque<Draft>) -> Result<Payload> {
+        // -- 🧮 Pre-allocate: brackets(2) + sum of drafts + commas(max n-1).
         // -- This is exact capacity — no growth, no realloc, no drama.
         // -- No cap this capacity math slaps fr fr 🎯
-        let commas = entries.len().saturating_sub(1);
-        let estimated_size: usize = 2 + entries.iter().map(|e| e.len()).sum::<usize>() + commas;
+        let commas = drafts.len().saturating_sub(1);
+        let estimated_size: usize =
+            2 + drafts.iter().map(|e| e.len()).sum::<usize>() + commas;
         let mut payload = String::with_capacity(estimated_size);
         payload.push('[');
-        for (i, entry) in entries.drain(..).enumerate() {
+        for (i, draft) in drafts.drain(..).enumerate() {
             if i > 0 {
                 // -- 🔗 The comma: JSON's way of saying "and there's more where that came from."
                 payload.push(',');
             }
-            payload.push_str(&entry);
+            payload.push_str(&draft);
         }
         payload.push(']');
         // -- ✅ Valid JSON array. No serde was harmed in the making of this string.
@@ -69,39 +70,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn json_array_the_one_where_entries_become_an_array() -> Result<()> {
-        // 🧪 Three entries → [entry1,entry2,entry3]
+    fn json_array_the_one_where_drafts_become_an_array() -> Result<()> {
+        // 🧪 Three drafts → [draft1,draft2,draft3]
         let manifold = JsonArrayManifold;
-        let mut entries = VecDeque::from(vec![
-            Entry(r#"{"doc":1}"#.to_string()),
-            Entry(r#"{"doc":2}"#.to_string()),
-            Entry(r#"{"doc":3}"#.to_string()),
+        let mut drafts = VecDeque::from(vec![
+            Draft(r#"{"doc":1}"#.to_string()),
+            Draft(r#"{"doc":2}"#.to_string()),
+            Draft(r#"{"doc":3}"#.to_string()),
         ]);
-        let result = manifold.join(&mut entries)?;
+        let result = manifold.join(&mut drafts)?;
         assert_eq!(*result, r#"[{"doc":1},{"doc":2},{"doc":3}]"#);
-        assert!(
-            entries.is_empty(),
-            "🎯 drain(..) should leave the VecDeque empty but allocated"
-        );
+        assert!(drafts.is_empty(), "🎯 drain(..) should leave the VecDeque empty but allocated");
         Ok(())
     }
 
     #[test]
-    fn json_array_the_one_where_empty_entries_is_empty_array() -> Result<()> {
-        // 🧪 No entries → []. Still valid JSON. Still technically correct. The best kind of correct.
+    fn json_array_the_one_where_empty_drafts_is_empty_array() -> Result<()> {
+        // 🧪 No drafts → []. Still valid JSON. Still technically correct. The best kind of correct.
         let manifold = JsonArrayManifold;
-        let mut entries = VecDeque::new();
-        let result = manifold.join(&mut entries)?;
+        let mut drafts = VecDeque::new();
+        let result = manifold.join(&mut drafts)?;
         assert_eq!(*result, "[]");
         Ok(())
     }
 
     #[test]
-    fn json_array_the_one_where_single_entry_has_no_commas() -> Result<()> {
-        // 🧪 One entry, no commas. Like a party with one guest. Awkward but valid.
+    fn json_array_the_one_where_single_draft_has_no_commas() -> Result<()> {
+        // 🧪 One draft, no commas. Like a party with one guest. Awkward but valid.
         let manifold = JsonArrayManifold;
-        let mut entries = VecDeque::from(vec![Entry(r#"{"lonely":true}"#.to_string())]);
-        let result = manifold.join(&mut entries)?;
+        let mut drafts = VecDeque::from(vec![Draft(r#"{"lonely":true}"#.to_string())]);
+        let result = manifold.join(&mut drafts)?;
         assert_eq!(*result, r#"[{"lonely":true}]"#);
         Ok(())
     }

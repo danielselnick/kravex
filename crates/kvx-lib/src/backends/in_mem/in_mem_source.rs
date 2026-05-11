@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::Draft;
+use crate::Barrel;
 use crate::backends::Source;
 
 /// 📦 The world's most versatile test data source — feed-aware and configurable! 📄🚀
@@ -23,7 +23,7 @@ use crate::backends::Source;
 ///
 /// 🎯 Designed entirely for testing. Not for feelings. Feelings are unindexed.
 ///
-/// 🧠 Knowledge graph: Source returns `Option<Draft>` (raw feed), not `Vec<String>` (parsed docs).
+/// 🧠 Knowledge graph: Source returns `Option<Barrel>` (raw feed), not `Vec<String>` (parsed docs).
 /// The Manifold downstream handles splitting + casting via the Caster.
 /// `with_pages()` enables injection of arbitrary format data (ES PIT responses, etc.)
 /// for integration tests that exercise specific caster paths (PitToBulk, NdJsonToBulk). 🦆
@@ -31,7 +31,7 @@ use crate::backends::Source;
 pub struct InMemorySource {
     // 📬 The mailbox — pages waiting to be delivered, one per pump() call.
     // VecDeque because pop_front() is O(1) and we're not savages.
-    pages: VecDeque<Draft>,
+    pages: VecDeque<Barrel>,
 }
 
 impl InMemorySource {
@@ -53,7 +53,7 @@ impl InMemorySource {
         .join("\n");
 
         Ok(Self {
-            pages: VecDeque::from(vec![Draft(the_sacred_page)]),
+            pages: VecDeque::from(vec![Barrel(the_sacred_page)]),
         })
     }
 
@@ -66,7 +66,7 @@ impl InMemorySource {
     /// 🧠 Knowledge graph: enables integration tests that exercise specific caster paths
     /// (PitToBulk for ES→ES, NdJsonToBulk for File→ES) without needing real backends.
     /// The test controls the input format; the pipeline resolves the caster from config enums.
-    pub fn with_pages(pages: Vec<Draft>) -> Self {
+    pub fn with_pages(pages: Vec<Barrel>) -> Self {
         Self {
             pages: VecDeque::from(pages),
         }
@@ -83,7 +83,7 @@ impl Source for InMemorySource {
     /// 🧠 Knowledge graph: pages are popped front (FIFO order preserved).
     /// The Manifold+Caster downstream will split and process them.
     /// Source is ignorant. Source is bliss. Source is a faucet. 🚰
-    async fn pump(&mut self) -> Result<Option<Draft>> {
+    async fn pump(&mut self) -> Result<Option<Barrel>> {
         // 🎰 Pop front — O(1), preserves insertion order, returns None when empty.
         // No booleans. No state machines. Just a queue doing queue things.
         Ok(self.pages.pop_front())

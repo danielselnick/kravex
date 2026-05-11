@@ -19,10 +19,10 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use kvx_lib::casts::passthrough::Passthrough;
-use kvx_lib::casts::DraftToEntriesCaster;
+use kvx_lib::casts::BarrelToDraftsCaster;
 use kvx_lib::manifolds::ManifoldBackend;
 use kvx_lib::workers::Joiner;
-use kvx_lib::{Draft, Payload};
+use kvx_lib::{Barrel, Payload};
 use std::hint::black_box;
 
 // -- 📏 Doc counts to sweep — enough range to see if throughput scales linearly
@@ -85,13 +85,13 @@ fn joiner_throughput_bytes(c: &mut Criterion) {
                 |b, &_n| {
                     b.iter(|| {
                         // -- 🧵 Fresh channels + joiner per iteration — no stale state leaking between runs
-                        let (tx1, rx1) = async_channel::bounded::<Draft>(CHANNEL_CAPACITY);
+                        let (tx1, rx1) = async_channel::bounded::<Barrel>(CHANNEL_CAPACITY);
                         let (tx2, rx2) = async_channel::bounded::<Payload>(CHANNEL_CAPACITY);
 
                         let joiner = Joiner::new(
                             rx1,
                             tx2,
-                            DraftToEntriesCaster::Passthrough(Passthrough),
+                            BarrelToDraftsCaster::Passthrough(Passthrough),
                             manifold.clone(),
                             std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(MAX_REQUEST_SIZE_BYTES)),
                         );
@@ -103,7 +103,7 @@ fn joiner_throughput_bytes(c: &mut Criterion) {
                         let feeds_clone = feeds.clone();
                         let sender_handle = std::thread::spawn(move || {
                             for feed in feeds_clone {
-                                tx1.send_blocking(Draft(feed)).unwrap();
+                                tx1.send_blocking(Barrel(feed)).unwrap();
                             }
                             // -- 🏁 Close ch1 — triggers joiner's final flush
                             drop(tx1);
@@ -147,24 +147,25 @@ fn joiner_throughput_docs(c: &mut Criterion) {
                 |b, &_n| {
                     b.iter(|| {
                         // -- 🧵 Fresh channels + joiner per iteration
-                        let (tx1, rx1) = async_channel::bounded::<Draft>(CHANNEL_CAPACITY);
+                        let (tx1, rx1) = async_channel::bounded::<Barrel>(CHANNEL_CAPACITY);
                         let (tx2, rx2) = async_channel::bounded::<Payload>(CHANNEL_CAPACITY);
 
                         let joiner = Joiner::new(
                             rx1,
                             tx2,
-                            DraftToEntriesCaster::Passthrough(Passthrough),
+                            BarrelToDraftsCaster::Passthrough(Passthrough),
                             manifold.clone(),
                             std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(MAX_REQUEST_SIZE_BYTES)),
                         );
 
+                        // -- 🚀 Launch the joiner thread — it blocks on recv_blocking until feeds arrive
                         let the_joiner_handle = joiner.start();
 
                         // -- 📤 Sender thread: feed the beast
                         let feeds_clone = feeds.clone();
                         let sender_handle = std::thread::spawn(move || {
                             for feed in feeds_clone {
-                                tx1.send_blocking(Draft(feed)).unwrap();
+                                tx1.send_blocking(Barrel(feed)).unwrap();
                             }
                             drop(tx1);
                         });

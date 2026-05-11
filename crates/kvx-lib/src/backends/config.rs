@@ -50,23 +50,23 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize, Clone)]
 pub struct CommonSourceConfig {
     /// 📦 Max docs per batch feed — the doc-count speed limiter
-    #[serde(default = "default_max_batch_size_docs")]
-    pub max_batch_size_docs: usize,
+    #[serde(default = "default_max_barrel_size_docs")]
+    pub max_barrel_size_docs: usize,
     /// 📦 Max bytes per batch feed — the byte-size speed limiter
-    #[serde(default = "default_max_batch_size_bytes")]
-    pub max_batch_size_bytes: usize,
+    #[serde(default = "default_max_barrel_size_bytes" )]
+    pub max_barrel_size_bytes: usize,
 }
 
 // 📦 10,000 docs per batch — a nice round number that will age like milk
 // the moment someone indexes a 50MB PDF and wonders why things are slow.
-fn default_max_batch_size_docs() -> usize {
+fn default_max_barrel_size_docs() -> usize {
     10000
 }
 
 // 📦 10MB — chosen because 10 is a great number and MB is a great unit.
 // This is load-tested in the same way I've "tested" my microwave: empirically, at 3am, with regret.
 // 10 * 1024 * 1024 = 10485760. Yes I know. Yes the comment on the line is doing the math. You're welcome.
-fn default_max_batch_size_bytes() -> usize {
+fn default_max_barrel_size_bytes() -> usize {
     10485760
 } // -- 10MB — if your documents are bigger, we need to talk
 
@@ -75,8 +75,8 @@ impl Default for CommonSourceConfig {
         Self {
             // 🎯 1000 docs / 1MB per batch — sensible defaults chosen by someone who definitely
             // did NOT just pick round numbers and call it "empirically validated"
-            max_batch_size_docs: 1000,
-            max_batch_size_bytes: 1024 * 1024,
+            max_barrel_size_docs: 1000,
+            max_barrel_size_bytes: 1024 * 1024,
         }
     }
 }
@@ -104,13 +104,13 @@ impl Default for CommonSourceConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct CommonSinkConfig {
     /// 🚰 Max payload bytes per sink request — the flush trigger
-    #[serde(default = "default_max_request_size_bytes")]
-    pub max_request_size_bytes: usize,
+    #[serde(default = "default_max_payload_size_bytes", alias = "max_request_size_bytes")]
+    pub max_payload_size_bytes: usize,
 }
 
 // 🚰 10MB sink request size — the same limit as your email attachment policy,
 // your Slack upload quota, and your therapist's patience. Coincidence? Absolutely yes.
-fn default_max_request_size_bytes() -> usize {
+fn default_max_payload_size_bytes() -> usize {
     10485760
 } // -- 10MB — Elasticsearch's feelings
 
@@ -119,7 +119,7 @@ impl Default for CommonSinkConfig {
         CommonSinkConfig {
             // 🚰 64MB default request size because we dream big
             // (and because the Elasticsearch docs said "up to 100MB" and we wanted buffer)
-            max_request_size_bytes: 64 * 1024 * 1024,
+            max_payload_size_bytes: 64 * 1024 * 1024,
         }
     }
 }
@@ -175,12 +175,12 @@ impl SinkConfig {
     /// 🧠 Knowledge graph: Drainer uses this to know when to flush its feed buffer.
     /// The buffer accumulates raw feeds until their total byte size approaches this limit,
     /// then the Manifold casts+joins them into a single payload for the sink.
-    pub fn max_request_size_bytes(&self) -> usize {
+    pub fn max_payload_size_bytes(&self) -> usize {
         match self {
-            SinkConfig::Elasticsearch(es) => es.common_config.max_request_size_bytes,
-            SinkConfig::File(f) => f.common_config.max_request_size_bytes,
+            SinkConfig::Elasticsearch(es) => es.common_config.max_payload_size_bytes,
+            SinkConfig::File(f) => f.common_config.max_payload_size_bytes,
             // 🧠 InMemory gets the default — it's testing, we don't limit 🦆
-            SinkConfig::InMemory(_) => CommonSinkConfig::default().max_request_size_bytes,
+            SinkConfig::InMemory(_) => CommonSinkConfig::default().max_payload_size_bytes,
         }
     }
 }

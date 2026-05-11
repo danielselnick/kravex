@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(app_config.runtime.sink_parallelism, 3);
         match app_config.sink_config {
             SinkConfig::File(file_config) => {
-                assert_eq!(file_config.common_config.max_request_size_bytes, 123456);
+                assert_eq!(file_config.common_config.max_payload_size_bytes, 123456);
             }
             honestly_who_knows => panic!(
                 "💀 Expected File sink config in the test, but serde took us to {:?}. Plot twist energy.",

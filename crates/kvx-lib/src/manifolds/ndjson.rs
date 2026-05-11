@@ -16,7 +16,7 @@
 //! 🦆 The duck asked what NDJSON stands for. We told it. It left anyway.
 
 use super::Manifold;
-use crate::{Entry, Payload};
+use crate::{Draft, Payload};
 use anyhow::Result;
 use std::collections::VecDeque;
 
@@ -41,17 +41,17 @@ pub struct NdjsonManifold;
 
 impl Manifold for NdjsonManifold {
     #[inline]
-    fn join(&self, entries: &mut VecDeque<Entry>) -> Result<Payload> {
-        // -- 🧮 Pre-allocate based on total entry bytes — a vibes-based estimate that's usually close
-        // -- Knowledge graph: +1 per entry for the \n separator, because math is caring
-        let estimated_size: usize = entries.iter().map(|e| e.len() + 1).sum();
+    fn join(&self, drafts: &mut VecDeque<Draft>) -> Result<Payload> {
+        // -- 🧮 Pre-allocate based on total draft bytes — a vibes-based estimate that's usually close
+        // -- Knowledge graph: +1 per draft for the \n separator, because math is caring
+        let estimated_size: usize = drafts.iter().map(|e| e.len() + 1).sum();
         let mut payload = String::with_capacity(estimated_size);
 
-        for entry in entries.drain(..) {
-            // -- 🔄 Each entry is already cast — just stitch them together with newlines
+        for draft in drafts.drain(..) {
+            // -- 🔄 Each draft is already cast — just stitch them together with newlines
             // -- Like a quilt, but made of JSON, and nobody finds it cozy
-            payload.push_str(&entry);
-            // We expect each entry to have \n if it's being casted to bulk
+            payload.push_str(&draft);
+            // We expect each draft to have \n if it's being casted to bulk
             // payload.push('\n');
         }
 
@@ -66,38 +66,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ndjson_the_one_where_single_entry_joins_to_ndjson() -> Result<()> {
-        // 🧪 One entry with its own trailing \n → concatenated as-is
+    fn ndjson_the_one_where_single_draft_joins_to_ndjson() -> Result<()> {
+        // 🧪 One draft with its own trailing \n → concatenated as-is
         let manifold = NdjsonManifold;
-        let mut entries = VecDeque::from(vec![Entry("{\"doc\":1}\n".to_string())]);
-        let result = manifold.join(&mut entries)?;
+        let mut drafts = VecDeque::from(vec![Draft("{\"doc\":1}\n".to_string())]);
+        let result = manifold.join(&mut drafts)?;
         assert_eq!(*result, "{\"doc\":1}\n");
-        assert!(
-            entries.is_empty(),
-            "🎯 drain(..) should leave the VecDeque empty but allocated"
-        );
+        assert!(drafts.is_empty(), "🎯 drain(..) should leave the VecDeque empty but allocated");
         Ok(())
     }
 
     #[test]
-    fn ndjson_the_one_where_multiple_entries_join() -> Result<()> {
-        // 🧪 Two entries already carrying their \n — concatenated in order
+    fn ndjson_the_one_where_multiple_drafts_join() -> Result<()> {
+        // 🧪 Two drafts already carrying their \n — concatenated in order
         let manifold = NdjsonManifold;
-        let mut entries = VecDeque::from(vec![
-            Entry("{\"doc\":1}\n".to_string()),
-            Entry("{\"doc\":2}\n".to_string()),
+        let mut drafts = VecDeque::from(vec![
+            Draft("{\"doc\":1}\n".to_string()),
+            Draft("{\"doc\":2}\n".to_string()),
         ]);
-        let result = manifold.join(&mut entries)?;
+        let result = manifold.join(&mut drafts)?;
         assert_eq!(*result, "{\"doc\":1}\n{\"doc\":2}\n");
         Ok(())
     }
 
     #[test]
-    fn ndjson_the_one_where_empty_entries_produces_nothing() -> Result<()> {
-        // 🧪 No entries, no payload. The void stares back. It is empty. 🦆
+    fn ndjson_the_one_where_empty_drafts_produce_nothing() -> Result<()> {
+        // 🧪 No drafts, no payload. The void stares back. It is empty. 🦆
         let manifold = NdjsonManifold;
-        let mut entries = VecDeque::new();
-        let result = manifold.join(&mut entries)?;
+        let mut drafts = VecDeque::new();
+        let result = manifold.join(&mut drafts)?;
         assert!(result.is_empty(), "Empty input → empty output. Zen.");
         Ok(())
     }

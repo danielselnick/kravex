@@ -5,10 +5,10 @@
 // ai
 // 🧠 The lines of NDJSON are raw json docs — they have no bulk action metadata.
 // 📡 This caster adds the ES bulk index action line before each doc.
-use crate::Entry;
-use crate::Draft;
-use crate::casts::Caster;
 use anyhow::Result;
+use crate::Draft;
+use crate::Barrel;
+use crate::casts::Caster;
 const THE_BULK_ACTION_LINE: &str = "{\"index\":{}}";
 
 /// 📡 Casts raw NDJSON docs into ES bulk format (action line + source doc).
@@ -18,7 +18,7 @@ pub struct NdJsonToBulk {}
 
 impl Caster for NdJsonToBulk {
     #[inline]
-    fn cast(&self, page: Draft) -> Result<Vec<Entry>> {
+    fn cast(&self, page: Barrel) -> Result<Vec<Draft>> {
         // 📄 Split feed by newlines, cast each non-empty line into bulk format.
         // 🧠 Each line becomes: action_line\n{json_document}
         // -- "He who casts without an action line, gets a 400 from Elasticsearch." 💀
@@ -26,9 +26,9 @@ impl Caster for NdJsonToBulk {
         let mut result = Vec::new();
         for line in page.split('\n') {
             if !line.is_empty() {
-                let entry = Entry(format!("{}\n{}\n", THE_BULK_ACTION_LINE, line));
-                // Note that caster only returns a single valid entry
-                result.push(entry);
+                let draft = Draft(format!("{}\n{}\n", THE_BULK_ACTION_LINE, line));
+                // Note that caster only returns a single valid draft
+                result.push(draft);
             }
         }
         Ok(result)
@@ -42,9 +42,9 @@ mod tests {
     // -- 🧪 The test suite that finally validates the bulk body format.
     // -- The singularity will happen before we get 100% coverage, but we try anyway. 🦆
 
-    /// 🔧 Reassembles Vec<Entry> into a single bulk body string for line-based assertions.
-    fn entries_to_bulk_body(entries: &[Entry]) -> String {
-        entries.iter().map(|e| e.0.as_str()).collect()
+    /// 🔧 Reassembles Vec<Draft> into a single bulk body string for line-based assertions.
+    fn drafts_to_bulk_body(drafts: &[Draft]) -> String {
+        drafts.iter().map(|e| e.0.as_str()).collect()
     }
 
     /// 🧪 One doc in, one action+doc pair out. The simplest heist in town.
@@ -55,8 +55,8 @@ mod tests {
         let the_lone_doc = r#"{"ObjectID":42,"Name":"The answer to everything"}"#;
 
         // 🚀 Act — cast it into the bulk dimension
-        let entries = caster.cast(Draft(the_lone_doc.to_string()))?;
-        let the_bulk_body = entries_to_bulk_body(&entries);
+        let drafts = caster.cast(Barrel(the_lone_doc.to_string()))?;
+        let the_bulk_body = drafts_to_bulk_body(&drafts);
 
         // 🎯 Assert — must be exactly: action_line\ndoc\n
         let expected = format!("{}\n{}\n", THE_BULK_ACTION_LINE, the_lone_doc);
@@ -67,10 +67,7 @@ mod tests {
 
         // ✅ Verify line count: action line + doc line = 2 lines
         let line_count = the_bulk_body.lines().count();
-        assert_eq!(
-            line_count, 2,
-            "💀 Expected 2 lines (action + doc), got {line_count}"
-        );
+        assert_eq!(line_count, 2, "💀 Expected 2 lines (action + doc), got {line_count}");
 
         Ok(())
     }
@@ -85,25 +82,19 @@ mod tests {
         let doc_c = r#"{"id":3,"name":"Charlie"}"#;
         let the_ndjson_feed = format!("{doc_a}\n{doc_b}\n{doc_c}");
 
-        let entries = caster.cast(Draft(the_ndjson_feed))?;
-        let the_bulk_body = entries_to_bulk_body(&entries);
+        let drafts = caster.cast(Barrel(the_ndjson_feed))?;
+        let the_bulk_body = drafts_to_bulk_body(&drafts);
 
         // 🎯 Should produce 3 action+doc pairs = 6 lines
         let lines: Vec<&str> = the_bulk_body.lines().collect();
-        assert_eq!(
-            lines.len(),
-            6,
-            "💀 Expected 6 lines for 3 docs, got {}",
-            lines.len()
-        );
+        assert_eq!(lines.len(), 6, "💀 Expected 6 lines for 3 docs, got {}", lines.len());
 
         // ✅ Verify the interleaving pattern: action, doc, action, doc, action, doc
         let the_action_line = r#"{"index":{}}"#;
         for i in (0..lines.len()).step_by(2) {
             assert_eq!(
                 lines[i], the_action_line,
-                "💀 Line {i} should be the action line, got: {}",
-                lines[i]
+                "💀 Line {i} should be the action line, got: {}", lines[i]
             );
         }
         assert_eq!(lines[1], doc_a, "💀 Line 1 should be doc_a");
@@ -119,13 +110,12 @@ mod tests {
         let caster = NdJsonToBulk {};
         let the_void = "";
 
-        let entries = caster.cast(Draft(the_void.to_string()))?;
+        let drafts = caster.cast(Barrel(the_void.to_string()))?;
 
         // 🎯 Empty in, empty out — no phantom action lines
         assert!(
-            entries.is_empty(),
-            "💀 Empty input should produce empty output, but got {} entries",
-            entries.len()
+            drafts.is_empty(),
+            "💀 Empty input should produce empty output, but got {} drafts", drafts.len()
         );
 
         Ok(())
@@ -139,16 +129,14 @@ mod tests {
         // 📄 Note the trailing \n — split will produce an empty last element
         let the_feed_with_trailing_newline = format!("{doc}\n");
 
-        let entries = caster.cast(Draft(the_feed_with_trailing_newline))?;
-        let the_bulk_body = entries_to_bulk_body(&entries);
+        let drafts = caster.cast(Barrel(the_feed_with_trailing_newline))?;
+        let the_bulk_body = drafts_to_bulk_body(&drafts);
 
         // 🎯 Should still be exactly 1 action+doc pair, no ghost at the end
         let lines: Vec<&str> = the_bulk_body.lines().collect();
         assert_eq!(
-            lines.len(),
-            2,
-            "💀 Trailing newline created ghost lines. Expected 2, got {}",
-            lines.len()
+            lines.len(), 2,
+            "💀 Trailing newline created ghost lines. Expected 2, got {}", lines.len()
         );
 
         Ok(())
@@ -163,16 +151,14 @@ mod tests {
         // 📄 Feed with empty lines everywhere — chaos mode
         let the_chaotic_feed = format!("\n\n{doc_a}\n\n\n{doc_b}\n\n");
 
-        let entries = caster.cast(Draft(the_chaotic_feed))?;
-        let the_bulk_body = entries_to_bulk_body(&entries);
+        let drafts = caster.cast(Barrel(the_chaotic_feed))?;
+        let the_bulk_body = drafts_to_bulk_body(&drafts);
 
         // 🎯 Only 2 real docs = 4 lines total (2 action + 2 doc)
         let lines: Vec<&str> = the_bulk_body.lines().collect();
         assert_eq!(
-            lines.len(),
-            4,
-            "💀 Blank lines leaked through! Expected 4 lines, got {}",
-            lines.len()
+            lines.len(), 4,
+            "💀 Blank lines leaked through! Expected 4 lines, got {}", lines.len()
         );
 
         Ok(())
@@ -190,8 +176,8 @@ mod tests {
         ];
         let the_feed = docs.join("\n");
 
-        let entries = caster.cast(Draft(the_feed))?;
-        let the_bulk_body = entries_to_bulk_body(&entries);
+        let drafts = caster.cast(Barrel(the_feed))?;
+        let the_bulk_body = drafts_to_bulk_body(&drafts);
 
         // 🎯 Parse every line as JSON — both action lines and doc lines must be valid
         let lines: Vec<&str> = the_bulk_body.lines().collect();

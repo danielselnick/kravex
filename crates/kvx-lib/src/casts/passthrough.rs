@@ -24,8 +24,8 @@
 
 use anyhow::Result;
 use crate::casts::Caster;
-use crate::Entry;
 use crate::Draft;
+use crate::Barrel;
 
 /// 🚶 Passthrough — returns the entire feed unchanged. Zero alloc. Zero copy. Zero drama.
 ///
@@ -44,10 +44,10 @@ impl Caster for Passthrough {
     /// Returns the entire feed unchanged — no allocation, no parse, no copy.
     /// "What do you do?" "I return the input." "That's it?" "That's everything." 🐄
     #[inline]
-    fn cast(&self, page: Draft) -> Result<Vec<Entry>> {
+    fn cast(&self, page: Barrel) -> Result<Vec<Draft>> {
         // -- 🚶 TSA PreCheck for data. Walk right through. Don't even slow down.
-        let entry = Entry(page.0);
-        Ok(vec![entry])
+        let draft = Draft(page.0);
+        Ok(vec![draft])
     }
 }
 
@@ -59,8 +59,8 @@ mod tests {
     fn the_one_where_passthrough_is_the_identity_function() -> Result<()> {
         // 🧪 f(x) = x. If this fails, mathematics is broken. And so is String.
         let the_input = r#"{"untouched":"perfection"}"#.to_string();
-        let the_output = Passthrough.cast(Draft(the_input.clone()))?;
-        assert_eq!(the_output.len(), 1, "🎯 Passthrough produces exactly one entry");
+        let the_output = Passthrough.cast(Barrel(the_input.clone()))?;
+        assert_eq!(the_output.len(), 1, "🎯 Passthrough produces exactly one draft");
         assert_eq!(*the_output[0], the_input, "Passthrough must return feed unchanged! 🚶");
         Ok(())
     }
@@ -68,9 +68,9 @@ mod tests {
     #[test]
     fn the_one_where_empty_string_passes_through() -> Result<()> {
         // 🧪 Nothing in, nothing out. The void is consistent. 🧘
-        let the_output = Passthrough.cast(Draft(String::new()))?;
-        assert_eq!(the_output.len(), 1, "🎯 Even emptiness deserves an entry");
-        assert_eq!(*the_output[0], "", "Empty feed → empty entry. Zen. 🧘");
+        let the_output = Passthrough.cast(Barrel(String::new()))?;
+        assert_eq!(the_output.len(), 1, "🎯 Even emptiness deserves a draft");
+        assert_eq!(*the_output[0], "", "Empty feed → empty draft. Zen. 🧘");
         Ok(())
     }
 
@@ -78,7 +78,7 @@ mod tests {
     fn the_one_where_non_json_also_passes_because_we_dont_validate() -> Result<()> {
         // 🧪 Passthrough doesn't parse. Doesn't validate. Doesn't care.
         let not_json = "this is not json and that's fine".to_string();
-        let the_output = Passthrough.cast(Draft(not_json.clone()))?;
+        let the_output = Passthrough.cast(Barrel(not_json.clone()))?;
         assert_eq!(*the_output[0], not_json, "Non-JSON still passes through! 🎉");
         Ok(())
     }
@@ -87,7 +87,7 @@ mod tests {
     fn the_one_where_multi_line_feed_stays_intact() -> Result<()> {
         // 🧪 Passthrough treats the whole feed as one blob — it's the Manifold's job to join
         let multi_line = "line1\nline2\nline3".to_string();
-        let the_output = Passthrough.cast(Draft(multi_line.clone()))?;
+        let the_output = Passthrough.cast(Barrel(multi_line.clone()))?;
         assert_eq!(*the_output[0], multi_line, "Passthrough doesn't split — one feed, one output 🎯");
         Ok(())
     }

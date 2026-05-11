@@ -10,7 +10,7 @@
 //! 🎭 **ManifoldBackend** — polymorphic dispatcher resolved from `SinkConfig`.
 //!
 //! 🧠 Knowledge graph:
-//! - Same pattern as `DraftToEntriesCaster`, `SourceBackend`, `SinkBackend`
+//! - Same pattern as `BarrelToDraftsCaster`, `SourceBackend`, `SinkBackend`
 //! - Resolution: SinkConfig → ManifoldBackend::from_sink_config() → concrete manifold
 //! - ES/File → NdjsonManifold | InMemory → JsonArrayManifold
 //! - The compiler monomorphizes each arm; branch prediction eliminates the match
@@ -22,7 +22,7 @@
 
 use super::{JsonArrayManifold, Manifold, NdjsonManifold};
 use crate::config::SinkConfig;
-use crate::{Entry, Payload};
+use crate::{Draft, Payload};
 use anyhow::Result;
 use std::collections::VecDeque;
 
@@ -33,7 +33,7 @@ use std::collections::VecDeque;
 
 /// 🎭 The polymorphic manifold — wraps concrete manifolds, dispatches via match.
 ///
-/// Same pattern as `DraftToEntriesCaster`, `SourceBackend`, `SinkBackend`.
+/// Same pattern as `BarrelToDraftsCaster`, `SourceBackend`, `SinkBackend`.
 /// The compiler monomorphizes each arm. Branch prediction eliminates the match
 /// after a couple iterations. The enum is a formality. The dispatch is basically free.
 ///
@@ -87,12 +87,12 @@ impl ManifoldBackend {
 
 impl Manifold for ManifoldBackend {
     #[inline]
-    fn join(&self, entries: &mut VecDeque<Entry>) -> Result<Payload> {
+    fn join(&self, drafts: &mut VecDeque<Draft>) -> Result<Payload> {
         // -- 🎭 Dispatch to the concrete manifold — the match arm that wins is the one that deserves to
         // -- TODO: win the lottery, retire, replace this with a lookup table. Just kidding. This is fine.
         match self {
-            Self::Ndjson(m) => m.join(entries),
-            Self::JsonArray(m) => m.join(entries),
+            Self::Ndjson(m) => m.join(drafts),
+            Self::JsonArray(m) => m.join(drafts),
         }
     }
 }
@@ -138,11 +138,11 @@ mod tests {
     fn backend_the_one_where_join_dispatches_correctly() -> Result<()> {
         // 🧪 ManifoldBackend dispatches to the right concrete manifold
         let manifold = ManifoldBackend::from_sink_config(&SinkConfig::InMemory(()));
-        let mut entries = VecDeque::from(vec![
-            Entry(r#"{"a":1}"#.to_string()),
-            Entry(r#"{"b":2}"#.to_string()),
+        let mut drafts = VecDeque::from(vec![
+            Draft(r#"{"a":1}"#.to_string()),
+            Draft(r#"{"b":2}"#.to_string()),
         ]);
-        let result = manifold.join(&mut entries)?;
+        let result = manifold.join(&mut drafts)?;
         assert_eq!(*result, r#"[{"a":1},{"b":2}]"#);
         Ok(())
     }
