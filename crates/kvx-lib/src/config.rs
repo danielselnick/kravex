@@ -10,9 +10,9 @@
 //! 🏗️ Powered by Figment, because manually parsing env vars is a form of
 //! self-harm that even the borrow checker wouldn't approve of.
 
+use anyhow::Context;
 use crate::workers::DrainerConfig;
 use crate::workers::GovernorConfig;
-use anyhow::Context;
 use serde::Deserialize;
 // -- 🔧 To load the configuration, so I don't have to manually parse
 // -- environment variables or files. Bleh. Like doing taxes but for bytes.
@@ -40,21 +40,14 @@ use tracing::info;
 /// immediately explode on first run, ambitious enough to migrate actual data. 🦆
 #[derive(Debug, Deserialize, Clone)]
 pub struct RuntimeConfig {
-    /// 📬 Bounded channel capacity for ch1 (pumper → joiners) — raw feeds in transit 🚚
-    #[serde(
-        default = "default_pumper_to_joiner_capacity",
-        alias = "channel_size",
-        alias = "queue_capacity"
-    )]
+    /// 📬 Bounded channel capacity for ch1 (pumper → joiners) — raw barrels in transit 🚚
+    #[serde(default = "default_pumper_to_joiner_capacity", alias = "channel_size", alias = "queue_capacity")]
     pub pumper_to_joiner_capacity: usize,
-    /// 📬 Bounded channel capacity for ch2 (joiners → drainers) — assembled payloads in transit 🚛
-    /// Separate from pumper_to_joiner_capacity because payloads are larger than raw feeds —
+    /// 📬 Bounded channel capacity for ch2 (joiners → drainers) — assembled drums in transit 🚛
+    /// Separate from pumper_to_joiner_capacity because drums are larger than raw barrels —
     /// think of ch1 as the loading dock and ch2 as the dispatch bay 🏗️
     // The byte size of this effectively becomes source max bytes * this capacity
-    #[serde(
-        default = "default_joiner_to_drainer_capacity",
-        alias = "payload_channel_capacity"
-    )]
+    #[serde(default = "default_joiner_to_drainer_capacity", alias = "drum_channel_capacity")]
     pub joiner_to_drainer_capacity: usize,
     /// 🧵 How many sink workers run in parallel — more lanes, more throughput, more debugging
     #[serde(default = "default_sink_parallelism", alias = "num_sink_workers")]
@@ -89,8 +82,8 @@ fn default_sink_parallelism() -> usize {
     default_parallelism() * 3
 }
 
-// 📬 Payload channel (ch2, joiners → drainers): same default as ch1. Assembled payloads are
-// chunkier than raw feeds, so a smaller buffer is fine. Like a VIP line at the club — fewer
+// 📬 Drum channel (ch2, joiners → drainers): same default as ch1. Assembled drums are
+// chunkier than raw barrels, so a smaller buffer is fine. Like a VIP line at the club — fewer
 // people, more velvet rope per capita. 🦆
 fn default_joiner_to_drainer_capacity() -> usize {
     default_parallelism()
@@ -234,7 +227,7 @@ mod tests {
         assert_eq!(app_config.runtime.sink_parallelism, 3);
         match app_config.sink_config {
             SinkConfig::File(file_config) => {
-                assert_eq!(file_config.common_config.max_payload_size_bytes, 123456);
+                assert_eq!(file_config.common_config.max_drum_size_bytes, 123456);
             }
             honestly_who_knows => panic!(
                 "💀 Expected File sink config in the test, but serde took us to {:?}. Plot twist energy.",
@@ -262,14 +255,8 @@ mod tests {
             .extract()
             .expect("💀 Default runtime config should exist. Serde left us on read otherwise.");
 
-        assert_eq!(
-            app_config.runtime.pumper_to_joiner_capacity,
-            RuntimeConfig::default().pumper_to_joiner_capacity
-        );
-        assert_eq!(
-            app_config.runtime.sink_parallelism,
-            RuntimeConfig::default().sink_parallelism
-        );
+        assert_eq!(app_config.runtime.pumper_to_joiner_capacity, RuntimeConfig::default().pumper_to_joiner_capacity);
+        assert_eq!(app_config.runtime.sink_parallelism, RuntimeConfig::default().sink_parallelism);
 
         // 🧹 TempPath auto-deletes on drop — no manual cleanup needed
     }
@@ -319,10 +306,7 @@ mod tests {
 
         match app_config.governor {
             GovernorConfig::Static(cfg) => {
-                assert_eq!(
-                    cfg.output_bytes, 777_777,
-                    "🎯 Legacy alias should map to governor static output"
-                );
+                assert_eq!(cfg.output_bytes, 777_777, "🎯 Legacy alias should map to governor static output");
             }
             honestly_who_knows => panic!(
                 "💀 Expected GovernorConfig::Static from legacy [flow_master.Static], got {:?}",

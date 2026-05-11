@@ -9,7 +9,7 @@
 //! *["I am the Governor," it announces. "And this porridge is JUST right."]* 🔧📡🦆
 //!
 //! 📦 Governor — the unified regulator worker that listens to GaugeReading signals
-//! and adjusts the FlowKnob that Joiners read to size their payloads.
+//! and adjusts the FlowKnob that Joiners read to size their drums.
 //!
 //! 🧠 Knowledge graph:
 //! ```text
@@ -32,21 +32,21 @@ use async_channel::Receiver;
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
 
-use super::Worker;
-use crate::FlowKnob;
 use crate::GaugeReading;
 use crate::regulators::{Regulate, Regulators};
+use crate::FlowKnob;
+use super::Worker;
 
-/// 🎛️ The Governor: receives gauge readings, feeds a PID regulator, adjusts the FlowKnob.
+/// 🎛️ The Governor: receives gauge readings, barrels a PID regulator, adjusts the FlowKnob.
 ///
 /// Like a DJ reading the room and adjusting the volume — except the room is a cluster,
-/// the music is bulk payloads, and nobody asked for this metaphor. 🎧🦆
+/// the music is bulk drums, and nobody asked for this metaphor. 🎧🦆
 pub struct Governor {
     /// 📥 Channel receiver — GaugeReading signals from Drainers (latency) or future CPU poller
     rx: Receiver<GaugeReading>,
     /// 🎛️ The regulator — PID math that converts readings into flow rates
     regulator: Regulators,
-    /// 🔧 The shared atomic valve — Joiners read this to size their payloads
+    /// 🔧 The shared atomic valve — Joiners read this to size their drums
     the_flow_knob: FlowKnob,
 }
 
@@ -55,7 +55,11 @@ impl Governor {
     ///
     /// "In the beginning there was a channel, a PID, and an atomic.
     ///  And the Governor said: let there be regulated throughput." — Genesis 2:1 (Tokio Edition) 🦆
-    pub fn new(rx: Receiver<GaugeReading>, regulator: Regulators, the_flow_knob: FlowKnob) -> Self {
+    pub fn new(
+        rx: Receiver<GaugeReading>,
+        regulator: Regulators,
+        the_flow_knob: FlowKnob,
+    ) -> Self {
         Self {
             rx,
             regulator,
@@ -77,16 +81,18 @@ impl Worker for Governor {
                             .duration_since(the_last_time_we_checked)
                             .unwrap_or_default();
 
-                        let the_new_flow = self
-                            .regulator
-                            .regulate(the_gauge_reading, since_the_last_time_we_checked);
+                        let the_new_flow = self.regulator.regulate(
+                            the_gauge_reading,
+                            since_the_last_time_we_checked,
+                        );
 
                         the_last_time_we_checked = SystemTime::now();
 
                         // 🔧 Store the regulated output to the FlowKnob — Joiners will pick it up
-                        let the_old_flow = self
-                            .the_flow_knob
-                            .swap(the_new_flow as usize, Ordering::Relaxed);
+                        let the_old_flow = self.the_flow_knob.swap(
+                            the_new_flow as usize,
+                            Ordering::Relaxed,
+                        );
 
                         debug!(
                             "🎛️ Governor: regulated {} → {} bytes (Δ{})",
@@ -97,9 +103,7 @@ impl Worker for Governor {
                     }
                     Err(_) => {
                         // 🏁 All senders dropped — ch3 closed — Drainers are done. Time to rest.
-                        info!(
-                            "🏁 Governor: ch3 closed. All drainers done. Regulation complete. Goodnight. 💤"
-                        );
+                        info!("🏁 Governor: ch3 closed. All drainers done. Regulation complete. Goodnight. 💤");
                         return Ok(());
                     }
                 }
@@ -111,9 +115,9 @@ impl Worker for Governor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::regulators::{ByteValue, PidController};
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
+    use crate::regulators::{ByteValue, PidController};
 
     /// 🧪 The one where Governor receives a reading and adjusts the knob.
     /// Like a thermostat that actually listens. Unlike my office thermostat. 🌡️🦆
@@ -122,10 +126,7 @@ mod tests {
         // 🔧 Set up: PID with 200ms setpoint, 128KiB min, 64MiB max, start at 4MiB
         let the_knob: FlowKnob = Arc::new(AtomicUsize::new(4_194_304));
         let the_regulator = Regulators::Pid(PidController::new(
-            200.0,
-            131_072.0,
-            67_108_864.0,
-            4_194_304.0,
+            200.0, 131_072.0, 67_108_864.0, 4_194_304.0,
         ));
 
         let (tx, rx) = async_channel::bounded(16);
@@ -135,12 +136,7 @@ mod tests {
         let the_handle = the_governor.start();
 
         // 📡 Send a low-latency reading — PID should increase flow (headroom)
-        tx.send(GaugeReading::DrainResult {
-            payload_bytes: 0,
-            latency_ms: 50,
-        })
-        .await
-        .unwrap();
+        tx.send(GaugeReading::DrainResult { drum_bytes: 0, latency_ms: 50 }).await.unwrap();
 
         // 💤 Give Governor a moment to process
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -188,10 +184,7 @@ mod tests {
         let the_initial_flow = 4_194_304_usize;
         let the_knob: FlowKnob = Arc::new(AtomicUsize::new(the_initial_flow));
         let the_regulator = Regulators::Pid(PidController::new(
-            200.0,
-            131_072.0,
-            67_108_864.0,
-            the_initial_flow as f64,
+            200.0, 131_072.0, 67_108_864.0, the_initial_flow as f64,
         ));
 
         let (tx, rx) = async_channel::bounded(256);
@@ -200,12 +193,7 @@ mod tests {
 
         // 📡 Send sustained high-latency readings — PID should reduce flow
         for _ in 0..20 {
-            tx.send(GaugeReading::DrainResult {
-                payload_bytes: 0,
-                latency_ms: 500,
-            })
-            .await
-            .unwrap();
+            tx.send(GaugeReading::DrainResult { drum_bytes: 0, latency_ms: 500 }).await.unwrap();
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
@@ -216,8 +204,7 @@ mod tests {
         assert!(
             the_final_flow < the_initial_flow,
             "🎯 High latency (500ms vs 200ms setpoint) should reduce flow — got {} (started at {})",
-            the_final_flow,
-            the_initial_flow
+            the_final_flow, the_initial_flow
         );
 
         drop(tx);

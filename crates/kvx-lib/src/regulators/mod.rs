@@ -12,7 +12,7 @@
 //!
 //! 🧠 Knowledge graph:
 //! ```text
-//! Drainer sends GaugeReading::DrainResult { payload_bytes, latency_ms }
+//! Drainer sends GaugeReading::DrainResult { drum_bytes, latency_ms }
 //!   → Governor receives on ch3
 //!     → Regulator.regulate(reading, dt) → new flow rate (bytes)
 //!       → FlowKnob: Arc<AtomicUsize> (effective max_request_size_bytes)
@@ -32,8 +32,8 @@ pub mod throughput_seeker;
 
 use std::time::Duration;
 
-pub use config::LatencyRegulatorConfig;
 pub use config::StaticRegulatorConfig;
+pub use config::LatencyRegulatorConfig;
 pub use config::ThroughputSeekerConfig;
 pub use pid_controller::PidController;
 pub use static_regulator::ByteValue;
@@ -82,11 +82,8 @@ impl Regulators {
     /// error direction: high reading = overloaded → reduce output. 🎛️
     ///
     /// 📏 `sink_max_request_size_bytes` is the hard ceiling from the sink config —
-    /// the PID won't suggest payloads bigger than what the sink can physically accept. 🦆
-    pub fn from_latency_config(
-        config: &LatencyRegulatorConfig,
-        sink_max_request_size_bytes: usize,
-    ) -> Self {
+    /// the PID won't suggest drums bigger than what the sink can physically accept. 🦆
+    pub fn from_latency_config(config: &LatencyRegulatorConfig, sink_max_request_size_bytes: usize) -> Self {
         Regulators::Pid(PidController::new(
             config.set_point_latency_ms as f64,
             config.min_request_size_bytes as f64,
@@ -98,10 +95,7 @@ impl Regulators {
     /// 🏗️ Create a Regulators instance from throughput seeker config.
     /// No PID, no setpoints, no guessing — just climb toward peak throughput.
     /// Like a GPS that optimizes for "fastest route" instead of "shortest distance." 🏔️🦆
-    pub fn from_throughput_config(
-        config: &ThroughputSeekerConfig,
-        sink_max_request_size_bytes: usize,
-    ) -> Self {
+    pub fn from_throughput_config(config: &ThroughputSeekerConfig, sink_max_request_size_bytes: usize) -> Self {
         Regulators::ThroughputSeeker(ThroughputSeeker::new(
             config,
             sink_max_request_size_bytes as f64,
@@ -112,13 +106,9 @@ impl Regulators {
 impl Regulate for Regulators {
     fn regulate(&mut self, reading: GaugeReading, since_last_checked_ms: Duration) -> f64 {
         match self {
-            Regulators::Static(the_byte_value) => {
-                the_byte_value.regulate(reading, since_last_checked_ms)
-            }
+            Regulators::Static(the_byte_value) => the_byte_value.regulate(reading, since_last_checked_ms),
             Regulators::Pid(the_pid) => the_pid.regulate(reading, since_last_checked_ms),
-            Regulators::ThroughputSeeker(the_seeker) => {
-                the_seeker.regulate(reading, since_last_checked_ms)
-            }
+            Regulators::ThroughputSeeker(the_seeker) => the_seeker.regulate(reading, since_last_checked_ms),
         }
     }
 }
@@ -131,34 +121,14 @@ mod tests {
     /// Pattern matching: the least dramatic form of decision-making in Rust. 🎭
     #[test]
     fn the_one_where_enum_dispatch_actually_dispatches() {
-        // 📏 Static variant — should return fixed value regardless of what you feed it
+        // 📏 Static variant — should return fixed value regardless of what you barrel it
         let mut the_static = Regulators::Static(ByteValue::new(42.0));
-        assert_eq!(
-            the_static.regulate(
-                GaugeReading::DrainResult {
-                    payload_bytes: 0,
-                    latency_ms: 999
-                },
-                Duration::from_millis(1000)
-            ),
-            42.0,
-            "🎯 Static should return 42 regardless"
-        );
+        assert_eq!(the_static.regulate(GaugeReading::DrainResult { drum_bytes: 0, latency_ms: 999 }, Duration::from_millis(1000)), 42.0, "🎯 Static should return 42 regardless");
 
         // 🎛️ PID variant — should return something different from initial after regulation
         let mut the_pid = Regulators::Pid(PidController::new(75.0, 100.0, 1_000_000.0, 500_000.0));
-        let the_first_output = the_pid.regulate(
-            GaugeReading::DrainResult {
-                payload_bytes: 0,
-                latency_ms: 50,
-            },
-            Duration::from_millis(3000),
-        );
-        assert!(
-            the_first_output > 0.0,
-            "🎯 PID should return a positive value — got {}",
-            the_first_output
-        );
+        let the_first_output = the_pid.regulate(GaugeReading::DrainResult { drum_bytes: 0, latency_ms: 50 }, Duration::from_millis(3000));
+        assert!(the_first_output > 0.0, "🎯 PID should return a positive value — got {}", the_first_output);
     }
 
     /// 🧪 The one where from_latency_config creates a PID that responds to latency.
@@ -174,40 +144,20 @@ mod tests {
         let mut the_regulator = Regulators::from_latency_config(&the_config, 67_108_864);
 
         // 📡 Low latency (50ms vs 200ms setpoint) → headroom → PID should increase flow
-        let the_output = the_regulator.regulate(
-            GaugeReading::DrainResult {
-                payload_bytes: 0,
-                latency_ms: 50,
-            },
-            Duration::from_millis(3000),
-        );
-        assert!(
-            the_output > 0.0,
-            "🎯 from_latency_config regulator should produce positive output"
-        );
+        let the_output = the_regulator.regulate(GaugeReading::DrainResult { drum_bytes: 0, latency_ms: 50 }, Duration::from_millis(3000));
+        assert!(the_output > 0.0, "🎯 from_latency_config regulator should produce positive output");
     }
 
     /// 🧪 The one where LatencyRegulatorConfig deserializes with defaults.
     /// Empty TOML = 200ms setpoint, 128 KiB min, 4 MiB initial. The sensible defaults club. 🏛️
     #[test]
     fn the_one_where_latency_config_defaults_are_sane() {
-        let the_config: LatencyRegulatorConfig =
-            toml::from_str("").expect("💀 Empty TOML should produce sane latency defaults");
+        let the_config: LatencyRegulatorConfig = toml::from_str("")
+            .expect("💀 Empty TOML should produce sane latency defaults");
 
-        assert_eq!(
-            the_config.set_point_latency_ms, 200,
-            "🎯 Default setpoint is 200ms"
-        );
-        assert_eq!(
-            the_config.min_request_size_bytes,
-            128 * 1024,
-            "🎯 Default min is 128 KiB"
-        );
-        assert_eq!(
-            the_config.initial_output_bytes,
-            4 * 1024 * 1024,
-            "🎯 Default initial is 4 MiB"
-        );
+        assert_eq!(the_config.set_point_latency_ms, 200, "🎯 Default setpoint is 200ms");
+        assert_eq!(the_config.min_request_size_bytes, 128 * 1024, "🎯 Default min is 128 KiB");
+        assert_eq!(the_config.initial_output_bytes, 4 * 1024 * 1024, "🎯 Default initial is 4 MiB");
     }
 
     /// 🧪 The one where LatencyRegulatorConfig TOML overrides work.
@@ -219,21 +169,11 @@ mod tests {
             min_request_size_bytes = 262144
         "#;
 
-        let the_config: LatencyRegulatorConfig =
-            toml::from_str(the_toml).expect("💀 Partial latency TOML should deserialize");
+        let the_config: LatencyRegulatorConfig = toml::from_str(the_toml)
+            .expect("💀 Partial latency TOML should deserialize");
 
-        assert_eq!(
-            the_config.set_point_latency_ms, 150,
-            "🎯 Setpoint overridden to 150ms"
-        );
-        assert_eq!(
-            the_config.min_request_size_bytes, 262_144,
-            "🎯 Min overridden to 256 KiB"
-        );
-        assert_eq!(
-            the_config.initial_output_bytes,
-            4 * 1024 * 1024,
-            "🎯 Initial kept default 4 MiB"
-        );
+        assert_eq!(the_config.set_point_latency_ms, 150, "🎯 Setpoint overridden to 150ms");
+        assert_eq!(the_config.min_request_size_bytes, 262_144, "🎯 Min overridden to 256 KiB");
+        assert_eq!(the_config.initial_output_bytes, 4 * 1024 * 1024, "🎯 Initial kept default 4 MiB");
     }
 }

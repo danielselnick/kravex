@@ -9,7 +9,7 @@ I/O abstraction layer for sources (data readers) and sinks (data writers).
 | Trait | Method | Returns | Purpose |
 |---|---|---|---|
 | `Source` | `pump()` | `Option<String>` | Read next raw feed; `None` = EOF |
-| `Sink` | `drain(payload)` | `Result<()>` | Write a rendered payload |
+| `Sink` | `drain(drum)` | `Result<()>` | Write a rendered drum |
 
 ## Dispatcher Enums
 

@@ -29,7 +29,7 @@
 #
 # Aliases accepted:
 #   channel_size / queue_capacity  → pumper_to_joiner_capacity
-#   payload_channel_capacity       → joiner_to_drainer_capacity
+#   drum_channel_capacity       → joiner_to_drainer_capacity
 #   num_sink_workers               → sink_parallelism
 #   num_joiner_workers             → joiner_parallelism
 
@@ -70,8 +70,8 @@ max_request_size_bytes = 1000000        # 4 MiB — benchmark override (serde de
 # 🎚️  Governor — adaptive throttling (optional)
 # ============================================================
 # Absent → pipeline runs at fixed max_request_size_bytes. No regulation. No drama.
-# Present → spawns governor, dynamically adjusts payload size
-# based on drain feedback (latency, throughput).
+# Present → spawns governor, dynamically adjusts drum size
+# based on drain barrelback (latency, throughput).
 # Legacy `[flow_master.*]` sections are still accepted for compatibility.
 #[governor.Latency]
 # set_point_latency_ms = 200            # 🎯 Target drain latency in ms

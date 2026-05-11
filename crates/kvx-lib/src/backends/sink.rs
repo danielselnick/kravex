@@ -5,32 +5,32 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::Payload;
+use crate::Drum;
 use crate::backends::{elasticsearch, file, in_mem};
 
-/// 🕳️ A sink that sends pre-rendered payloads — pure I/O, zero logic.
+/// 🕳️ A sink that sends pre-rendered drums — pure I/O, zero logic.
 ///
 /// The yin to the source's yang. The drain at the bottom of the pipeline tub.
 /// Sinks are ONLY an abstraction for how to send the request — HTTP POST to /_bulk,
 /// write to file, stash in memory. They do not buffer. They do not cast.
-/// They receive the full rendered payload and send it. Like a postal worker who
+/// They receive the full rendered drum and send it. Like a postal worker who
 /// delivers the mail without reading it. (Unlike your actual postal worker, Kevin.)
 ///
 /// # Contract 📜
-/// - `drain` accepts a fully rendered payload string and writes/sends it. That's it.
+/// - `drain` accepts a fully rendered drum string and writes/sends it. That's it.
 /// - `close` flushes, finalizes, and bids the data a fond farewell. MUST be called.
 ///   Skipping `close` is a bug. It is also considered rude.
 /// - Buffering, casting, and binary collecting happen in the Drainer, NOT here.
 ///
 /// # Knowledge Graph 🧠
 /// - Pattern: trait → concrete impls (FileSink, InMemorySink, ElasticsearchSink) → SinkBackend enum
-/// - Drainer does: cast → buffer → binary collect → call sink.drain(payload)
+/// - Drainer does: cast → buffer → binary collect → call sink.drain(drum)
 /// - Sink does: I/O. Just I/O. HTTP POST, file write, memory push. Nothing else.
 /// - Ancient proverb: "He who puts business logic in the Sink, debugs in production."
 #[async_trait]
 pub trait Sink: std::fmt::Debug {
-    /// 📡 Drain a fully rendered payload to the destination. I/O only. No questions asked.
-    async fn drain(&mut self, payload: Payload) -> Result<()>;
+    /// 📡 Drain a fully rendered drum to the destination. I/O only. No questions asked.
+    async fn drain(&mut self, drum: Drum) -> Result<()>;
     /// 🗑️ Flush, finalize, and release. Call this. Always. No exceptions. Not even on Fridays.
     async fn close(&mut self) -> Result<()>;
 }
@@ -52,11 +52,11 @@ pub enum SinkBackend {
 
 #[async_trait]
 impl Sink for SinkBackend {
-    async fn drain(&mut self, payload: Payload) -> Result<()> {
+    async fn drain(&mut self, drum: Drum) -> Result<()> {
         match self {
-            SinkBackend::InMemory(sink) => sink.drain(payload).await,
-            SinkBackend::File(sink) => sink.drain(payload).await,
-            SinkBackend::Elasticsearch(sink) => sink.drain(payload).await,
+            SinkBackend::InMemory(sink) => sink.drain(drum).await,
+            SinkBackend::File(sink) => sink.drain(drum).await,
+            SinkBackend::Elasticsearch(sink) => sink.drain(drum).await,
         }
     }
 

@@ -5,27 +5,27 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::Payload;
+use crate::Drum;
 use crate::backends::{Sink, Source};
 /// 📦 A sink that never forgets. Unlike my dad, who forgot my soccer game in 1998.
 ///
-/// `InMemorySink` receives fully rendered payload strings and hoards them in a shared Vec
+/// `InMemorySink` receives fully rendered drum strings and hoards them in a shared Vec
 /// wrapped in a Mutex wrapped in an Arc. It's types all the way down.
 ///
 /// 🔒 The `Arc<Mutex<Vec<String>>>` is an existential nesting doll:
 /// "I need to share ownership of a thing that must be accessed one thread at a
-/// time and that thing is a list of payloads." Simpler than before — no Hit structs,
-/// no HitBatch wrappers, just raw payload strings the Drainer already rendered.
+/// time and that thing is a list of drums." Simpler than before — no Hit structs,
+/// no HitBatch wrappers, just raw drum strings the Drainer already rendered.
 ///
 /// 🧠 Knowledge graph: Sinks are I/O-only now. The Drainer does cast + binary collect.
-/// This sink just stores the final payload strings for test assertions.
+/// This sink just stores the final drum strings for test assertions.
 ///
 /// Clone-able because tests need to peek inside after handing `self` off to the
 /// pipeline. The `Arc` means everyone shares the same Vec. Communist data, but
 /// in a good way. The borrow checker approved. Barely. It had notes.
 #[derive(Debug, Default, Clone)]
 pub struct InMemorySink {
-    /// 🔒 The vault. The evidence locker. Each entry = one fully rendered payload string.
+    /// 🔒 The vault. The evidence locker. Each entry = one fully rendered drum string.
     /// Arc so multiple owners can hold a reference. Mutex so only one panics at a time.
     pub received: std::sync::Arc<tokio::sync::Mutex<Vec<String>>>,
 }
@@ -48,13 +48,13 @@ impl InMemorySink {
 
 #[async_trait]
 impl Sink for InMemorySink {
-    /// 📡 Stores a fully rendered payload. Lock, push, done. Like a fax machine but for bytes. 🦆
+    /// 📡 Stores a fully rendered drum. Lock, push, done. Like a fax machine but for bytes. 🦆
     ///
-    /// 🎯 I/O-only: the Drainer already cast and binary-collected the payload.
+    /// 🎯 I/O-only: the Drainer already cast and binary-collected the drum.
     /// We just stash it for test assertions. No parsing. No judgment. Just storage.
-    async fn drain(&mut self, payload: Payload) -> Result<()> {
+    async fn drain(&mut self, drum: Drum) -> Result<()> {
         // 🔒 The Mutex is load-bearing. Do not remove. I know it looks optional. It isn't.
-        self.received.lock().await.push(payload.0);
+        self.received.lock().await.push(drum.0);
         Ok(())
     }
 

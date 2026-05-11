@@ -9,8 +9,8 @@ Pipeline execution stages. Three worker types form the data flow pipeline.
 | Worker | Runtime | Role | I/O Model |
 |---|---|---|---|
 | **Pumper** | tokio (async) | Reads feeds from Source into ch1 | Async I/O bound |
-| **Joiner** | std::thread (sync) | Casts + joins feeds into payloads | CPU bound |
-| **Drainer** | tokio (async) | Writes payloads from ch2 to Sink | Async I/O bound |
+| **Joiner** | std::thread (sync) | Casts + joins feeds into drums | CPU bound |
+| **Drainer** | tokio (async) | Writes drums from ch2 to Sink | Async I/O bound |
 
 ## Pipeline Flow
 
@@ -20,7 +20,7 @@ Source → Pumper → [ch1] → Joiner → [ch2] → Drainer → Sink
 ```
 
 - **ch1**: Bounded async_channel carrying raw feeds (String)
-- **ch2**: Bounded async_channel carrying assembled payloads (Payload)
+- **ch2**: Bounded async_channel carrying assembled drums (Drum)
 
 ## Traits
 
@@ -55,7 +55,7 @@ Total attempts = 1 (initial) + max_retries. All errors are retried uniformly; gr
 
 - **Three-stage separation**: Async I/O (pump) → sync CPU (cast+join) → async I/O (drain)
 - **Drainer is thin + resilient**: Relay with retry — recv from ch2, send to sink with backoff
-- **DrainMetrics**: Shared `Arc<DrainMetrics>` passed to Drainer constructor. After each successful `drain_with_retry`, Drainer calls `drain_metrics.record_drain(payload_bytes, latency_ms)` to atomically update shared progress counters. Separate from `gauge_tx` (Governor feedback) — this is for progress reporting
+- **DrainMetrics**: Shared `Arc<DrainMetrics>` passed to Drainer constructor. After each successful `drain_with_retry`, Drainer calls `drain_metrics.record_drain(drum_bytes, latency_ms)` to atomically update shared progress counters. Separate from `gauge_tx` (Governor feedback) — this is for progress reporting
 - **Joiner is stateful**: Buffers feeds by byte count, flushes the Manifold output
 
 ## Knowledge Graph
@@ -63,7 +63,7 @@ Total attempts = 1 (initial) + max_retries. All errors are retried uniformly; gr
 ```
 Foreman → spawns Pumper (1) + Joiner (N) + Drainer (N)
 Pumper → Source.pump() → ch1
-Joiner → ch1 → Caster + Manifold → ch2
+Joiner → ch1 → Tapper + Manifold → ch2
 Drainer → ch2 → Sink.drain() with exponential backoff retry
 Drainer → Arc<DrainMetrics> (progress reporting, atomic counters)
 Drainer → gauge_tx (Governor latency feedback, separate concern)

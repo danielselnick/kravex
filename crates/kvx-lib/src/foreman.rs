@@ -20,9 +20,9 @@
 //!                                                                           ↓
 //!                                                                      Governor → FlowKnob → Joiners
 //! ```
-//! - **ch1**: async_channel::bounded — raw feeds from source, MPMC
-//! - **ch2**: async_channel::bounded — assembled payloads from joiners, MPMC
-//! - **ch3**: async_channel::bounded — GaugeReading from drainers to Governor (latency feedback)
+//! - **ch1**: async_channel::bounded — raw barrels from source, MPMC
+//! - **ch2**: async_channel::bounded — assembled drums from joiners, MPMC
+//! - **ch3**: async_channel::bounded — GaugeReading from drainers to Governor (latency barrelback)
 //! - **Joiners**: CPU-bound work (casting, manifold join) on dedicated OS threads
 //! - **Drainers**: I/O-bound work (sink.drain) on tokio async runtime
 //! - **Governor**: receives latency readings, PID-regulates, adjusts FlowKnob
@@ -33,7 +33,7 @@
 //! 🔒 Like Fight Club, but for async tasks. First rule: you don't pub the workers.
 
 use crate::config::AppConfig;
-use crate::casts::BarrelToDraftsCaster;
+use crate::taps::BarrelToDraftsTapper;
 use crate::manifolds::ManifoldBackend;
 use crate::progress::{DrainMetrics, spawn_progress_reporter};
 use crate::FlowKnob;
@@ -69,8 +69,8 @@ impl Foreman {
     ///
     /// 🧠 Knowledge graph — pipeline wiring:
     /// ```text
-    /// Pumper (async) --[ch1: raw feeds]--> Joiner(s) (std::thread)
-    ///                                      --[ch2: payloads]--> Drainer(s) (async) --> Sink
+    /// Pumper (async) --[ch1: raw barrels]--> Joiner(s) (std::thread)
+    ///                                      --[ch2: drums]--> Drainer(s) (async) --> Sink
     ///                                                               |
     ///                                                          [ch3: latency]
     ///                                                               ↓
@@ -98,7 +98,7 @@ impl Foreman {
         &self,
         source_backend: crate::backends::SourceBackend,
         sink_backends: Vec<crate::backends::SinkBackend>,
-        caster: BarrelToDraftsCaster,
+        tapper: BarrelToDraftsTapper,
         manifold: ManifoldBackend,
         the_flow_knob: FlowKnob,
         the_governor_config: &GovernorConfig,
@@ -108,15 +108,15 @@ impl Foreman {
     ) -> Result<()> {
         let the_joiner_count = self.app_config.runtime.joiner_parallelism;
 
-        // 📬 ch1: pumper → joiners — carries raw feed Strings, MPMC
+        // 📬 ch1: pumper → joiners — carries raw barrel Strings, MPMC
         // Like a conveyor belt at a sushi restaurant, but the sushi is JSON 🍣
         let (tx1, rx1) = async_channel::bounded(self.app_config.runtime.pumper_to_joiner_capacity);
 
-        // 📬 ch2: joiners → drainers — carries assembled payload Strings, MPMC
-        // The VIP lounge of the pipeline — only processed payloads allowed past this point 🎟️
-        let (tx2, rx2) = async_channel::bounded::<crate::Payload>(self.app_config.runtime.joiner_to_drainer_capacity);
+        // 📬 ch2: joiners → drainers — carries assembled drum Strings, MPMC
+        // The VIP lounge of the pipeline — only processed drums allowed past this point 🎟️
+        let (tx2, rx2) = async_channel::bounded::<crate::Drum>(self.app_config.runtime.joiner_to_drainer_capacity);
 
-        // 📬 ch3: drainers → governor — carries GaugeReading (latency feedback), MPSC-ish
+        // 📬 ch3: drainers → governor — carries GaugeReading (latency barrelback), MPSC-ish
         // Only created for latency regulation. Static mode = no channel, no Governor, no drama 🎭
         let the_gauge_channel = match the_governor_config {
             GovernorConfig::Latency(latency_config) => {
@@ -167,15 +167,15 @@ impl Foreman {
         // ═══════════════════════════════════════════════════════════════════
 
         // 🧵 Spawn N joiners on dedicated OS threads (std::thread).
-        // They do the CPU-heavy lifting: buffering raw feeds, casting, manifold join.
+        // They do the CPU-heavy lifting: buffering raw barrels, casting, manifold join.
         // Each gets its own clone of rx1 and tx2.
-        // Casters and manifolds are zero-sized structs — cloning is cheaper than this comment. 🐄
+        // Tappers and tappers are zero-sized structs — cloning is cheaper than this comment. 🐄
         let mut the_joiner_thread_handles = Vec::with_capacity(the_joiner_count);
         for _ in 0..the_joiner_count {
             let joiner = workers::Joiner::new(
                 rx1.clone(),
                 tx2.clone(),
-                caster.clone(),
+                tapper.clone(),
                 manifold.clone(),
                 the_flow_knob.clone(),
             );
@@ -268,18 +268,18 @@ impl Foreman {
         for (i, handle) in the_joiner_thread_handles.into_iter().enumerate() {
             handle
                 .join()
-                .map_err(|the_panic_payload| {
+                .map_err(|the_panic_drum| {
                     anyhow::anyhow!(
                         "💀 Joiner thread {} panicked — it saw something in the JSON that broke it. \
-                         The panic payload: {:?}. \
+                         The panic drum: {:?}. \
                          Like a horror movie, but the monster is malformed data.",
                         i,
-                        the_panic_payload
+                        the_panic_drum
                     )
                 })?
                 .context(format!(
                     "💀 Joiner thread {} returned an error — it tried its best, \
-                     but the feeds fought back like a cornered raccoon 🦝",
+                     but the barrels fought back like a cornered raccoon 🦝",
                     i
                 ))?;
         }

@@ -12,9 +12,9 @@
 //! 🧠 Knowledge graph:
 //! - `CommonSourceConfig`: embedded in every backend source config (`ElasticsearchSourceConfig`,
 //!   `FileSourceConfig`). Controls batch size in docs and bytes. Lives here because it's a
-//!   backend-level concern — how big a feed do we pull?
+//!   backend-level concern — how big a barrel do we pull?
 //! - `CommonSinkConfig`: embedded in every backend sink config (`ElasticsearchSinkConfig`,
-//!   `FileSinkConfig`). Controls max request size in bytes. How big a payload do we push?
+//!   `FileSinkConfig`). Controls max request size in bytes. How big a drum do we push?
 //! - Both are re-exported from `backends.rs` so callers can `use crate::backends::CommonSinkConfig`
 //! - **Former home**: `supervisors/config.rs` — evicted in the Great Config Migration of 2026.
 //!   The landlord was `app_config.rs`. The neighbors were happy to see them go.
@@ -34,14 +34,14 @@ use serde::Deserialize;
 
 /// 📦 Shared configuration embedded by every source backend config.
 ///
-/// Controls how large a "feed" the source emits per `pump()` call.
-/// Sources are ignorant of downstream concerns — they just pour raw feeds
+/// Controls how large a "barrel" the source emits per `pump()` call.
+/// Sources are ignorant of downstream concerns — they just pour raw barrels
 /// at whatever batch size the config allows. 🚰
 ///
 /// 🧠 Knowledge graph:
 /// - Embedded in `ElasticsearchSourceConfig`, `FileSourceConfig` (and future source configs)
-/// - `max_batch_size_docs`: doc-count ceiling per feed (ES scroll size, etc.)
-/// - `max_batch_size_bytes`: byte-size ceiling per feed (avoid sending 1GB feeds)
+/// - `max_batch_size_docs`: doc-count ceiling per barrel (ES scroll size, etc.)
+/// - `max_batch_size_bytes`: byte-size ceiling per barrel (avoid sending 1GB barrels)
 /// - The DEFAULT impl gives conservative values (1000 docs / 1MB)
 ///   while the serde defaults give more generous values (10k docs / 10MB)
 ///   because apparently we have two opinions and we're committed to both 🦆
@@ -49,10 +49,10 @@ use serde::Deserialize;
 /// No cap: these defaults were chosen empirically by staring at them until they felt right.
 #[derive(Debug, Deserialize, Clone)]
 pub struct CommonSourceConfig {
-    /// 📦 Max docs per batch feed — the doc-count speed limiter
+    /// 📦 Max docs per batch barrel — the doc-count speed limiter
     #[serde(default = "default_max_barrel_size_docs")]
     pub max_barrel_size_docs: usize,
-    /// 📦 Max bytes per batch feed — the byte-size speed limiter
+    /// 📦 Max bytes per batch barrel — the byte-size speed limiter
     #[serde(default = "default_max_barrel_size_bytes" )]
     pub max_barrel_size_bytes: usize,
 }
@@ -87,8 +87,8 @@ impl Default for CommonSourceConfig {
 
 /// 🚰 Shared configuration embedded by every sink backend config.
 ///
-/// Controls the maximum request payload size when sending data to the sink.
-/// The `Drainer` uses this to decide when to flush its feed buffer —
+/// Controls the maximum request drum size when sending data to the sink.
+/// The `Drainer` uses this to decide when to flush its barrel buffer —
 /// accumulate until approaching this limit, then join + send. 💡
 ///
 /// 🧠 Knowledge graph:
@@ -103,14 +103,14 @@ impl Default for CommonSourceConfig {
 /// Knock knock. Who's there? Race condition. Race condition wh— Who's there?
 #[derive(Debug, Deserialize, Clone)]
 pub struct CommonSinkConfig {
-    /// 🚰 Max payload bytes per sink request — the flush trigger
-    #[serde(default = "default_max_payload_size_bytes", alias = "max_request_size_bytes")]
-    pub max_payload_size_bytes: usize,
+    /// 🚰 Max drum bytes per sink request — the flush trigger
+    #[serde(default = "default_max_drum_size_bytes", alias = "max_request_size_bytes")]
+    pub max_drum_size_bytes: usize,
 }
 
 // 🚰 10MB sink request size — the same limit as your email attachment policy,
 // your Slack upload quota, and your therapist's patience. Coincidence? Absolutely yes.
-fn default_max_payload_size_bytes() -> usize {
+fn default_max_drum_size_bytes() -> usize {
     10485760
 } // -- 10MB — Elasticsearch's feelings
 
@@ -119,7 +119,7 @@ impl Default for CommonSinkConfig {
         CommonSinkConfig {
             // 🚰 64MB default request size because we dream big
             // (and because the Elasticsearch docs said "up to 100MB" and we wanted buffer)
-            max_payload_size_bytes: 64 * 1024 * 1024,
+            max_drum_size_bytes: 64 * 1024 * 1024,
         }
     }
 }
@@ -154,14 +154,14 @@ pub enum SourceConfig {
 /// The InMemory(()) variant holds `()` which is the Rust way of saying "we have nothing to say here."
 ///
 /// 🧠 Knowledge graph: resolved at startup into a `SinkBackend` by `lib.rs`. The Drainer
-/// reads `max_request_size_bytes()` to know when to flush its feed buffer. 🚰
+/// reads `max_request_size_bytes()` to know when to flush its barrel buffer. 🚰
 #[derive(Debug, Deserialize, Clone)]
 pub enum SinkConfig {
     /// 📡 Write to an Elasticsearch index via bulk API
     Elasticsearch(ElasticsearchSinkConfig),
     /// 📂 Write to a local file (NDJSON)
     File(FileSinkConfig),
-    /// 🧪 In-memory test sink — captures payloads for assertion, no I/O
+    /// 🧪 In-memory test sink — captures drums for assertion, no I/O
     InMemory(()),
 }
 
@@ -172,15 +172,15 @@ impl SinkConfig {
     /// InMemory has no config struct, so it gets the `CommonSinkConfig::default()` value.
     /// "He who queries the config, avoids the match in the hot path." — Ancient proverb 📜
     ///
-    /// 🧠 Knowledge graph: Drainer uses this to know when to flush its feed buffer.
-    /// The buffer accumulates raw feeds until their total byte size approaches this limit,
-    /// then the Manifold casts+joins them into a single payload for the sink.
-    pub fn max_payload_size_bytes(&self) -> usize {
+    /// 🧠 Knowledge graph: Drainer uses this to know when to flush its barrel buffer.
+    /// The buffer accumulates raw barrels until their total byte size approaches this limit,
+    /// then the Manifold casts+joins them into a single drum for the sink.
+    pub fn max_drum_size_bytes(&self) -> usize {
         match self {
-            SinkConfig::Elasticsearch(es) => es.common_config.max_payload_size_bytes,
-            SinkConfig::File(f) => f.common_config.max_payload_size_bytes,
+            SinkConfig::Elasticsearch(es) => es.common_config.max_drum_size_bytes,
+            SinkConfig::File(f) => f.common_config.max_drum_size_bytes,
             // 🧠 InMemory gets the default — it's testing, we don't limit 🦆
-            SinkConfig::InMemory(_) => CommonSinkConfig::default().max_payload_size_bytes,
+            SinkConfig::InMemory(_) => CommonSinkConfig::default().max_drum_size_bytes,
         }
     }
 }

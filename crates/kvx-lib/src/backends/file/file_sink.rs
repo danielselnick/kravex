@@ -10,16 +10,16 @@ use tokio::{
 };
 use tracing::trace;
 
-use super::config::FileSinkConfig;
-use crate::Payload;
+use crate::Drum;
 use crate::backends::Sink;
-/// 🚰 FileSink — receives fully rendered payload strings and writes them to disk. I/O only.
+use super::config::FileSinkConfig;
+/// 🚰 FileSink — receives fully rendered drum strings and writes them to disk. I/O only.
 ///
 /// It's a BufWriter around a tokio `File`. Simple. Honest. Does not complain.
 /// Does not retry. Does not have opinions about your data format. It writes what you give it.
 ///
 /// 🧠 Knowledge graph: Sinks are pure I/O abstractions now. The Drainer upstream handles
-/// cast + binary collect. FileSink just writes the final payload bytes to disk.
+/// cast + binary collect. FileSink just writes the final drum bytes to disk.
 /// Think of it as a very loyal golden retriever. You throw it data, it writes it.
 ///
 /// ⚠️ `File::create` truncates if the file exists. No warning. No backup. Just gone.
@@ -64,17 +64,17 @@ impl FileSink {
 
 #[async_trait]
 impl Sink for FileSink {
-    /// 📡 Write a fully rendered payload to the file. One write_all call. That's the whole job.
+    /// 📡 Write a fully rendered drum to the file. One write_all call. That's the whole job.
     ///
     /// The Drainer already cast and binary-collected. We just dump bytes to disk.
     /// No parsing. No iterating over hits. No drama. Just I/O.
     /// "What do you do?" "I write bytes." "That's it?" "That's everything." 🦆
-    async fn drain(&mut self, payload: Payload) -> Result<()> {
+    async fn drain(&mut self, drum: Drum) -> Result<()> {
         trace!(
-            "📬 payload of {} bytes walked into the file sink — writing it all down",
-            payload.len()
+            "📬 drum of {} bytes walked into the file sink — writing it all down",
+            drum.len()
         );
-        self.file_buf.write_all(payload.as_bytes()).await?;
+        self.file_buf.write_all(drum.as_bytes()).await?;
         Ok(())
     }
 

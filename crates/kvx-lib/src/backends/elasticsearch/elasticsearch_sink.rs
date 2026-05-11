@@ -10,9 +10,9 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use tracing::{debug, trace, warn};
 
-use super::config::ElasticsearchSinkConfig;
-use crate::Payload;
+use crate::Drum;
 use crate::backends::Sink;
+use super::config::ElasticsearchSinkConfig;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  📦 Bulk Response Types — Elasticsearch's confessional booth
@@ -67,7 +67,7 @@ struct BulkItemError {
 
 /// 📡 The sink side of the Elasticsearch backend — pure I/O, zero buffering.
 ///
-/// `ElasticsearchSink` accepts a fully rendered NDJSON payload string and POSTs it
+/// `ElasticsearchSink` accepts a fully rendered NDJSON drum string and POSTs it
 /// to the `_bulk` API. That's it. No internal buffer. No cast logic.
 /// The Drainer upstream handles cast + binary collect + size management.
 ///
@@ -90,22 +90,22 @@ pub struct ElasticsearchSink {
 
 #[async_trait]
 impl Sink for ElasticsearchSink {
-    /// 📡 POST the fully rendered NDJSON payload to /_bulk. Pure I/O. No buffering. No drama.
+    /// 📡 POST the fully rendered NDJSON drum to /_bulk. Pure I/O. No buffering. No drama.
     ///
     /// The Drainer upstream already cast each doc and binary-collected them into
-    /// a single NDJSON payload string. We just fire it into the elastic void.
+    /// a single NDJSON drum string. We just fire it into the elastic void.
     /// "In a world where sinks had too many responsibilities... one refactor dared to simplify."
-    async fn drain(&mut self, payload: Payload) -> Result<()> {
+    async fn drain(&mut self, drum: Drum) -> Result<()> {
         debug!(
-            "📡 Sending {} bytes to /_bulk — the payload has left the building, Elvis-style",
-            payload.len()
+            "📡 Sending {} bytes to /_bulk — the drum has left the building, Elvis-style",
+            drum.len()
         );
-        self.submit_bulk_request(payload).await
+        self.submit_bulk_request(drum).await
             .context("💀 The bulk submission stumbled at the finish line. The NDJSON was rendered with love, the Drainer did its job, and the HTTP layer said 'nah.' Check connectivity. Check your cluster. Check your horoscope.")?;
         Ok(())
     }
 
-    /// 🗑️ Nothing to flush — we don't buffer. The Drainer sends complete payloads.
+    /// 🗑️ Nothing to flush — we don't buffer. The Drainer sends complete drums.
     /// Close is a no-op. The HTTP client drops cleanly. The connections pool says goodbye.
     /// Knock knock. Who's there? Nobody. The sink is closed. Go home. 🦆
     async fn close(&mut self) -> Result<()> {
@@ -207,20 +207,20 @@ impl ElasticsearchSink {
     ///
     /// The ES `_bulk` API returns HTTP 200 even when individual documents fail. This method
     /// parses the response, extracts only the NDJSON pairs that failed, and re-sends them.
-    /// Up to 10 retry rounds. Each round shrinks the payload to only the rejects.
+    /// Up to 10 retry rounds. Each round shrinks the drum to only the rejects.
     ///
     /// This prevents duplicate indexing for File→ES flows (auto-generated `_id`s) while still
     /// recovering transient per-item failures (shard pressure, version conflicts, etc.).
     ///
     /// 🔄 "I'm not mad, I'm just going to keep sending these until you accept them or I give up."
-    async fn submit_bulk_request(&self, request_body: Payload) -> Result<()> {
-        // -- 🔄 10 retries of just the failed docs — not the whole payload, we're not animals.
+    async fn submit_bulk_request(&self, request_body: Drum) -> Result<()> {
+        // -- 🔄 10 retries of just the failed docs — not the whole drum, we're not animals.
         // -- After 10 rounds of "please?" and "no", we accept our fate.
         const MAX_PARTIAL_RETRIES: usize = 10;
         // -- 🧮 Cap the number of individual error reasons we collect to avoid OOM on catastrophic failure
         const MAX_GRIEF_SAMPLES: usize = 5;
 
-        // Take ownership of the payload string — the retry loop will shrink it each round
+        // Take ownership of the drum string — the retry loop will shrink it each round
         let mut the_current_ndjson = request_body.0;
 
         for the_attempt in 0..=MAX_PARTIAL_RETRIES {
@@ -229,9 +229,7 @@ impl ElasticsearchSink {
 
             // Fast path: empty body means ES gave us nothing to parse — treat as success.
             if the_body_text.is_empty() {
-                trace!(
-                    "🚀 Bulk request landed — empty response body, assuming all docs indexed (living dangerously)"
-                );
+                trace!("🚀 Bulk request landed — empty response body, assuming all docs indexed (living dangerously)");
                 return Ok(());
             }
 
@@ -240,9 +238,7 @@ impl ElasticsearchSink {
 
             if !the_bulk_response.errors {
                 // -- ✅ No errors! Every doc made it! The singularity will happen before we see this log line in prod.
-                trace!(
-                    "🚀 Bulk request landed successfully — all documents accepted, zero casualties"
-                );
+                trace!("🚀 Bulk request landed successfully — all documents accepted, zero casualties");
                 return Ok(());
             }
 
@@ -258,11 +254,8 @@ impl ElasticsearchSink {
                             let the_doc_id = result._id.as_deref().unwrap_or("unknown");
                             the_reasons_for_grief.push(format!(
                                 "item[{}] id={} status={} type={} reason={}",
-                                the_item_index,
-                                the_doc_id,
-                                result.status,
-                                the_rejection_letter.error_type,
-                                the_rejection_letter.reason
+                                the_item_index, the_doc_id, result.status,
+                                the_rejection_letter.error_type, the_rejection_letter.reason
                             ));
                         }
                     }
@@ -276,8 +269,7 @@ impl ElasticsearchSink {
             if the_body_count > MAX_GRIEF_SAMPLES {
                 warn!(
                     "💀 ... and {} more failed items not shown (we capped the grief at {})",
-                    the_body_count - MAX_GRIEF_SAMPLES,
-                    MAX_GRIEF_SAMPLES
+                    the_body_count - MAX_GRIEF_SAMPLES, MAX_GRIEF_SAMPLES
                 );
             }
 
@@ -295,8 +287,8 @@ impl ElasticsearchSink {
             }
 
             // 🔄 Extract only the failed NDJSON action/doc pairs for retry
-            let the_retry_payload = extract_failed_pairs(&the_current_ndjson, &the_bulk_response);
-            if the_retry_payload.is_empty() {
+            let the_retry_drum = extract_failed_pairs(&the_current_ndjson, &the_bulk_response);
+            if the_retry_drum.is_empty() {
                 // Mismatch between NDJSON lines and response items — can't safely correlate
                 anyhow::bail!(
                     "💀 {} documents failed but we couldn't extract them for retry — \
@@ -311,12 +303,10 @@ impl ElasticsearchSink {
             warn!(
                 "🔄 Retrying {} failed docs (attempt {}/{}) — the rest made it through, \
                  these just need another chance, like a second audition",
-                the_body_count,
-                the_attempt + 1,
-                MAX_PARTIAL_RETRIES
+                the_body_count, the_attempt + 1, MAX_PARTIAL_RETRIES
             );
 
-            the_current_ndjson = the_retry_payload;
+            the_current_ndjson = the_retry_drum;
         }
 
         // -- 🦆 The borrow checker approved this unreachable. The compiler trusts us. The runtime... we'll see.
@@ -330,12 +320,8 @@ impl ElasticsearchSink {
     /// -- 🦆 "I'm just the postman, I don't read the mail."
     async fn send_bulk_post(&self, the_ndjson_body: &str) -> Result<String> {
         let bulk_url = match self.sink_config.index {
-            Some(ref index_name) => format!(
-                "{}/{}/_bulk",
-                self.sink_config.url.trim_end_matches('/'),
-                index_name
-            ),
-            None => format!("{}/_bulk", self.sink_config.url.trim_end_matches('/')),
+            Some(ref index_name) => format!("{}/{}/_bulk", self.sink_config.url.trim_end_matches('/'), index_name),
+            None => format!("{}/_bulk", self.sink_config.url.trim_end_matches('/'))
         };
 
         let mut request = self
@@ -363,7 +349,7 @@ impl ElasticsearchSink {
             // -- And the network layer, that capricious deity of bytes and routing tables,
             // -- looked upon our work... and dropped the packet. No response. No closure.
             // -- Just an Err. Like sending a love letter and getting a ECONNRESET back.
-            .context("💀 The bulk request never made it to Elasticsearch. We launched the payload into the network and the network responded with what can only be described as 'not vibing with it.' Check connectivity, check timeouts, and check your feelings.")?;
+            .context("💀 The bulk request never made it to Elasticsearch. We launched the drum into the network and the network responded with what can only be described as 'not vibing with it.' Check connectivity, check timeouts, and check your feelings.")?;
 
         let status = response.status();
         if !status.is_success() {
@@ -383,7 +369,7 @@ impl ElasticsearchSink {
     }
 }
 
-/// 🔄 Extracts only the failed NDJSON action/doc pairs from the original payload.
+/// 🔄 Extracts only the failed NDJSON action/doc pairs from the original drum.
 ///
 /// NDJSON bulk format: lines `[2*i]` = action, lines `[2*i + 1]` = document, for item `i`.
 /// `bulk_response.items[i]` corresponds to NDJSON pair `i`. We grab pairs where `.error.is_some()`.
@@ -434,7 +420,7 @@ fn extract_failed_pairs(the_original_ndjson: &str, the_bulk_response: &BulkRespo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Payload;
+    use crate::Drum;
     use crate::backends::{CommonSinkConfig, Sink};
     use serde_json::json;
     use wiremock::matchers::{body_string, header, method, path};
@@ -528,10 +514,7 @@ mod tests {
         // 📡 dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk = base64("the_user:the_password")
         Mock::given(method("GET"))
             .and(path("/"))
-            .and(header(
-                "Authorization",
-                "Basic dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk",
-            ))
+            .and(header("Authorization", "Basic dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk"))
             .respond_with(ResponseTemplate::new(200))
             .expect(1)
             .mount(&mock_server)
@@ -678,10 +661,7 @@ mod tests {
         // 📡 dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk = base64("the_user:the_password")
         Mock::given(method("GET"))
             .and(path("/economy-index"))
-            .and(header(
-                "Authorization",
-                "Basic dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk",
-            ))
+            .and(header("Authorization", "Basic dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk"))
             .respond_with(ResponseTemplate::new(200))
             .expect(1)
             .mount(&mock_server)
@@ -747,8 +727,8 @@ mod tests {
         let config = make_config(&mock_server.uri());
         let mut the_eager_sink = ElasticsearchSink::new(config).await?;
 
-        // 🚀 Act — fire the payload into the elastic void
-        let the_ndjson = Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string());
+        // 🚀 Act — fire the drum into the elastic void
+        let the_ndjson = Drum::from("{\"index\":{}}\n{\"id\":1}\n".to_string());
         let the_result = the_eager_sink.drain(the_ndjson).await;
 
         // 🎯 Assert — the void accepted our offering ✅
@@ -770,9 +750,8 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/_bulk"))
             .respond_with(
-                ResponseTemplate::new(400).set_body_string(
-                    "mapping_exception: your docs are bad and you should feel bad",
-                ),
+                ResponseTemplate::new(400)
+                    .set_body_string("mapping_exception: your docs are bad and you should feel bad"),
             )
             .mount(&mock_server)
             .await;
@@ -781,16 +760,13 @@ mod tests {
         let mut the_judged_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — submit docs that ES will roast
-        let the_rejected_payload = Payload::from("{\"index\":{}}\n{\"bad\":\"doc\"}\n".to_string());
-        let the_harsh_verdict = the_judged_sink.drain(the_rejected_payload).await;
+        let the_rejected_drum = Drum::from("{\"index\":{}}\n{\"bad\":\"doc\"}\n".to_string());
+        let the_harsh_verdict = the_judged_sink.drain(the_rejected_drum).await;
 
         // 🎯 Assert — should fail, error chain should contain status info
         // ⚠️ anyhow's .to_string() only shows the outermost .context() message.
         // The "400 Bad Request" lives deeper in the chain. Use {:?} to see the full story.
-        assert!(
-            the_harsh_verdict.is_err(),
-            "💀 400 response should cause drain() to fail"
-        );
+        assert!(the_harsh_verdict.is_err(), "💀 400 response should cause drain() to fail");
         let the_full_error_chain = format!("{:?}", the_harsh_verdict.unwrap_err());
         assert!(
             the_full_error_chain.contains("400"),
@@ -821,9 +797,7 @@ mod tests {
         let mut the_unlucky_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        let the_500_result = the_unlucky_sink
-            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
-            .await;
+        let the_500_result = the_unlucky_sink.drain(Drum::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
 
         // 🎯 Assert — 500 is not 200. Math checks out.
         assert!(
@@ -853,9 +827,7 @@ mod tests {
         let mut the_proper_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_proper_sink
-            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
-            .await?;
+        the_proper_sink.drain(Drum::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock's header matcher confirms Content-Type ✅
 
@@ -883,9 +855,7 @@ mod tests {
         let mut the_vip_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_vip_sink
-            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
-            .await?;
+        the_vip_sink.drain(Drum::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock confirms ApiKey header was sent ✅
 
@@ -908,10 +878,7 @@ mod tests {
         // 📡 dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk = base64("the_user:the_password")
         Mock::given(method("POST"))
             .and(path("/_bulk"))
-            .and(header(
-                "Authorization",
-                "Basic dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk",
-            ))
+            .and(header("Authorization", "Basic dGhlX3VzZXI6dGhlX3Bhc3N3b3Jk"))
             .respond_with(ResponseTemplate::new(200))
             .expect(1)
             .mount(&mock_server)
@@ -924,9 +891,7 @@ mod tests {
         let mut the_basic_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_basic_sink
-            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
-            .await?;
+        the_basic_sink.drain(Drum::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock confirms Basic auth was sent ✅
 
@@ -953,9 +918,7 @@ mod tests {
         let mut the_naked_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_naked_sink
-            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
-            .await?;
+        the_naked_sink.drain(Drum::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — request was received. No auth configured = no auth sent. ✅
 
@@ -986,28 +949,26 @@ mod tests {
         let mut the_decisive_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_decisive_sink
-            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
-            .await?;
+        the_decisive_sink.drain(Drum::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock confirms ApiKey won the auth battle ✅
 
         Ok(())
     }
 
-    /// 🧪 Payload body arrives exactly as sent. No mutation. No trimming. Pure NDJSON.
+    /// 🧪 Drum body arrives exactly as sent. No mutation. No trimming. Pure NDJSON.
     #[tokio::test]
-    async fn the_one_where_the_payload_body_arrives_intact() -> Result<()> {
-        // 🔧 Arrange — a carefully crafted payload that must survive the journey
+    async fn the_one_where_the_drum_body_arrives_intact() -> Result<()> {
+        // 🔧 Arrange — a carefully crafted drum that must survive the journey
         let mock_server = MockServer::start().await;
         mount_root_ping(&mock_server).await;
 
-        let the_sacred_payload =
+        let the_sacred_drum =
             "{\"index\":{}}\n{\"id\":42,\"confession\":\"I still use println for debugging\"}\n";
 
         Mock::given(method("POST"))
             .and(path("/_bulk"))
-            .and(body_string(the_sacred_payload))
+            .and(body_string(the_sacred_drum))
             .respond_with(ResponseTemplate::new(200))
             .expect(1)
             .mount(&mock_server)
@@ -1017,9 +978,7 @@ mod tests {
         let mut the_faithful_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_faithful_sink
-            .drain(Payload::from(the_sacred_payload.to_string()))
-            .await?;
+        the_faithful_sink.drain(Drum::from(the_sacred_drum.to_string())).await?;
 
         // 🎯 Assert — wiremock's body_string matcher confirms byte-perfect delivery ✅
 
@@ -1050,9 +1009,7 @@ mod tests {
         let mut the_trusting_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — send docs into the welcoming void
-        let the_result = the_trusting_sink
-            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
-            .await;
+        let the_result = the_trusting_sink.drain(Drum::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
 
         // 🎯 Assert — errors: false means genuine success, not polite lying ✅
         assert!(
@@ -1071,7 +1028,7 @@ mod tests {
     #[tokio::test]
     async fn the_one_where_bulk_response_has_errors_and_dreams_die() -> Result<()> {
         // 🔧 Arrange — ES returns 200 but 2 out of 4 docs were rejected
-        // Payload has 4 action/doc pairs to match the 4-item response on first call
+        // Drum has 4 action/doc pairs to match the 4-item response on first call
         let mock_server = MockServer::start().await;
         mount_root_ping(&mock_server).await;
 
@@ -1083,8 +1040,7 @@ mod tests {
 
         // -- 📡 First call: 4 items, 2 fail. Subsequent calls: 2 items, both still fail.
         let the_dynamic_responder = move |_req: &wiremock::Request| {
-            let the_call_number =
-                the_counter_for_closure.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let the_call_number = the_counter_for_closure.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let the_body = if the_call_number == 0 {
                 // -- 💀 Round 1: 4 docs sent, 2 rejected. Items 1 and 3 succeed, 2 and 4 fail.
                 json!({
@@ -1131,20 +1087,17 @@ mod tests {
         let mut the_deceived_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — send 4 docs, 2 get rejected, retry loop exhausts on the 2 persistent failures
-        let the_four_doc_payload = Payload::from(
+        let the_four_doc_drum = Drum::from(
             "{\"index\":{}}\n{\"doc\":1}\n\
              {\"index\":{}}\n{\"doc\":2}\n\
              {\"index\":{}}\n{\"doc\":3}\n\
              {\"index\":{}}\n{\"doc\":4}\n"
                 .to_string(),
         );
-        let the_bitter_truth = the_deceived_sink.drain(the_four_doc_payload).await;
+        let the_bitter_truth = the_deceived_sink.drain(the_four_doc_drum).await;
 
         // 🎯 Assert — drain() must fail after retrying the 2 rejected docs
-        assert!(
-            the_bitter_truth.is_err(),
-            "💀 200 with errors:true must cause drain() to fail. Silent doc loss is not a feature."
-        );
+        assert!(the_bitter_truth.is_err(), "💀 200 with errors:true must cause drain() to fail. Silent doc loss is not a feature.");
 
         let the_autopsy_report = format!("{:?}", the_bitter_truth.unwrap_err());
         // -- 🧮 Verify the error mentions the failure count and retry exhaustion
@@ -1194,22 +1147,18 @@ mod tests {
         let mut the_doomed_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — send 2 docs, both rejected, retry loop sends same 2 each time
-        let the_two_doc_payload = Payload::from(
+        let the_two_doc_drum = Drum::from(
             "{\"index\":{}}\n{\"doc\":1}\n\
              {\"index\":{}}\n{\"doc\":2}\n"
                 .to_string(),
         );
-        let the_massacre = the_doomed_sink.drain(the_two_doc_payload).await;
+        let the_massacre = the_doomed_sink.drain(the_two_doc_drum).await;
 
         // 🎯 Assert — 2 out of 2 failed after 10 retries
-        assert!(
-            the_massacre.is_err(),
-            "💀 100% rejection rate should absolutely be an error"
-        );
+        assert!(the_massacre.is_err(), "💀 100% rejection rate should absolutely be an error");
         let the_damage_report = format!("{:?}", the_massacre.unwrap_err());
         assert!(
-            the_damage_report.contains("2")
-                && the_damage_report.contains("strict_dynamic_mapping_exception"),
+            the_damage_report.contains("2") && the_damage_report.contains("strict_dynamic_mapping_exception"),
             "💀 Error should count all failures and name the error type, got: {the_damage_report}"
         );
 
@@ -1234,9 +1183,7 @@ mod tests {
         let mut the_flexible_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — send docs, get a weird response
-        let the_result = the_flexible_sink
-            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
-            .await;
+        let the_result = the_flexible_sink.drain(Drum::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
 
         // 🎯 Assert — serde defaults mean errors=false, so we treat it as success ✅
         assert!(
@@ -1256,9 +1203,7 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/_bulk"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_string("<html>502 Bad Gateway</html>"),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_string("<html>502 Bad Gateway</html>"))
             .mount(&mock_server)
             .await;
 
@@ -1266,9 +1211,7 @@ mod tests {
         let mut the_confused_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — send docs, receive HTML. A nightmare scenario.
-        let the_what = the_confused_sink
-            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
-            .await;
+        let the_what = the_confused_sink.drain(Drum::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
 
         // 🎯 Assert — invalid JSON body on a 200 should fail, not silently succeed
         assert!(
@@ -1297,9 +1240,7 @@ mod tests {
         let mut the_optimist_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        let the_result = the_optimist_sink
-            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
-            .await;
+        let the_result = the_optimist_sink.drain(Drum::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
 
         // 🎯 Assert — empty body = fast path success ✅
         assert!(
@@ -1364,13 +1305,13 @@ mod tests {
         let mut the_hopeful_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — send 3 action/doc pairs, expect retry to save the 1 that failed
-        let the_payload = Payload::from(
+        let the_drum = Drum::from(
             "{\"index\":{}}\n{\"doc\":1}\n\
              {\"index\":{}}\n{\"doc\":2}\n\
              {\"index\":{}}\n{\"doc\":3}\n"
                 .to_string(),
         );
-        let the_result = the_hopeful_sink.drain(the_payload).await;
+        let the_result = the_hopeful_sink.drain(the_drum).await;
 
         // 🎯 Assert — success after retry! The montage worked!
         assert!(
@@ -1424,14 +1365,11 @@ mod tests {
         let mut the_persistent_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — send 1 doc that will be rejected 11 times
-        let the_doomed_payload = Payload::from("{\"index\":{}}\n{\"doc\":42}\n".to_string());
-        let the_inevitable = the_persistent_sink.drain(the_doomed_payload).await;
+        let the_doomed_drum = Drum::from("{\"index\":{}}\n{\"doc\":42}\n".to_string());
+        let the_inevitable = the_persistent_sink.drain(the_doomed_drum).await;
 
         // 🎯 Assert — Err after exhausting all retries
-        assert!(
-            the_inevitable.is_err(),
-            "💀 11 rejections should mean we give up"
-        );
+        assert!(the_inevitable.is_err(), "💀 11 rejections should mean we give up");
 
         let the_epitaph = format!("{:?}", the_inevitable.unwrap_err());
         assert!(
@@ -1504,18 +1442,16 @@ mod tests {
         let mut the_slash_aware_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_slash_aware_sink
-            .drain(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string()))
-            .await?;
+        the_slash_aware_sink.drain(Drum::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock's path("/_bulk") + expect(1) confirms correct URL ✅
 
         Ok(())
     }
 
-    /// 🧪 Empty payload — sent as-is. The sink doesn't validate content. YOLO. 🦆
+    /// 🧪 Empty drum — sent as-is. The sink doesn't validate content. YOLO. 🦆
     #[tokio::test]
-    async fn the_one_where_we_send_an_empty_payload_because_yolo() -> Result<()> {
+    async fn the_one_where_we_send_an_empty_drum_because_yolo() -> Result<()> {
         // 🔧 Arrange — accepting the void
         let mock_server = MockServer::start().await;
         mount_root_ping(&mock_server).await;
@@ -1530,12 +1466,12 @@ mod tests {
         let mut the_yolo_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — send absolutely nothing
-        let the_existential_result = the_yolo_sink.drain(Payload::from(String::new())).await;
+        let the_existential_result = the_yolo_sink.drain(Drum::from(String::new())).await;
 
         // 🎯 Assert — the sink sent it, ES accepted it. Not our circus, not our monkeys.
         assert!(
             the_existential_result.is_ok(),
-            "💀 Empty payload with 200 response should be Ok. The sink doesn't judge content."
+            "💀 Empty drum with 200 response should be Ok. The sink doesn't judge content."
         );
 
         Ok(())

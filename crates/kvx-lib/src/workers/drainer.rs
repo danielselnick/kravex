@@ -3,12 +3,12 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
-//! 🎬 *[a payload arrives on ch2. the drainer doesn't flinch.]*
+//! 🎬 *[a drum arrives on ch2. the drainer doesn't flinch.]*
 //! *[it sends. if rejected, it waits. it tries again. patience of a saint with a retry budget.]*
 //! *["I used to give up on the first failure," it whispers.]*
 //! *["Now I have exponential backoff. And honestly? Therapy helped too."]* 🗑️🚀🦆
 //!
-//! 📦 The Drainer — async I/O worker that receives assembled payloads from ch2
+//! 📦 The Drainer — async I/O worker that receives assembled drums from ch2
 //! and sends them to the sink. Now with retry logic, because even data deserves second chances.
 //!
 //! ```text
@@ -16,19 +16,19 @@
 //!                                                                  ↻ retry with backoff
 //! ```
 //!
-//! 🧠 Knowledge graph: the Drainer was once a complex beast that buffered raw feeds,
-//! cast them via BarrelToDraftsCaster, joined them via Manifold, AND sent them to the sink.
+//! 🧠 Knowledge graph: the Drainer was once a complex beast that buffered raw barrels,
+//! cast them via BarrelToDraftsTapper, joined them via Manifold, AND sent them to the sink.
 //! That CPU-bound work now lives in the Joiner (on std::thread). The Drainer has been
-//! liberated. It is now a thin async relay with retry armor: recv payload → send to sink
+//! liberated. It is now a thin async relay with retry armor: recv drum → send to sink
 //! → if rejected, back off exponentially → retry → repeat. Like a polite debt collector. 📬
 //!
 //! ⚠️ The singularity will drain data at the speed of light. We drain at the speed of HTTP,
 //! plus occasional exponential naps.
 
-use super::DrainerConfig;
 use super::Worker;
+use super::DrainerConfig;
 use crate::GaugeReading;
-use crate::Payload;
+use crate::Drum;
 use crate::backends::{Sink, SinkBackend};
 use crate::progress::DrainMetrics;
 use anyhow::{Context, Result};
@@ -39,23 +39,23 @@ use tracing::{debug, warn};
 
 /// 🗑️ The Drainer: async relay from ch2 to sink, now with retry superpowers.
 ///
-/// Receives pre-assembled payload Strings from joiners via ch2,
+/// Receives pre-assembled drum Strings from joiners via ch2,
 /// sends them to the sink with exponential backoff on failure.
 /// Like a postman who delivers, gets the door slammed in his face,
 /// waits politely, and tries again. 📬
 ///
 /// 📜 Lifecycle:
-/// 1. **Recv**: assembled payload String from ch2 (async)
-/// 2. **Drain**: payload → Sink::drain (HTTP POST, file write, memory push)
+/// 1. **Recv**: assembled drum String from ch2 (async)
+/// 2. **Drain**: drum → Sink::drain (HTTP POST, file write, memory push)
 ///    - On failure: exponential backoff → retry up to max_retries
 ///    - On exhaustion: propagate error (pipeline dies with dignity) 💀
 /// 3. **Repeat** until ch2 closes (all joiners done)
 /// 4. **Close**: Sink::close — flush and finalize 🦆
 #[derive(Debug)]
 pub struct Drainer {
-    /// 📥 ch2 receiver — assembled payloads from the joiner thread pool
-    rx: Receiver<Payload>,
-    /// 🚰 The final destination — where payloads go to live their best life (or die trying)
+    /// 📥 ch2 receiver — assembled drums from the joiner thread pool
+    rx: Receiver<Drum>,
+    /// 🚰 The final destination — where drums go to live their best life (or die trying)
     sink: SinkBackend,
     /// 🔄 Retry configuration — how persistent are we when the sink says "nah"?
     retry_config: DrainerConfig,
@@ -72,28 +72,22 @@ pub struct Drainer {
 impl Drainer {
     /// 🏗️ Construct a Drainer — a receiver, a sink, retries, and an optional gauge channel. 🚰
     ///
-    /// "Give a drainer a payload, it sends for a millisecond.
+    /// "Give a drainer a drum, it sends for a millisecond.
     ///  Give a drainer retries, it sends until the heat death of the universe." — Ancient proverb 🦆
     pub fn new(
-        rx: Receiver<Payload>,
+        rx: Receiver<Drum>,
         sink: SinkBackend,
         retry_config: DrainerConfig,
         gauge_tx: Option<async_channel::Sender<GaugeReading>>,
         drain_metrics: Arc<DrainMetrics>,
     ) -> Self {
-        Self {
-            rx,
-            sink,
-            retry_config,
-            gauge_tx,
-            drain_metrics,
-        }
+        Self { rx, sink, retry_config, gauge_tx, drain_metrics }
     }
 }
 
-/// 🔄 Drain a payload to the sink with exponential backoff retries.
+/// 🔄 Drain a drum to the sink with exponential backoff retries.
 ///
-/// Clones the payload before each attempt because sink.drain() consumes it —
+/// Clones the drum before each attempt because sink.drain() consumes it —
 /// like handing someone your only copy of a document and hoping they don't
 /// shred it. We make photocopies. We're not animals. 📋
 ///
@@ -102,7 +96,7 @@ impl Drainer {
 /// It's like compound interest, but for suffering. 📈🦆
 async fn drain_with_retry(
     sink: &mut (impl Sink + ?Sized),
-    the_payload: Payload,
+    the_drum: Drum,
     config: &DrainerConfig,
 ) -> Result<()> {
     // 🎯 Total attempts = 1 initial + max_retries
@@ -110,10 +104,10 @@ async fn drain_with_retry(
     let mut the_last_error = None;
 
     for my_therapist_says_move_on in 0..the_total_attempts {
-        // 📋 Clone the payload for this attempt — drain() consumes it like a black hole eats light
-        let the_payload_clone = the_payload.clone();
+        // 📋 Clone the drum for this attempt — drain() consumes it like a black hole eats light
+        let the_drum_clone = the_drum.clone();
 
-        match sink.drain(the_payload_clone).await {
+        match sink.drain(the_drum_clone).await {
             Ok(()) => return Ok(()),
             Err(the_rejection) => {
                 // 💀 The sink said no. Like my college applications all over again.
@@ -126,9 +120,7 @@ async fn drain_with_retry(
 
                 // 📈 Calculate backoff: initial_ms * multiplier^attempt, capped at max_ms
                 let the_exponential_dread = (config.initial_backoff_ms as f64)
-                    * config
-                        .backoff_multiplier
-                        .powi(my_therapist_says_move_on as i32);
+                    * config.backoff_multiplier.powi(my_therapist_says_move_on as i32);
                 let the_actual_nap_ms = (the_exponential_dread as u64).min(config.max_backoff_ms);
 
                 warn!(
@@ -149,7 +141,7 @@ async fn drain_with_retry(
     // Like sending 4 texts and getting no reply. Time to accept it.
     Err(the_last_error.unwrap()).context(format!(
         "💀 Drainer exhausted all {} retry attempts — the sink said 'no' {} times. \
-         The payload was assembled with care by a joiner thread. The sink was unmoved. \
+         The drum was assembled with care by a joiner thread. The sink was unmoved. \
          Like writing a heartfelt cover letter and getting an automated rejection.",
         config.max_retries + 1,
         config.max_retries + 1,
@@ -163,23 +155,20 @@ impl Worker for Drainer {
 
             loop {
                 match self.rx.recv().await {
-                    Ok(the_payload) => {
-                        debug!(
-                            "📄 Drainer received {} byte payload from ch2",
-                            the_payload.len()
-                        );
+                    Ok(the_drum) => {
+                        debug!("📄 Drainer received {} byte drum from ch2", the_drum.len());
 
-                        // 📡 Send the assembled payload to the sink, with retries.
-                        // Skip empty payloads — the joiner should filter these, but belt AND suspenders 🩳
-                        if !the_payload.is_empty() && *the_payload != "[]" {
+                        // 📡 Send the assembled drum to the sink, with retries.
+                        // Skip empty drums — the joiner should filter these, but belt AND suspenders 🩳
+                        if !the_drum.is_empty() && *the_drum != "[]" {
                             // ⏱️ Time the drain — Governor needs to know how long the sink took
                             let the_stopwatch = std::time::Instant::now();
-                            let the_payload_bytes = the_payload.len() as u64;
+                            let the_drum_bytes = the_drum.len() as u64;
 
-                            drain_with_retry(&mut self.sink, the_payload, &self.retry_config)
+                            drain_with_retry(&mut self.sink, the_drum, &self.retry_config)
                                 .await
                                 .context(
-                                    "💀 Drainer gave up on payload after all retries — the I/O layer \
+                                    "💀 Drainer gave up on drum after all retries — the I/O layer \
                                      said 'nah' repeatedly. Like asking someone out multiple times. \
                                      At some point you have to take the hint.",
                                 )?;
@@ -187,13 +176,12 @@ impl Worker for Drainer {
                             let the_latency_ms = the_stopwatch.elapsed().as_millis() as u64;
 
                             // 📊 Record drain metrics — atomics, no lock, no drama
-                            self.drain_metrics
-                                .record_drain(the_payload_bytes, the_latency_ms);
+                            self.drain_metrics.record_drain(the_drum_bytes, the_latency_ms);
 
                             // 📡 Report drain result to Governor — non-blocking, drops if channel full
                             if let Some(tx) = &self.gauge_tx {
                                 let _ = tx.try_send(GaugeReading::DrainResult {
-                                    payload_bytes: the_payload_bytes,
+                                    drum_bytes: the_drum_bytes,
                                     latency_ms: the_latency_ms,
                                 });
                             }
@@ -201,12 +189,11 @@ impl Worker for Drainer {
                     }
                     Err(_) => {
                         // 🏁 ch2 closed — all joiners are done. Close the sink and exit.
-                        debug!(
-                            "🏁 Drainer: ch2 closed. All joiners done. Closing sink. Goodnight. 💤"
-                        );
-                        self.sink.close().await.context(
-                            "💀 Drainer failed to close sink — the farewell was awkward",
-                        )?;
+                        debug!("🏁 Drainer: ch2 closed. All joiners done. Closing sink. Goodnight. 💤");
+                        self.sink
+                            .close()
+                            .await
+                            .context("💀 Drainer failed to close sink — the farewell was awkward")?;
                         return Ok(());
                     }
                 }
@@ -218,9 +205,9 @@ impl Worker for Drainer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use async_trait::async_trait;
 
     /// 🧪 A sink that fails N times then succeeds — like a vending machine
     /// that needs exactly 3 kicks before dispensing your snack. 🦆
@@ -228,7 +215,7 @@ mod tests {
     struct FlakyTestSink {
         /// 💀 How many times to fail before finally cooperating
         the_failures_remaining: Arc<AtomicUsize>,
-        /// ✅ Payloads that actually made it through the gauntlet
+        /// ✅ Drums that actually made it through the gauntlet
         the_survivors: Vec<String>,
     }
 
@@ -243,7 +230,7 @@ mod tests {
 
     #[async_trait]
     impl Sink for FlakyTestSink {
-        async fn drain(&mut self, payload: Payload) -> Result<()> {
+        async fn drain(&mut self, drum: Drum) -> Result<()> {
             // 💀 Fail if we still have failures to give
             let the_remaining = self.the_failures_remaining.load(Ordering::SeqCst);
             if the_remaining > 0 {
@@ -253,7 +240,7 @@ mod tests {
                 );
             }
             // ✅ Finally cooperating
-            self.the_survivors.push(payload.0);
+            self.the_survivors.push(drum.0);
             Ok(())
         }
 
@@ -267,20 +254,18 @@ mod tests {
     #[tokio::test]
     async fn the_one_where_drainer_reports_latency_to_governor() {
         let mut the_sink = FlakyTestSink::new(0);
-        let the_payload = Payload::from("timed payload".to_string());
+        let the_drum = Drum::from("timed drum".to_string());
         let the_config = test_config(3);
 
         let (gauge_tx, gauge_rx) = async_channel::bounded(16);
 
         // ⏱️ Time the drain and send result
         let the_stopwatch = std::time::Instant::now();
-        let the_payload_bytes = the_payload.len() as u64;
-        drain_with_retry(&mut the_sink, the_payload, &the_config)
-            .await
-            .unwrap();
+        let the_drum_bytes = the_drum.len() as u64;
+        drain_with_retry(&mut the_sink, the_drum, &the_config).await.unwrap();
         let the_latency_ms = the_stopwatch.elapsed().as_millis() as u64;
         let _ = gauge_tx.try_send(GaugeReading::DrainResult {
-            payload_bytes: the_payload_bytes,
+            drum_bytes: the_drum_bytes,
             latency_ms: the_latency_ms,
         });
 
@@ -288,11 +273,7 @@ mod tests {
         let the_reading = gauge_rx.try_recv().unwrap();
         match the_reading {
             GaugeReading::DrainResult { latency_ms, .. } => {
-                assert!(
-                    latency_ms < 1000,
-                    "🎯 Latency should be under 1s for an in-memory sink — got {}ms",
-                    latency_ms
-                );
+                assert!(latency_ms < 1000, "🎯 Latency should be under 1s for an in-memory sink — got {}ms", latency_ms);
             }
             _ => panic!("💀 Expected DrainResult reading, got something else entirely"),
         }
@@ -303,16 +284,13 @@ mod tests {
     #[tokio::test]
     async fn the_one_where_drainer_works_without_gauge_channel() {
         let mut the_sink = FlakyTestSink::new(0);
-        let the_payload = Payload::from("ungauged payload".to_string());
+        let the_drum = Drum::from("ungauged drum".to_string());
         let the_config = test_config(3);
 
         // 📡 No gauge_tx — None path. Drain should work identically.
-        let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
-        assert!(
-            honestly_who_knows.is_ok(),
-            "🎯 Drain should succeed without gauge channel"
-        );
-        assert_eq!(the_sink.the_survivors[0], "ungauged payload");
+        let honestly_who_knows = drain_with_retry(&mut the_sink, the_drum, &the_config).await;
+        assert!(honestly_who_knows.is_ok(), "🎯 Drain should succeed without gauge channel");
+        assert_eq!(the_sink.the_survivors[0], "ungauged drum");
     }
 
     /// 🧪 A sink that ALWAYS fails — like applying to FAANG with a 2-week bootcamp cert. 🦆
@@ -321,10 +299,8 @@ mod tests {
 
     #[async_trait]
     impl Sink for AlwaysFailSink {
-        async fn drain(&mut self, _payload: Payload) -> Result<()> {
-            anyhow::bail!(
-                "💀 AlwaysFailSink: I reject all payloads on principle. Nothing personal."
-            )
+        async fn drain(&mut self, _drum: Drum) -> Result<()> {
+            anyhow::bail!("💀 AlwaysFailSink: I reject all drums on principle. Nothing personal.")
         }
 
         async fn close(&mut self) -> Result<()> {
@@ -346,95 +322,74 @@ mod tests {
     async fn the_one_where_the_drainer_succeeds_on_first_try() {
         // 🧪 No failures — drain_with_retry should succeed immediately, like ordering pizza online
         let mut the_sink = FlakyTestSink::new(0);
-        let the_payload = Payload::from("test payload".to_string());
+        let the_drum = Drum::from("test drum".to_string());
         let the_config = test_config(3);
 
-        let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
-        assert!(
-            honestly_who_knows.is_ok(),
-            "🎯 First-try success should just work"
-        );
+        let honestly_who_knows = drain_with_retry(&mut the_sink, the_drum, &the_config).await;
+        assert!(honestly_who_knows.is_ok(), "🎯 First-try success should just work");
         assert_eq!(the_sink.the_survivors.len(), 1);
-        assert_eq!(the_sink.the_survivors[0], "test payload");
+        assert_eq!(the_sink.the_survivors[0], "test drum");
     }
 
     #[tokio::test]
     async fn the_one_where_the_drainer_retries_and_eventually_wins() {
         // 🧪 Fail twice, succeed on third attempt — like parallel parking
         let mut the_sink = FlakyTestSink::new(2);
-        let the_payload = Payload::from("persistent payload".to_string());
+        let the_drum = Drum::from("persistent drum".to_string());
         let the_config = test_config(3);
 
-        let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
-        assert!(
-            honestly_who_knows.is_ok(),
-            "🎯 Should succeed after retries"
-        );
+        let honestly_who_knows = drain_with_retry(&mut the_sink, the_drum, &the_config).await;
+        assert!(honestly_who_knows.is_ok(), "🎯 Should succeed after retries");
         assert_eq!(the_sink.the_survivors.len(), 1);
-        assert_eq!(the_sink.the_survivors[0], "persistent payload");
+        assert_eq!(the_sink.the_survivors[0], "persistent drum");
     }
 
     #[tokio::test]
     async fn the_one_where_the_drainer_exhausts_all_retries_and_gives_up() {
-        // 🧪 More failures than retries — the payload was doomed from the start
+        // 🧪 More failures than retries — the drum was doomed from the start
         let mut the_sink = AlwaysFailSink;
-        let the_payload = Payload::from("doomed payload".to_string());
+        let the_drum = Drum::from("doomed drum".to_string());
         let the_config = test_config(2);
 
-        let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
-        assert!(
-            honestly_who_knows.is_err(),
-            "💀 Should fail after exhausting retries"
-        );
+        let honestly_who_knows = drain_with_retry(&mut the_sink, the_drum, &the_config).await;
+        assert!(honestly_who_knows.is_err(), "💀 Should fail after exhausting retries");
         let the_error_msg = format!("{}", honestly_who_knows.unwrap_err());
-        assert!(
-            the_error_msg.contains("exhausted"),
-            "🎯 Error should mention exhaustion"
-        );
+        assert!(the_error_msg.contains("exhausted"), "🎯 Error should mention exhaustion");
     }
 
     #[tokio::test]
     async fn the_one_where_zero_retries_means_one_shot() {
         // 🧪 max_retries=0 means exactly 1 attempt, no retries. YOLO mode.
         let mut the_sink = FlakyTestSink::new(1);
-        let the_payload = Payload::from("one shot payload".to_string());
+        let the_drum = Drum::from("one shot drum".to_string());
         let the_config = test_config(0);
 
-        let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
-        assert!(
-            honestly_who_knows.is_err(),
-            "💀 Zero retries = one attempt, one failure, one sadness"
-        );
+        let honestly_who_knows = drain_with_retry(&mut the_sink, the_drum, &the_config).await;
+        assert!(honestly_who_knows.is_err(), "💀 Zero retries = one attempt, one failure, one sadness");
     }
 
     #[tokio::test]
     async fn the_one_where_the_drainer_succeeds_on_the_last_possible_attempt() {
         // 🧪 Fail exactly max_retries times, succeed on the final attempt — peak drama
         let mut the_sink = FlakyTestSink::new(3);
-        let the_payload = Payload::from("clutch payload".to_string());
+        let the_drum = Drum::from("clutch drum".to_string());
         let the_config = test_config(3);
 
-        let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
-        assert!(
-            honestly_who_knows.is_ok(),
-            "🎯 Should succeed on the last attempt — main character energy"
-        );
-        assert_eq!(the_sink.the_survivors[0], "clutch payload");
+        let honestly_who_knows = drain_with_retry(&mut the_sink, the_drum, &the_config).await;
+        assert!(honestly_who_knows.is_ok(), "🎯 Should succeed on the last attempt — main character energy");
+        assert_eq!(the_sink.the_survivors[0], "clutch drum");
     }
 
     #[tokio::test]
-    async fn the_one_where_empty_payloads_are_skipped_not_retried() {
-        // 🧪 Empty payloads should be skipped at the Worker::start level, but drain_with_retry
+    async fn the_one_where_empty_drums_are_skipped_not_retried() {
+        // 🧪 Empty drums should be skipped at the Worker::start level, but drain_with_retry
         // doesn't care — it sends whatever you give it. This test confirms that behavior.
         let mut the_sink = FlakyTestSink::new(0);
-        let the_payload = Payload::from(String::new());
+        let the_drum = Drum::from(String::new());
         let the_config = test_config(3);
 
-        let honestly_who_knows = drain_with_retry(&mut the_sink, the_payload, &the_config).await;
-        assert!(
-            honestly_who_knows.is_ok(),
-            "🎯 Empty payload still sends successfully"
-        );
+        let honestly_who_knows = drain_with_retry(&mut the_sink, the_drum, &the_config).await;
+        assert!(honestly_who_knows.is_ok(), "🎯 Empty drum still sends successfully");
         assert_eq!(the_sink.the_survivors[0], "");
     }
 }

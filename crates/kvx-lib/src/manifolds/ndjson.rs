@@ -3,20 +3,20 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
-//! 🎬 *[a dark and stormy deploy. the sink demands newlines. the caster obliges.]*
+//! 🎬 *[a dark and stormy deploy. the sink demands newlines. the tapper obliges.]*
 //! *[every line, alone. no brackets. no comfort. just `\n`. this is NDJSON.]*
 //!
-//! 📡 **NdjsonManifold** — casts feeds and joins them into newline-delimited JSON payloads.
+//! 📡 **NdjsonManifold** — casts barrels and joins them into newline-delimited JSON drums.
 //!
 //! 🧠 Knowledge graph:
 //! - Used by: ES `/_bulk` and file sinks — both want `item\nitem\n` format
-//! - For ES bulk: caster emits two lines per doc (action + source)
+//! - For ES bulk: tapper emits two lines per doc (action + source)
 //! - Trailing `\n` is mandatory for ES bulk, appreciated by file sinks, ignored by nobody
 //!
 //! 🦆 The duck asked what NDJSON stands for. We told it. It left anyway.
 
 use super::Manifold;
-use crate::{Draft, Payload};
+use crate::{Draft, Drum};
 use anyhow::Result;
 use std::collections::VecDeque;
 
@@ -27,9 +27,9 @@ use std::collections::VecDeque;
 
 /// 📡 Newline-Delimited JSON — the format ES `/_bulk` demands and files prefer.
 ///
-/// Casts each feed, joins results with `\n`, trailing `\n`.
+/// Casts each barrel, joins results with `\n`, trailing `\n`.
 /// For ES bulk, each cast result is "action\nsource" (two NDJSON lines per doc).
-/// After join: "action1\nsource1\naction2\nsource2\n" — valid `/_bulk` payload.
+/// After join: "action1\nsource1\naction2\nsource2\n" — valid `/_bulk` drum.
 ///
 /// For file passthrough: "doc1\ndoc2\n" — valid newline-delimited file content.
 ///
@@ -41,23 +41,23 @@ pub struct NdjsonManifold;
 
 impl Manifold for NdjsonManifold {
     #[inline]
-    fn join(&self, drafts: &mut VecDeque<Draft>) -> Result<Payload> {
+    fn join(&self, drafts: &mut VecDeque<Draft>) -> Result<Drum> {
         // -- 🧮 Pre-allocate based on total draft bytes — a vibes-based estimate that's usually close
         // -- Knowledge graph: +1 per draft for the \n separator, because math is caring
         let estimated_size: usize = drafts.iter().map(|e| e.len() + 1).sum();
-        let mut payload = String::with_capacity(estimated_size);
+        let mut drum = String::with_capacity(estimated_size);
 
         for draft in drafts.drain(..) {
             // -- 🔄 Each draft is already cast — just stitch them together with newlines
             // -- Like a quilt, but made of JSON, and nobody finds it cozy
-            payload.push_str(&draft);
+            drum.push_str(&draft);
             // We expect each draft to have \n if it's being casted to bulk
-            // payload.push('\n');
+            // drum.push('\n');
         }
 
         // -- ✅ Trailing \n included — ES bulk requires it, files appreciate it, nobody complains.
         // -- Ancient proverb: "He who omits the trailing newline, debugs at 3am."
-        Ok(Payload(payload))
+        Ok(Drum(drum))
     }
 }
 
@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn ndjson_the_one_where_empty_drafts_produce_nothing() -> Result<()> {
-        // 🧪 No drafts, no payload. The void stares back. It is empty. 🦆
+        // 🧪 No drafts, no drum. The void stares back. It is empty. 🦆
         let manifold = NdjsonManifold;
         let mut drafts = VecDeque::new();
         let result = manifold.join(&mut drafts)?;

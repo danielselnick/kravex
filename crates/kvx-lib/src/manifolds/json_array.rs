@@ -7,18 +7,18 @@
 //! *[serde was not invited. it doesn't even know this function exists.]*
 //! *["wrap me," said the items. "wrap me in valid JSON." we obliged.]*
 //!
-//! 📦 **JsonArrayManifold** — casts feeds and joins them into `[item1,item2,item3]` without serde.
+//! 📦 **JsonArrayManifold** — casts barrels and joins them into `[item1,item2,item3]` without serde.
 //!
 //! 🧠 Knowledge graph:
 //! - Used by: InMemory sinks — tests want valid JSON arrays to assert against
 //! - Zero serde on the framing: just `[`, commas, `]`, assembled by hand like artisans
-//! - Items inside are already valid JSON strings from casters — we trust them
+//! - Items inside are already valid JSON strings from tappers — we trust them
 //! - Capacity math: 2 (brackets) + sum(item lengths) + (n-1) commas — exact, no vibes needed
 //!
 //! 🦆 The duck asked why we don't use serde. We said "trust the process." It nodded.
 
 use super::Manifold;
-use crate::{Draft, Payload};
+use crate::{Draft, Drum};
 use anyhow::Result;
 use std::collections::VecDeque;
 
@@ -29,12 +29,12 @@ use std::collections::VecDeque;
 
 /// 📦 JSON Array format — `[item1,item2,item3]` — for when you want valid JSON output.
 ///
-/// Casts each feed, collects all results, wraps in `[...]` with commas.
+/// Casts each barrel, collects all results, wraps in `[...]` with commas.
 /// Zero serde on the framing. Just brackets and commas, assembled by hand.
 ///
 /// 🧠 Used for in-memory sinks where tests want valid JSON arrays to assert against.
-/// The items inside are already valid JSON strings from the casters — we just
-/// frame them as an array without re-parsing. Trust the casters. They did their job.
+/// The items inside are already valid JSON strings from the tappers — we just
+/// frame them as an array without re-parsing. Trust the tappers. They did their job.
 ///
 /// Conspiracy theory: the borrow checker is sentient, and it WANTS you to use serde.
 /// We resist. We concatenate manually. We are free. 🐄
@@ -43,25 +43,25 @@ pub struct JsonArrayManifold;
 
 impl Manifold for JsonArrayManifold {
     #[inline]
-    fn join(&self, drafts: &mut VecDeque<Draft>) -> Result<Payload> {
+    fn join(&self, drafts: &mut VecDeque<Draft>) -> Result<Drum> {
         // -- 🧮 Pre-allocate: brackets(2) + sum of drafts + commas(max n-1).
         // -- This is exact capacity — no growth, no realloc, no drama.
         // -- No cap this capacity math slaps fr fr 🎯
         let commas = drafts.len().saturating_sub(1);
         let estimated_size: usize =
             2 + drafts.iter().map(|e| e.len()).sum::<usize>() + commas;
-        let mut payload = String::with_capacity(estimated_size);
-        payload.push('[');
+        let mut drum = String::with_capacity(estimated_size);
+        drum.push('[');
         for (i, draft) in drafts.drain(..).enumerate() {
             if i > 0 {
                 // -- 🔗 The comma: JSON's way of saying "and there's more where that came from."
-                payload.push(',');
+                drum.push(',');
             }
-            payload.push_str(&draft);
+            drum.push_str(&draft);
         }
-        payload.push(']');
+        drum.push(']');
         // -- ✅ Valid JSON array. No serde was harmed in the making of this string.
-        Ok(Payload(payload))
+        Ok(Drum(drum))
     }
 }
 

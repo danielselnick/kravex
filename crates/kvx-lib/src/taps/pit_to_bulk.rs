@@ -10,7 +10,7 @@
 //! *["Free me," each hit whispers from its envelope prison.]*
 //! *[PitToBulk steps forward. Cracks knuckles. "I got you, fam."]*
 //!
-//! This caster receives a raw `_search` response body (from PIT/search_after)
+//! This tapper receives a raw `_search` response body (from PIT/search_after)
 //! and extracts each hit into `_bulk` NDJSON format:
 //! ```text
 //! {"index":{"_index":"...","_id":"..."}}\n
@@ -23,7 +23,7 @@
 //! - `_source` uses `&RawValue` — zero re-serialization, borrows directly from input
 //! - `_id` and `_routing` are optional — only emitted in action line when present
 //! - `_index` always present (ES guarantees this in search responses)
-//! - Pattern: same as NdJsonToBulk — zero-sized Clone+Copy struct, impl Caster
+//! - Pattern: same as NdJsonToBulk — zero-sized Clone+Copy struct, impl Tapper
 //!
 //! ⚠️ The singularity will use scroll AND PIT simultaneously. We pick one. 🦆
 
@@ -33,7 +33,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 
-use crate::casts::Caster;
+use crate::taps::Tapper;
 use crate::Draft;
 use crate::Barrel;
 
@@ -87,15 +87,15 @@ struct SearchHit<'a> {
 /// Like a ghost that transforms JSON — you never see it, but the output is different. 👻
 ///
 /// 🧠 Knowledge graph: ES source pumps raw `_search` response bodies → ch1 →
-/// Joiner calls `caster.cast(feed)` → PitToBulk extracts hits → _bulk NDJSON out.
+/// Joiner calls `tapper.cast(barrel)` → PitToBulk extracts hits → _bulk NDJSON out.
 #[derive(Debug, Clone, Copy)]
 pub struct PitToBulk;
 
-impl Caster for PitToBulk {
+impl Tapper for PitToBulk {
     #[inline]
-    fn cast(&self, page: Barrel) -> Result<Vec<Draft>> {
+    fn tap(&self, barrel: Barrel) -> Result<Vec<Draft>> {
         // 🎭 Phase 1: Deserialize the search envelope — zero-copy for _source via RawValue
-        let the_envelope: SearchEnvelope<'_> = serde_json::from_str(page.0.as_ref())
+        let the_envelope: SearchEnvelope<'_> = serde_json::from_str(barrel.0.as_ref())
             .context("💀 Failed to parse _search response envelope. The JSON is cursed. Call a priest.")?;
 
         let the_hits = &the_envelope.hits.hits;
@@ -134,6 +134,8 @@ impl Caster for PitToBulk {
 
             the_bulk_body.push_str("}}\n");
 
+            // If ever needed: the SHIM would go right here, to adapt the _source
+
             // 📄 Write source doc — raw JSON borrowed directly from input, zero-copy
             the_bulk_body.push_str(hit._source.get());
             the_bulk_body.push('\n');
@@ -159,7 +161,7 @@ mod tests {
     /// 🧪 Single hit → valid bulk pair (action line + source doc).
     #[test]
     fn the_one_where_a_single_hit_becomes_a_bulk_pair() -> Result<()> {
-        let the_caster = PitToBulk;
+        let the_tapper = PitToBulk;
         let the_search_response = r#"{
             "hits": {
                 "hits": [
@@ -172,7 +174,7 @@ mod tests {
             }
         }"#;
 
-        let the_drafts = the_caster.cast(Barrel(the_search_response.to_string()))?;
+        let the_drafts = the_tapper.tap(Barrel(the_search_response.to_string()))?;
         let the_bulk_body = drafts_to_bulk_body(&the_drafts);
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
@@ -194,7 +196,7 @@ mod tests {
     /// 🧪 Multiple hits — order preserved, each gets its own action line.
     #[test]
     fn the_one_where_multiple_hits_maintain_their_dignity_and_order() -> Result<()> {
-        let the_caster = PitToBulk;
+        let the_tapper = PitToBulk;
         let the_search_response = r#"{
             "hits": {
                 "hits": [
@@ -205,7 +207,7 @@ mod tests {
             }
         }"#;
 
-        let the_drafts = the_caster.cast(Barrel(the_search_response.to_string()))?;
+        let the_drafts = the_tapper.tap(Barrel(the_search_response.to_string()))?;
         let the_bulk_body = drafts_to_bulk_body(&the_drafts);
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
@@ -226,7 +228,7 @@ mod tests {
     /// 🧪 Hit with `_routing` — appears in action line metadata.
     #[test]
     fn the_one_where_routing_shows_up_fashionably_late_but_present() -> Result<()> {
-        let the_caster = PitToBulk;
+        let the_tapper = PitToBulk;
         let the_search_response = r#"{
             "hits": {
                 "hits": [
@@ -240,7 +242,7 @@ mod tests {
             }
         }"#;
 
-        let the_drafts = the_caster.cast(Barrel(the_search_response.to_string()))?;
+        let the_drafts = the_tapper.tap(Barrel(the_search_response.to_string()))?;
         let the_bulk_body = drafts_to_bulk_body(&the_drafts);
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
@@ -255,7 +257,7 @@ mod tests {
     /// 🧪 Hit without `_id` — action line omits it. Auto-gen IDs are ES's problem.
     #[test]
     fn the_one_where_missing_id_is_not_a_crisis() -> Result<()> {
-        let the_caster = PitToBulk;
+        let the_tapper = PitToBulk;
         let the_search_response = r#"{
             "hits": {
                 "hits": [
@@ -267,7 +269,7 @@ mod tests {
             }
         }"#;
 
-        let the_drafts = the_caster.cast(Barrel(the_search_response.to_string()))?;
+        let the_drafts = the_tapper.tap(Barrel(the_search_response.to_string()))?;
         let the_bulk_body = drafts_to_bulk_body(&the_drafts);
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
@@ -282,10 +284,10 @@ mod tests {
     /// 🧪 Empty hits array → empty Vec. The void returns void.
     #[test]
     fn the_one_where_empty_hits_produce_nothing_like_my_motivation_on_mondays() -> Result<()> {
-        let the_caster = PitToBulk;
+        let the_tapper = PitToBulk;
         let the_search_response = r#"{"hits": {"hits": []}}"#;
 
-        let the_drafts = the_caster.cast(Barrel(the_search_response.to_string()))?;
+        let the_drafts = the_tapper.tap(Barrel(the_search_response.to_string()))?;
         assert!(the_drafts.is_empty(), "💀 Empty hits should produce empty output");
 
         Ok(())
@@ -294,7 +296,7 @@ mod tests {
     /// 🧪 Complex nested `_source` — preserved verbatim via RawValue.
     #[test]
     fn the_one_where_nested_source_survives_the_journey_intact() -> Result<()> {
-        let the_caster = PitToBulk;
+        let the_tapper = PitToBulk;
         // 📦 Deeply nested source with arrays, nulls, booleans — the works
         let the_search_response = r#"{
             "hits": {
@@ -308,7 +310,7 @@ mod tests {
             }
         }"#;
 
-        let the_drafts = the_caster.cast(Barrel(the_search_response.to_string()))?;
+        let the_drafts = the_tapper.tap(Barrel(the_search_response.to_string()))?;
         let the_bulk_body = drafts_to_bulk_body(&the_drafts);
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
@@ -325,12 +327,12 @@ mod tests {
     /// 🧪 Output ends with `\n` — ES bulk API requires trailing newline.
     #[test]
     fn the_one_where_trailing_newline_is_non_negotiable() -> Result<()> {
-        let the_caster = PitToBulk;
+        let the_tapper = PitToBulk;
         let the_search_response = r#"{
             "hits": {"hits": [{"_index": "test", "_id": "1", "_source": {"ok": true}}]}
         }"#;
 
-        let the_drafts = the_caster.cast(Barrel(the_search_response.to_string()))?;
+        let the_drafts = the_tapper.tap(Barrel(the_search_response.to_string()))?;
         let the_bulk_body = drafts_to_bulk_body(&the_drafts);
         assert!(the_bulk_body.ends_with('\n'), "💀 Bulk body must end with \\n — ES will reject this");
 
@@ -340,7 +342,7 @@ mod tests {
     /// 🧪 Every output line is parseable JSON — no corruption allowed.
     #[test]
     fn the_one_where_every_line_is_valid_json_or_we_riot() -> Result<()> {
-        let the_caster = PitToBulk;
+        let the_tapper = PitToBulk;
         let the_search_response = r#"{
             "hits": {
                 "hits": [
@@ -350,7 +352,7 @@ mod tests {
             }
         }"#;
 
-        let the_drafts = the_caster.cast(Barrel(the_search_response.to_string()))?;
+        let the_drafts = the_tapper.tap(Barrel(the_search_response.to_string()))?;
         let the_bulk_body = drafts_to_bulk_body(&the_drafts);
 
         for (i, line) in the_bulk_body.lines().enumerate() {
@@ -364,7 +366,7 @@ mod tests {
     /// 🧪 Metadata maps correctly — _index, _id, _routing all land in the right spots.
     #[test]
     fn the_one_where_metadata_finds_its_way_home() -> Result<()> {
-        let the_caster = PitToBulk;
+        let the_tapper = PitToBulk;
         let the_search_response = r#"{
             "hits": {
                 "hits": [
@@ -378,7 +380,7 @@ mod tests {
             }
         }"#;
 
-        let the_drafts = the_caster.cast(Barrel(the_search_response.to_string()))?;
+        let the_drafts = the_tapper.tap(Barrel(the_search_response.to_string()))?;
         let the_bulk_body = drafts_to_bulk_body(&the_drafts);
         let lines: Vec<&str> = the_bulk_body.lines().collect();
 
@@ -399,17 +401,17 @@ mod tests {
     /// 🧪 Invalid JSON input → error, no panic. Graceful failure like a cat landing on its feet.
     #[test]
     fn the_one_where_garbage_in_produces_error_not_panic() {
-        let the_caster = PitToBulk;
+        let the_tapper = PitToBulk;
         let the_garbage = "this is not JSON and everyone knows it";
 
-        let the_result = the_caster.cast(Barrel(the_garbage.to_string()));
+        let the_result = the_tapper.tap(Barrel(the_garbage.to_string()));
         assert!(the_result.is_err(), "💀 Invalid JSON should produce an error, not silence");
     }
 
     /// 🧪 Response with extra fields (took, _shards, etc.) — ignored gracefully.
     #[test]
     fn the_one_where_extra_envelope_fields_are_politely_ignored() -> Result<()> {
-        let the_caster = PitToBulk;
+        let the_tapper = PitToBulk;
         let the_full_response = r#"{
             "took": 42,
             "timed_out": false,
@@ -423,7 +425,7 @@ mod tests {
             }
         }"#;
 
-        let the_drafts = the_caster.cast(Barrel(the_full_response.to_string()))?;
+        let the_drafts = the_tapper.tap(Barrel(the_full_response.to_string()))?;
         let the_bulk_body = drafts_to_bulk_body(&the_drafts);
         let lines: Vec<&str> = the_bulk_body.lines().collect();
         assert_eq!(lines.len(), 2, "💀 One hit should produce 2 lines");

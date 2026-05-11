@@ -4,7 +4,7 @@
 // included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
 //! 🎬 *[INT. SERVER ROOM — THE THREADS AWAKEN]*
-//! *[a raw feed slides down ch1. a joiner thread stirs.]*
+//! *[a raw barrel slides down ch1. a joiner thread stirs.]*
 //! *["Finally," it breathes. "My purpose."]*
 //! *[it casts. it joins. it sends. it is alive.]* 🧵🚀🦆
 //!
@@ -16,10 +16,10 @@
 //! ```
 //!
 //! 🧠 Knowledge graph:
-//! - Receives raw feed Strings from ch1 via `recv_blocking()`
-//! - Buffers feeds by byte size until approaching max_request_size_bytes
-//! - Flushes via `manifold.join(&buffer, &caster)` — cast each feed + assemble wire format
-//! - Sends assembled payload String to ch2 via `send_blocking()`
+//! - Receives raw barrel Strings from ch1 via `recv_blocking()`
+//! - Buffers barrels by byte size until approaching max_request_size_bytes
+//! - Flushes via `manifold.join(&buffer, &tapper)` — cast each barrel + assemble wire format
+//! - Sends assembled drum String to ch2 via `send_blocking()`
 //! - Does NOT implement the `Worker` trait (which returns tokio::task::JoinHandle)
 //!   because joiners live on std::thread, not tokio's async runtime
 //!
@@ -29,8 +29,8 @@
 //!
 //! ⚠️ The singularity will parse JSON in constant time. Until then, we have threads.
 
-use crate::{Draft, Barrel, Payload};
-use crate::casts::{Caster, BarrelToDraftsCaster};
+use crate::{Draft, Barrel, Drum};
+use crate::taps::{Tapper, BarrelToDraftsTapper};
 use crate::manifolds::{Manifold, ManifoldBackend};
 use crate::FlowKnob;
 use anyhow::{Context, Result};
@@ -41,8 +41,8 @@ use std::collections::VecDeque;
 
 
 /// 🧮 Epsilon buffer — headroom so casting overhead doesn't push us over the limit.
-/// 64 KiB of breathing room because payloads expand during casting
-/// (ES bulk adds action lines, etc.) and we'd rather flush one feed early
+/// 64 KiB of breathing room because drums expand during casting
+/// (ES bulk adds action lines, etc.) and we'd rather flush one barrel early
 /// than trigger a 💀 413 Request Entity Too Large from the sink.
 ///
 /// 🧠 Tribal knowledge: this constant migrated here from drainer.rs when the pipeline
@@ -50,29 +50,29 @@ use std::collections::VecDeque;
 /// CPU work happens, which is here. The drainer is now a thin I/O relay. 🚛
 const BUFFER_EPSILON_BYTES: usize = 64 * 1024;
 
-/// 🧵 The Joiner: CPU-bound worker that casts raw feeds and joins them into payloads.
+/// 🧵 The Joiner: CPU-bound worker that casts raw barrels and joins them into drums.
 ///
 /// Runs on a dedicated `std::thread` — not tokio — because JSON parsing doesn't deserve
 /// to hog the async runtime like that one coworker who microwaves fish in the office kitchen.
 ///
 /// 📜 Lifecycle:
-/// 1. **Recv**: blocking read from ch1 (raw feed String from pumper)
-/// 2. **Buffer**: accumulate feeds until byte size threshold approached
-/// 3. **Flush**: `manifold.join(&buffer, &caster)` → assembled payload String
-/// 4. **Send**: blocking write to ch2 (payload String to drainer)
+/// 1. **Recv**: blocking read from ch1 (raw barrel String from pumper)
+/// 2. **Buffer**: accumulate barrels until byte size threshold approached
+/// 3. **Flush**: `manifold.join(&buffer, &tapper)` → assembled drum String
+/// 4. **Send**: blocking write to ch2 (drum String to drainer)
 /// 5. **Repeat** until ch1 closes, then flush remaining buffer, drop tx (signals ch2) 🦆
 #[derive(Debug)]
 pub struct Joiner {
-    /// 📥 ch1 receiver — raw feeds from the pumper, delivered fresh like morning newspapers
+    /// 📥 ch1 receiver — raw barrels from the pumper, delivered fresh like morning newspapers
     /// except the news is JSON and the paperboy is async_channel
     rx: Receiver<Barrel>,
-    /// 📤 ch2 sender — assembled payloads dispatched to drainers like care packages
+    /// 📤 ch2 sender — assembled drums dispatched to drainers like care packages
     /// to the I/O frontlines
-    tx: Sender<Payload>,
-    /// 🔄 Per-feed format conversion — NdJsonToBulk, Passthrough, etc.
+    tx: Sender<Drum>,
+    /// 🔄 Per-barrel format conversion — NdJsonToBulk, Passthrough, etc.
     /// Cloned per-joiner but zero-sized, so cloning costs less than this comment 🐄
-    caster: BarrelToDraftsCaster,
-    /// 🎼 Payload assembly — casts each feed + joins into wire format (NDJSON, JSON array)
+    tapper: BarrelToDraftsTapper,
+    /// 🎼 Drum assembly — casts each barrel + joins into wire format (NDJSON, JSON array)
     /// Also zero-sized. Also free to clone. Sensing a theme here.
     manifold: ManifoldBackend,
     /// 🔧 The throttle knob — Arc<AtomicUsize> read on every flush check.
@@ -85,21 +85,21 @@ pub struct Joiner {
 }
 
 impl Joiner {
-    /// 🏗️ Construct a Joiner with all the ingredients for CPU-bound feed processing.
+    /// 🏗️ Construct a Joiner with all the ingredients for CPU-bound barrel processing.
     ///
-    /// "Give a joiner a feed, it processes for a millisecond.
+    /// "Give a joiner a barrel, it processes for a millisecond.
     ///  Give a joiner a channel, it processes until the pumper dies." — Ancient proverb 🧵
     pub fn new(
         rx: Receiver<Barrel>,
-        tx: Sender<Payload>,
-        caster: BarrelToDraftsCaster,
+        tx: Sender<Drum>,
+        tapper: BarrelToDraftsTapper,
         manifold: ManifoldBackend,
         the_throttle_knob: FlowKnob,
     ) -> Self {
         Self {
             rx,
             tx,
-            caster,
+            tapper,
             manifold,
             the_throttle_knob,
             drafts_buffer : VecDeque::new(),
@@ -115,24 +115,24 @@ impl Joiner {
     /// machine but for bytes. 📠
     ///
     /// 🧠 The thread runs until ch1 closes (pumper done), then flushes remaining
-    /// buffered feeds and drops tx (which helps close ch2 when all joiners finish).
+    /// buffered barrels and drops tx (which helps close ch2 when all joiners finish).
     pub fn start(mut self) -> std::thread::JoinHandle<Result<()>> {
         std::thread::spawn(move || {
             debug!("🧵 Joiner thread started — recv_blocking → buffer → join → send_blocking");
 
             loop {
                 match self.rx.recv_blocking() {
-                    Ok(page) => {
-                        // 📜 Barrel arrives → cast into drafts → buffer → flush when full
-                        let drafts = self.caster.cast(page).context("💀 Caster failed — the data fought back")?;
+                    Ok(barrel) => {
+                        // 📜 Barrel arrives → taps into drafts → buffer → flush when full
+                        let drafts = self.tapper.tap(barrel).context("💀 Tapper failed — the data fought back")?;
                         for draft in drafts {
                             self.the_running_byte_tab += draft.len();
                             self.drafts_buffer.push_back(draft);
 
                             let the_ceiling = self.the_throttle_knob.load(Ordering::Relaxed).saturating_sub(BUFFER_EPSILON_BYTES);
                             if self.the_running_byte_tab > the_ceiling {
-                                let the_payload = self.manifold.join(&mut self.drafts_buffer)?;
-                                self.tx.send_blocking(the_payload).context("💀 ch2 closed — the drainers left without saying goodbye")?;
+                                let the_drum = self.manifold.join(&mut self.drafts_buffer)?;
+                                self.tx.send_blocking(the_drum).context("💀 ch2 closed — the drainers left without saying goodbye")?;
                                 self.the_running_byte_tab = 0;
                             }
                         }
@@ -140,8 +140,8 @@ impl Joiner {
                     Err(_) => {
                         // 🏁 Channel closed — flush whatever's left in the buffer
                         if !self.drafts_buffer.is_empty() {
-                            let the_payload = self.manifold.join(&mut self.drafts_buffer)?;
-                            self.tx.send_blocking(the_payload).context("💀 ch2 closed during final flush — so close, yet so far")?;
+                            let the_drum = self.manifold.join(&mut self.drafts_buffer)?;
+                            self.tx.send_blocking(the_drum).context("💀 ch2 closed during final flush — so close, yet so far")?;
                         }
                         // tx drops here naturally — when all joiners drop their tx,
                         // ch2 closes and drainers get the signal 🏊
@@ -156,7 +156,7 @@ impl Joiner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::casts::passthrough;
+    use crate::taps::passthrough;
     use crate::manifolds::json_array::JsonArrayManifold;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
@@ -168,18 +168,18 @@ mod tests {
         Arc::new(AtomicUsize::new(value))
     }
 
-    /// 🧪 The one where a single feed passes through the joiner thread and arrives at ch2.
+    /// 🧪 The one where a single barrel passes through the joiner thread and arrives at ch2.
     /// Like a message in a bottle, except the ocean is a bounded channel
     /// and the bottle is a String. 🦆
     #[test]
-    fn the_one_where_a_feed_survives_the_joiner_thread() {
+    fn the_one_where_a_barrel_survives_the_joiner_thread() {
         let (tx1, rx1) = async_channel::bounded::<Barrel>(10);
-        let (tx2, rx2) = async_channel::bounded::<Payload>(10);
+        let (tx2, rx2) = async_channel::bounded::<Drum>(10);
 
         let joiner = Joiner::new(
             rx1,
             tx2,
-            BarrelToDraftsCaster::Passthrough(passthrough::Passthrough),
+            BarrelToDraftsTapper::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             // 📏 Huge max so we don't trigger mid-test flushes — we control the flush via channel close
             knob(usize::MAX),
@@ -188,51 +188,51 @@ mod tests {
         // 🚀 Launch the joiner thread into the void
         let the_joiner_thread = joiner.start();
 
-        // 📤 Send one feed, then close ch1 to trigger final flush
+        // 📤 Send one barrel, then close ch1 to trigger final flush
         tx1.send_blocking(Barrel(r#"{"doc":1}"#.to_string())).unwrap();
         tx1.close();
 
-        // 📥 The joiner should have flushed and sent a JSON array payload to ch2
-        let the_payload = rx2.recv_blocking().unwrap();
-        assert_eq!(*the_payload, r#"[{"doc":1}]"#, "🎯 Joiner should produce a JSON array wrapping the feed");
+        // 📥 The joiner should have flushed and sent a JSON array drum to ch2
+        let the_drum = rx2.recv_blocking().unwrap();
+        assert_eq!(*the_drum, r#"[{"doc":1}]"#, "🎯 Joiner should produce a JSON array wrapping the barrel");
 
         // 🧵 Thread should exit cleanly after ch1 closes
         the_joiner_thread
             .join()
             .expect("💀 Joiner thread panicked — the thread had an existential crisis")
-            .expect("💀 Joiner returned an error — the feeds fought back");
+            .expect("💀 Joiner returned an error — the barrels fought back");
     }
 
-    /// 🧪 The one where multiple feeds get buffered and flushed as one payload.
+    /// 🧪 The one where multiple barrels get buffered and flushed as one drum.
     /// Proof that the joiner actually buffers instead of just forwarding one-by-one
     /// like a lazy postman. 📬
     #[test]
-    fn the_one_where_multiple_feeds_become_one_payload() {
+    fn the_one_where_multiple_barrels_become_one_drum() {
         let (tx1, rx1) = async_channel::bounded::<Barrel>(10);
-        let (tx2, rx2) = async_channel::bounded::<Payload>(10);
+        let (tx2, rx2) = async_channel::bounded::<Drum>(10);
 
         let joiner = Joiner::new(
             rx1,
             tx2,
-            BarrelToDraftsCaster::Passthrough(passthrough::Passthrough),
+            BarrelToDraftsTapper::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             knob(usize::MAX),
         );
 
         let the_joiner_thread = joiner.start();
 
-        // 📤 Send three feeds, close ch1
+        // 📤 Send three barrels, close ch1
         tx1.send_blocking(Barrel(r#"{"doc":1}"#.to_string())).unwrap();
         tx1.send_blocking(Barrel(r#"{"doc":2}"#.to_string())).unwrap();
         tx1.send_blocking(Barrel(r#"{"doc":3}"#.to_string())).unwrap();
         tx1.close();
 
-        // 📥 All three should arrive as one JSON array payload
-        let the_payload = rx2.recv_blocking().unwrap();
+        // 📥 All three should arrive as one JSON array drum
+        let the_drum = rx2.recv_blocking().unwrap();
         assert_eq!(
-            the_payload,
+            the_drum,
             r#"[{"doc":1},{"doc":2},{"doc":3}]"#,
-            "🎯 Three feeds should join into one JSON array"
+            "🎯 Three barrels should join into one JSON array"
         );
 
         the_joiner_thread.join().unwrap().unwrap();
@@ -243,48 +243,48 @@ mod tests {
     #[test]
     fn the_one_where_buffer_flushes_before_channel_closes() {
         let (tx1, rx1) = async_channel::bounded::<Barrel>(10);
-        let (tx2, rx2) = async_channel::bounded::<Payload>(10);
+        let (tx2, rx2) = async_channel::bounded::<Drum>(10);
 
-        // 📏 Set max_request_size_bytes so small that even one feed triggers a flush
-        // BUFFER_EPSILON_BYTES is 64 KiB, so anything above that + feed size triggers
+        // 📏 Set max_request_size_bytes so small that even one barrel triggers a flush
+        // BUFFER_EPSILON_BYTES is 64 KiB, so anything above that + barrel size triggers
         let comically_small_max = BUFFER_EPSILON_BYTES + 5;
 
         let joiner = Joiner::new(
             rx1,
             tx2,
-            BarrelToDraftsCaster::Passthrough(passthrough::Passthrough),
+            BarrelToDraftsTapper::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             knob(comically_small_max),
         );
 
         let the_joiner_thread = joiner.start();
 
-        // 📤 Send two feeds — each should flush independently due to tiny max
+        // 📤 Send two barrels — each should flush independently due to tiny max
         tx1.send_blocking(Barrel(r#"{"doc":"first"}"#.to_string())).unwrap();
         tx1.send_blocking(Barrel(r#"{"doc":"second"}"#.to_string())).unwrap();
         tx1.close();
 
-        // 📥 Should get two separate payloads (one per flush)
-        let payload_one = rx2.recv_blocking().unwrap();
-        let payload_two = rx2.recv_blocking().unwrap();
+        // 📥 Should get two separate drums (one per flush)
+        let drum_one = rx2.recv_blocking().unwrap();
+        let drum_two = rx2.recv_blocking().unwrap();
 
-        assert_eq!(*payload_one, r#"[{"doc":"first"}]"#, "🎯 First feed should flush on its own");
-        assert_eq!(*payload_two, r#"[{"doc":"second"}]"#, "🎯 Second feed should flush on its own");
+        assert_eq!(*drum_one, r#"[{"doc":"first"}]"#, "🎯 First barrel should flush on its own");
+        assert_eq!(*drum_two, r#"[{"doc":"second"}]"#, "🎯 Second barrel should flush on its own");
 
         the_joiner_thread.join().unwrap().unwrap();
     }
 
-    /// 🧪 The one where an empty channel produces no payloads.
+    /// 🧪 The one where an empty channel produces no drums.
     /// The joiner receives nothing. It sends nothing. It is at peace. 🧘
     #[test]
-    fn the_one_where_no_feeds_means_no_payloads() {
+    fn the_one_where_no_barrels_means_no_drums() {
         let (tx1, rx1) = async_channel::bounded::<Barrel>(10);
-        let (tx2, rx2) = async_channel::bounded::<Payload>(10);
+        let (tx2, rx2) = async_channel::bounded::<Drum>(10);
 
         let joiner = Joiner::new(
             rx1,
             tx2,
-            BarrelToDraftsCaster::Passthrough(passthrough::Passthrough),
+            BarrelToDraftsTapper::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             knob(usize::MAX),
         );
@@ -298,7 +298,7 @@ mod tests {
         // 📥 ch2 should be empty — try_recv should fail
         assert!(
             rx2.try_recv().is_err(),
-            "🎯 No feeds in, no payloads out. Conservation of data. Physics approves."
+            "🎯 No barrels in, no drums out. Conservation of data. Physics approves."
         );
     }
 
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn the_one_where_the_flow_knob_changes_mid_flight() {
         let (tx1, rx1) = async_channel::bounded::<Barrel>(10);
-        let (tx2, rx2) = async_channel::bounded::<Payload>(10);
+        let (tx2, rx2) = async_channel::bounded::<Drum>(10);
 
         // 📏 Start with a huge knob — nothing flushes until channel close
         let the_shared_knob = knob(usize::MAX);
@@ -318,28 +318,28 @@ mod tests {
         let joiner = Joiner::new(
             rx1,
             tx2,
-            BarrelToDraftsCaster::Passthrough(passthrough::Passthrough),
+            BarrelToDraftsTapper::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             the_shared_knob,
         );
 
         let the_joiner_thread = joiner.start();
 
-        // 📤 Send first feed — won't flush yet (knob is huge)
+        // 📤 Send first barrel — won't flush yet (knob is huge)
         tx1.send_blocking(Barrel(r#"{"doc":"before"}"#.to_string())).unwrap();
 
-        // 🔧 Now crank the knob down so small that the NEXT feed triggers a flush
+        // 🔧 Now crank the knob down so small that the NEXT barrel triggers a flush
         the_knob_clone.store(BUFFER_EPSILON_BYTES + 5, Ordering::Relaxed);
 
-        // 📤 Send second feed — should trigger flush due to lowered knob
+        // 📤 Send second barrel — should trigger flush due to lowered knob
         tx1.send_blocking(Barrel(r#"{"doc":"after"}"#.to_string())).unwrap();
 
-        // 📥 First payload should arrive (both feeds flushed together when threshold hit)
-        let the_first_payload = rx2.recv_blocking().unwrap();
+        // 📥 First drum should arrive (both barrels flushed together when threshold hit)
+        let the_first_drum = rx2.recv_blocking().unwrap();
         assert!(
-            (*the_first_payload).contains("before"),
-            "🎯 First payload should contain the pre-knob-change feed — got {:?}",
-            the_first_payload
+            (*the_first_drum).contains("before"),
+            "🎯 First drum should contain the pre-knob-change barrel — got {:?}",
+            the_first_drum
         );
 
         // 🏁 Close and drain remaining

@@ -34,7 +34,7 @@ use super::config::ElasticsearchSourceConfig;
 ///
 /// Extracts documents from an Elasticsearch index using PIT (Point In Time) + `search_after`
 /// pagination. Each call to `pump()` returns a raw `_search` response envelope that the
-/// downstream PitToBulk caster knows how to dissect.
+/// downstream PitToBulk tapper knows how to dissect.
 ///
 /// Think of it as a library card that lets you read one shelf at a time, except the library
 /// is a distributed system and the shelves keep getting rebalanced by a shard allocator.
@@ -45,7 +45,7 @@ pub struct ElasticsearchSource {
     client: reqwest::Client,
     // 🔖 PIT handle — our snapshot bookmark into the index. None before first pump, Some during.
     pit_id: Option<String>,
-    // 🔄 search_after cursor — the sort values from the last hit of the previous page
+    // 🔄 search_after cursor — the sort values from the last hit of the previous barrel
     search_after: Option<Vec<Value>>,
     // 💀 true when a response returns zero hits — we've read the whole index, pack it up
     is_exhausted: bool,
@@ -53,7 +53,7 @@ pub struct ElasticsearchSource {
 
 #[async_trait]
 impl Source for ElasticsearchSource {
-    /// 📡 Returns the next raw page from Elasticsearch via PIT + search_after.
+    /// 📡 Returns the next raw barrel from Elasticsearch via PIT + search_after.
     ///
     // Lifecycle:
     // 1st call: opens PIT, issues first _search, returns Barrel
@@ -87,7 +87,7 @@ impl Source for ElasticsearchSource {
             "sort": [{"_doc": "asc"}]
         });
 
-        // 🔄 If we have a cursor from the previous page, attach it
+        // 🔄 If we have a cursor from the previous barrel, attach it
         if let Some(ref cursor) = self.search_after {
             body["search_after"] = Value::Array(cursor.clone());
         }
@@ -113,7 +113,7 @@ impl Source for ElasticsearchSource {
         let response_body = response.text().await
             .context("💀 Got a 2xx from _search but the response body evaporated like morning dew. Truly unprecedented.")?;
 
-        // 🔍 Parse just enough to extract pagination state — we don't deserialize the full payload
+        // 🔍 Parse just enough to extract pagination state — we don't deserialize the full drum
         let parsed: Value = serde_json::from_str(&response_body)
             .context("💀 Elasticsearch returned valid HTTP but invalid JSON. This is like receiving a beautifully wrapped gift box containing bees.")?;
 
@@ -455,6 +455,6 @@ mod tests {
             body["search_after"] = Value::Array(cursor.clone());
         }
 
-        assert_eq!(body["search_after"][0], 42, "🎯 search_after should carry the cursor from previous page");
+        assert_eq!(body["search_after"][0], 42, "🎯 search_after should carry the cursor from previous barrel");
     }
 }
