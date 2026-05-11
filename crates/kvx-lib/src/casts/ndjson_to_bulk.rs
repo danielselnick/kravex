@@ -6,7 +6,7 @@
 // 🧠 The lines of NDJSON are raw json docs — they have no bulk action metadata.
 // 📡 This caster adds the ES bulk index action line before each doc.
 use crate::Entry;
-use crate::Page;
+use crate::Draft;
 use crate::casts::Caster;
 use anyhow::Result;
 const THE_BULK_ACTION_LINE: &str = "{\"index\":{}}";
@@ -18,7 +18,7 @@ pub struct NdJsonToBulk {}
 
 impl Caster for NdJsonToBulk {
     #[inline]
-    fn cast(&self, page: Page) -> Result<Vec<Entry>> {
+    fn cast(&self, page: Draft) -> Result<Vec<Entry>> {
         // 📄 Split feed by newlines, cast each non-empty line into bulk format.
         // 🧠 Each line becomes: action_line\n{json_document}
         // -- "He who casts without an action line, gets a 400 from Elasticsearch." 💀
@@ -55,7 +55,7 @@ mod tests {
         let the_lone_doc = r#"{"ObjectID":42,"Name":"The answer to everything"}"#;
 
         // 🚀 Act — cast it into the bulk dimension
-        let entries = caster.cast(Page(the_lone_doc.to_string()))?;
+        let entries = caster.cast(Draft(the_lone_doc.to_string()))?;
         let the_bulk_body = entries_to_bulk_body(&entries);
 
         // 🎯 Assert — must be exactly: action_line\ndoc\n
@@ -85,7 +85,7 @@ mod tests {
         let doc_c = r#"{"id":3,"name":"Charlie"}"#;
         let the_ndjson_feed = format!("{doc_a}\n{doc_b}\n{doc_c}");
 
-        let entries = caster.cast(Page(the_ndjson_feed))?;
+        let entries = caster.cast(Draft(the_ndjson_feed))?;
         let the_bulk_body = entries_to_bulk_body(&entries);
 
         // 🎯 Should produce 3 action+doc pairs = 6 lines
@@ -119,7 +119,7 @@ mod tests {
         let caster = NdJsonToBulk {};
         let the_void = "";
 
-        let entries = caster.cast(Page(the_void.to_string()))?;
+        let entries = caster.cast(Draft(the_void.to_string()))?;
 
         // 🎯 Empty in, empty out — no phantom action lines
         assert!(
@@ -139,7 +139,7 @@ mod tests {
         // 📄 Note the trailing \n — split will produce an empty last element
         let the_feed_with_trailing_newline = format!("{doc}\n");
 
-        let entries = caster.cast(Page(the_feed_with_trailing_newline))?;
+        let entries = caster.cast(Draft(the_feed_with_trailing_newline))?;
         let the_bulk_body = entries_to_bulk_body(&entries);
 
         // 🎯 Should still be exactly 1 action+doc pair, no ghost at the end
@@ -163,7 +163,7 @@ mod tests {
         // 📄 Feed with empty lines everywhere — chaos mode
         let the_chaotic_feed = format!("\n\n{doc_a}\n\n\n{doc_b}\n\n");
 
-        let entries = caster.cast(Page(the_chaotic_feed))?;
+        let entries = caster.cast(Draft(the_chaotic_feed))?;
         let the_bulk_body = entries_to_bulk_body(&entries);
 
         // 🎯 Only 2 real docs = 4 lines total (2 action + 2 doc)
@@ -190,7 +190,7 @@ mod tests {
         ];
         let the_feed = docs.join("\n");
 
-        let entries = caster.cast(Page(the_feed))?;
+        let entries = caster.cast(Draft(the_feed))?;
         let the_bulk_body = entries_to_bulk_body(&entries);
 
         // 🎯 Parse every line as JSON — both action lines and doc lines must be valid

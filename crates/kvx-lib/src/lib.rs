@@ -12,25 +12,25 @@
 
 // -- 🗑️ allow(dead_code) — keeping the lights on for modules under construction
 #![allow(dead_code, unused_variables, unused_imports)]
-pub mod backends;
-pub mod casts;
 pub mod config;
-pub mod foreman;
+pub mod backends;
 pub mod manifolds;
 pub mod progress;
+pub mod foreman;
+pub mod casts;
 pub mod regulators;
-pub mod victory_laps;
 pub mod workers;
+pub mod victory_laps;
 
+use crate::config::AppConfig;
 use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSource};
 use crate::backends::file::{FileSink, FileSource};
 use crate::backends::in_mem::{InMemorySink, InMemorySource};
 use crate::backends::{SinkBackend, SourceBackend};
-use crate::casts::PageToEntriesCaster;
-use crate::config::AppConfig;
-use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
 use crate::foreman::Foreman;
+use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
 use crate::manifolds::ManifoldBackend;
+use crate::casts::DraftToEntriesCaster;
 use crate::workers::GovernorConfig;
 use anyhow::{Context, Result};
 use std::ops::Deref;
@@ -38,6 +38,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::SystemTime;
 use tracing::info;
+
 
 /// 🚀 The grand entry point. The big kahuna. The main event.
 pub async fn run(app_config: AppConfig) -> Result<()> {
@@ -62,10 +63,10 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     }
 
     // 🔄 Resolve the caster from source/sink config pair.
-    // 🧠 Knowledge graph: PageToEntriesCaster::from_configs() matches (source, sink) → caster.
+    // 🧠 Knowledge graph: DraftToEntriesCaster::from_configs() matches (source, sink) → caster.
     // File→ES = NdJsonToBulk, File→File = Passthrough, InMemory→InMemory = Passthrough, etc.
     let caster =
-        PageToEntriesCaster::from_configs(&app_config.source_config, &app_config.sink_config);
+        DraftToEntriesCaster::from_configs(&app_config.source_config, &app_config.sink_config);
 
     // 🎼 Resolve the manifold from sink config.
     // 🧠 ES/File → NdjsonManifold, InMemory → JsonArrayManifold.
@@ -88,7 +89,8 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
 
     info!(
         "🎛️ Governor mode: {} — initial flow: {} bytes",
-        &app_config.governor, the_initial_flow
+        &app_config.governor,
+        the_initial_flow
     );
 
     // 📏 Extract pipeline name and total_expected_bytes for progress reporting.
@@ -179,9 +181,9 @@ pub async fn stop() -> Result<()> {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Page(pub String);
+pub struct Draft(pub String);
 
-impl Deref for Page {
+impl Deref for Draft {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
@@ -189,9 +191,9 @@ impl Deref for Page {
     }
 }
 
-impl From<String> for Page {
+impl From<String> for Draft {
     fn from(s: String) -> Self {
-        Page(s)
+        Draft(s)
     }
 }
 
@@ -249,15 +251,15 @@ pub type FlowKnob = Arc<AtomicUsize>;
 
 pub enum GaugeReading {
     DrainResult { payload_bytes: u64, latency_ms: u64 },
-    Error(),
+    Error()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backends::file::FileSourceConfig;
-    use crate::backends::{CommonSinkConfig, CommonSourceConfig};
     use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
+    use crate::backends::{CommonSourceConfig, CommonSinkConfig};
+    use crate::backends::file::FileSourceConfig;
 
     /// 🧪 Full pipeline integration: InMemory→Passthrough→InMemory.
     /// Four raw docs in (as one newline-delimited feed), one JSON array payload out.
@@ -287,8 +289,10 @@ mod tests {
         let sink = SinkBackend::InMemory(sink_inner.clone());
 
         // 🔄 InMemory→InMemory resolves to Passthrough caster
-        let caster =
-            PageToEntriesCaster::from_configs(&app_config.source_config, &app_config.sink_config);
+        let caster = DraftToEntriesCaster::from_configs(
+            &app_config.source_config,
+            &app_config.sink_config,
+        );
 
         // 🎼 InMemory sink → JsonArrayManifold: [item,item,...]
         let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
@@ -302,17 +306,7 @@ mod tests {
         let the_governor_config = GovernorConfig::default();
         let foreman = Foreman::new(app_config);
         foreman
-            .start_workers(
-                source,
-                vec![sink],
-                caster,
-                manifold,
-                the_test_flow_knob,
-                &the_governor_config,
-                max_request_size_bytes,
-                "test-pipeline".to_string(),
-                0,
-            )
+            .start_workers(source, vec![sink], caster, manifold, the_test_flow_knob, &the_governor_config, max_request_size_bytes, "test-pipeline".to_string(), 0)
             .await?;
 
         // 📦 Joiner received 1 feed (4 docs newline-delimited), passthrough-cast and joined into JSON array.
@@ -326,13 +320,7 @@ mod tests {
         // 📄 Passthrough returns the whole feed as one item, so JSON array wraps the entire feed
         let expected = format!(
             "[{}]",
-            [
-                r#"{"doc":1}"#,
-                r#"{"doc":2}"#,
-                r#"{"doc":3}"#,
-                r#"{"doc":4}"#
-            ]
-            .join("\n")
+            [r#"{"doc":1}"#, r#"{"doc":2}"#, r#"{"doc":3}"#, r#"{"doc":4}"#].join("\n")
         );
         assert_eq!(
             the_payload, &expected,
@@ -360,8 +348,8 @@ mod tests {
     /// No HTTP. No clusters. No 3am pages. Just pure pipeline verification. 🦆
     #[tokio::test]
     async fn the_one_where_elasticsearch_docs_survive_the_pit_to_bulk_gauntlet() -> Result<()> {
-        use crate::backends::elasticsearch::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
-        use crate::backends::{CommonSinkConfig, CommonSourceConfig};
+        use crate::backends::elasticsearch::{ElasticsearchSourceConfig, ElasticsearchSinkConfig};
+        use crate::backends::{CommonSourceConfig, CommonSinkConfig};
 
         // 🔧 ES config structs — used ONLY for caster/manifold resolution, not actual connections.
         // These URLs are faker than a three-dollar bill. The pipeline doesn't care.
@@ -393,24 +381,25 @@ mod tests {
             governor: Default::default(),
         };
 
-        // 📡 Page 1: Two hits from the "movies" index — one with routing, because spicy data is best data
-        let the_first_pit_response = Page(r#"{"hits":{"hits":[{"_index":"movies","_id":"neo_1","_source":{"title":"The Matrix","year":1999,"tagline":"Welcome to the real world"}},{"_index":"movies","_id":"inception_2","_routing":"scifi_shard","_source":{"title":"Inception","year":2010,"tagline":"Your mind is the scene of the crime"}}]}}"#.to_string());
+        // 📡 Draft 1: Two hits from the "movies" index — one with routing, because spicy data is best data
+        let the_first_pit_response = Draft(r#"{"hits":{"hits":[{"_index":"movies","_id":"neo_1","_source":{"title":"The Matrix","year":1999,"tagline":"Welcome to the real world"}},{"_index":"movies","_id":"inception_2","_routing":"scifi_shard","_source":{"title":"Inception","year":2010,"tagline":"Your mind is the scene of the crime"}}]}}"#.to_string());
 
-        // 📡 Page 2: One hit from a DIFFERENT index — tests cross-index preservation through the pipeline
+        // 📡 Draft 2: One hit from a DIFFERENT index — tests cross-index preservation through the pipeline
         // Because real migrations don't always stay in one index. Life is messy. Data is messier.
-        let the_second_pit_response = Page(r#"{"hits":{"hits":[{"_index":"classics","_id":"casa_3","_source":{"title":"Casablanca","year":1942,"tagline":"Here is looking at you, kid"}}]}}"#.to_string());
+        let the_second_pit_response = Draft(r#"{"hits":{"hits":[{"_index":"classics","_id":"casa_3","_source":{"title":"Casablanca","year":1942,"tagline":"Here is looking at you, kid"}}]}}"#.to_string());
 
         // 🏗️ Wire the actual backends — InMemory with ES-format pages
-        let source = SourceBackend::InMemory(InMemorySource::with_pages(vec![
-            the_first_pit_response,
-            the_second_pit_response,
-        ]));
+        let source = SourceBackend::InMemory(
+            InMemorySource::with_pages(vec![the_first_pit_response, the_second_pit_response]),
+        );
         let sink_inner = InMemorySink::new().await?;
         let sink = SinkBackend::InMemory(sink_inner.clone());
 
         // 🔄 ES→ES config resolution → PitToBulk caster (extracts hits from _search envelope)
-        let caster =
-            PageToEntriesCaster::from_configs(&app_config.source_config, &app_config.sink_config);
+        let caster = DraftToEntriesCaster::from_configs(
+            &app_config.source_config,
+            &app_config.sink_config,
+        );
 
         // 🎼 ES sink config → NdjsonManifold (action\nsource\n per hit)
         let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
@@ -464,54 +453,32 @@ mod tests {
 
         // ✅ Every line must be valid JSON — corruption is not a feature, it's a felony
         for (i, line) in the_bulk_lines.iter().enumerate() {
-            let _parsed: serde_json::Value = serde_json::from_str(line).map_err(|e| {
-                anyhow::anyhow!("💀 Line {i} is not valid JSON: '{line}' — error: {e}")
-            })?;
+            let _parsed: serde_json::Value = serde_json::from_str(line)
+                .map_err(|e| anyhow::anyhow!("💀 Line {i} is not valid JSON: '{line}' — error: {e}"))?;
         }
 
         // 🎬 Hit 1: The Matrix — action line + source doc
         let the_matrix_action: serde_json::Value = serde_json::from_str(the_bulk_lines[0])?;
-        assert_eq!(
-            the_matrix_action["index"]["_index"], "movies",
-            "💀 Hit 1 _index mismatch"
-        );
-        assert_eq!(
-            the_matrix_action["index"]["_id"], "neo_1",
-            "💀 Hit 1 _id mismatch"
-        );
+        assert_eq!(the_matrix_action["index"]["_index"], "movies", "💀 Hit 1 _index mismatch");
+        assert_eq!(the_matrix_action["index"]["_id"], "neo_1", "💀 Hit 1 _id mismatch");
         assert!(
             the_matrix_action["index"].get("_routing").is_none(),
             "💀 Hit 1 should NOT have _routing — it wasn't in the source"
         );
         let the_matrix_doc: serde_json::Value = serde_json::from_str(the_bulk_lines[1])?;
-        assert_eq!(
-            the_matrix_doc["title"], "The Matrix",
-            "💀 Hit 1 source doc title mismatch"
-        );
-        assert_eq!(
-            the_matrix_doc["year"], 1999,
-            "💀 Hit 1 source doc year mismatch"
-        );
+        assert_eq!(the_matrix_doc["title"], "The Matrix", "💀 Hit 1 source doc title mismatch");
+        assert_eq!(the_matrix_doc["year"], 1999, "💀 Hit 1 source doc year mismatch");
 
         // 🎬 Hit 2: Inception — with _routing, the spicy metadata
         let the_inception_action: serde_json::Value = serde_json::from_str(the_bulk_lines[2])?;
-        assert_eq!(
-            the_inception_action["index"]["_index"], "movies",
-            "💀 Hit 2 _index mismatch"
-        );
-        assert_eq!(
-            the_inception_action["index"]["_id"], "inception_2",
-            "💀 Hit 2 _id mismatch"
-        );
+        assert_eq!(the_inception_action["index"]["_index"], "movies", "💀 Hit 2 _index mismatch");
+        assert_eq!(the_inception_action["index"]["_id"], "inception_2", "💀 Hit 2 _id mismatch");
         assert_eq!(
             the_inception_action["index"]["_routing"], "scifi_shard",
             "💀 Hit 2 _routing mismatch — the routing survived PitToBulk but died in the manifold? Investigate."
         );
         let the_inception_doc: serde_json::Value = serde_json::from_str(the_bulk_lines[3])?;
-        assert_eq!(
-            the_inception_doc["title"], "Inception",
-            "💀 Hit 2 source doc title mismatch"
-        );
+        assert_eq!(the_inception_doc["title"], "Inception", "💀 Hit 2 source doc title mismatch");
 
         // 🎬 Hit 3: Casablanca — from a DIFFERENT index, proving cross-index migration works
         let the_casablanca_action: serde_json::Value = serde_json::from_str(the_bulk_lines[4])?;
@@ -519,19 +486,10 @@ mod tests {
             the_casablanca_action["index"]["_index"], "classics",
             "💀 Hit 3 _index should be 'classics' — cross-index preservation failed"
         );
-        assert_eq!(
-            the_casablanca_action["index"]["_id"], "casa_3",
-            "💀 Hit 3 _id mismatch"
-        );
+        assert_eq!(the_casablanca_action["index"]["_id"], "casa_3", "💀 Hit 3 _id mismatch");
         let the_casablanca_doc: serde_json::Value = serde_json::from_str(the_bulk_lines[5])?;
-        assert_eq!(
-            the_casablanca_doc["title"], "Casablanca",
-            "💀 Hit 3 source doc title mismatch"
-        );
-        assert_eq!(
-            the_casablanca_doc["year"], 1942,
-            "💀 Hit 3 source doc year mismatch"
-        );
+        assert_eq!(the_casablanca_doc["title"], "Casablanca", "💀 Hit 3 source doc title mismatch");
+        assert_eq!(the_casablanca_doc["year"], 1942, "💀 Hit 3 source doc year mismatch");
 
         // 🎯 Order preservation: Matrix → Inception → Casablanca (page 1 before page 2)
         // If this fails, either the pipeline is reordering or we're in a parallel universe

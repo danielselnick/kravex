@@ -17,7 +17,7 @@
 //! ```
 //!
 //! 🧠 Knowledge graph: the Drainer was once a complex beast that buffered raw feeds,
-//! cast them via PageToEntriesCaster, joined them via Manifold, AND sent them to the sink.
+//! cast them via DraftToEntriesCaster, joined them via Manifold, AND sent them to the sink.
 //! That CPU-bound work now lives in the Joiner (on std::thread). The Drainer has been
 //! liberated. It is now a thin async relay with retry armor: recv payload → send to sink
 //! → if rejected, back off exponentially → retry → repeat. Like a polite debt collector. 📬

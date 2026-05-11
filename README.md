@@ -128,7 +128,7 @@ Pumper (async) → ch1 → Joiner pool (std::thread) → ch2 → Drainer pool (a
 
 | Channel | Carries | From → To |
 |---------|---------|-----------|
-| **ch1** | Raw pages (`Page`) | Pumper → Joiner pool |
+| **ch1** | Raw pages (`Draft`) | Pumper → Joiner pool |
 | **ch2** | Assembled payloads (`Payload`) | Joiner pool → Drainer pool |
 | **ch3** | Latency/error readings (`GaugeReading`) | Drainers → Governor |
 
@@ -166,7 +166,7 @@ kravex/
 │   ├── kvx/          # Core library
 │   │   └── src/
 │   │       ├── backends/       # Source + Sink implementations (ES, File, InMemory)
-│   │       ├── casts/          # Page-to-Entry transformers
+│   │       ├── casts/          # Draft-to-Entry transformers
 │   │       ├── manifolds/      # Entry-to-Payload assemblers
 │   │       ├── regulators/     # Adaptive throttle controllers (hill-climbing, PID, static)
 │   │       ├── workers/        # Pumper, Joiner, Drainer, Governor

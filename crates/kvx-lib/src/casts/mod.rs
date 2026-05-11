@@ -15,23 +15,23 @@
 //!
 //! 🧠 Knowledge graph:
 //! - **Caster** trait: `fn cast(&self, feed: String) -> Result<String>`
-//! - **PageToEntriesCaster** enum: dispatches to concrete casters (same pattern as ManifoldBackend)
-//! - Resolution: `PageToEntriesCaster::from_configs(source, sink)` matches the pair
+//! - **DraftToEntriesCaster** enum: dispatches to concrete casters (same pattern as ManifoldBackend)
+//! - Resolution: `DraftToEntriesCaster::from_configs(source, sink)` matches the pair
 //!
 //! 🦆 The duck casts no shadow. Only feeds.
 //!
 //! ⚠️ The singularity will cast its own feeds. Until then, we have enums.
 
-pub mod ndjson_to_bulk;
 pub mod passthrough;
+pub mod ndjson_to_bulk;
 pub mod pit_to_bulk;
 use ndjson_to_bulk::NdJsonToBulk;
 use pit_to_bulk::PitToBulk;
 
-use crate::Entry;
-use crate::Page;
-use crate::config::{SinkConfig, SourceConfig};
+use crate::config::{SourceConfig, SinkConfig};
 use anyhow::Result;
+use crate::Draft;
+use crate::Entry;
 
 // ===== Trait =====
 
@@ -40,7 +40,7 @@ use anyhow::Result;
 pub trait Caster: std::fmt::Debug {
     /// 🔄 Cast a raw source feed into sink-format output entries.
     /// The feed goes in raw. It comes out ready. Like a pottery kiln, but for JSON. 🏺
-    fn cast(&self, page: Page) -> Result<Vec<Entry>>;
+    fn cast(&self, page: Draft) -> Result<Vec<Entry>>;
 }
 
 // ===== Enum Dispatcher =====
@@ -51,7 +51,7 @@ pub trait Caster: std::fmt::Debug {
 /// enum wraps concrete types, match dispatches, compiler monomorphizes, branch prediction
 /// eliminates the overhead after warmup. The enum is a formality. The cast is free. 🐄
 #[derive(Debug, Clone)]
-pub enum PageToEntriesCaster {
+pub enum DraftToEntriesCaster {
     // -- 📡 NDJSON raw docs → ES bulk action+source pairs
     NdJsonToBulk(ndjson_to_bulk::NdJsonToBulk),
     // -- 🚶 Identity cast — feed passes through unchanged, like TSA PreCheck for data
@@ -60,9 +60,9 @@ pub enum PageToEntriesCaster {
     PitToBulk(pit_to_bulk::PitToBulk),
 }
 
-impl Caster for PageToEntriesCaster {
+impl Caster for DraftToEntriesCaster {
     #[inline]
-    fn cast(&self, page: Page) -> Result<Vec<Entry>> {
+    fn cast(&self, page: Draft) -> Result<Vec<Entry>> {
         // -- 🎭 Dispatch to the concrete caster — "choose your fighter" but for data formats
         match self {
             Self::NdJsonToBulk(t) => t.cast(page),
@@ -72,9 +72,10 @@ impl Caster for PageToEntriesCaster {
     }
 }
 
+
 // ===== Factory =====
 
-impl PageToEntriesCaster {
+impl DraftToEntriesCaster {
     /// 🔧 Resolve a caster from source/sink config enums.
     ///
     /// Same approach as `from_source_config()` / `from_sink_config()` in `lib.rs`:
@@ -122,7 +123,7 @@ impl PageToEntriesCaster {
                 panic!(
                     "💀 No caster implemented for source {:?} → sink {:?}. \
                      This is the resolve() equivalent of 'new phone who dis.' \
-                     Add a variant to PageToEntriesCaster, write the impl, add tests.",
+                     Add a variant to DraftToEntriesCaster, write the impl, add tests.",
                     src, dst
                 )
             }
@@ -130,16 +131,15 @@ impl PageToEntriesCaster {
     }
 }
 
-// -- 🧠 `PageToEntriesCaster` dispatches to the concrete caster inside each variant. 🦆
+// -- 🧠 `DraftToEntriesCaster` dispatches to the concrete caster inside each variant. 🦆
 // -- Same pattern as `impl Source for SourceBackend` in `backends.rs`. 🚀
 // -- The borrow checker approves. The compiler inlines. Life is good. 🧵
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::backends::file::{FileSinkConfig, FileSourceConfig};
-    use crate::backends::{CommonSinkConfig, CommonSourceConfig};
     use crate::backends::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
+    use crate::backends::{CommonSinkConfig, CommonSourceConfig};
 
     /// 🧪 Resolve File→ES to NdJsonToBulk caster.
     #[test]
@@ -159,9 +159,9 @@ mod tests {
         });
 
         // 🎯 Resolve — should give us NdJsonToBulk
-        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
+        let the_caster = DraftToEntriesCaster::from_configs(&source, &sink);
         assert!(
-            matches!(the_caster, PageToEntriesCaster::NdJsonToBulk(_)),
+            matches!(the_caster, DraftToEntriesCaster::NdJsonToBulk(_)),
             "File → ES should resolve to NdJsonToBulk 🏎️"
         );
 
@@ -172,7 +172,7 @@ mod tests {
             "_rallyAPIMajor": "2"
         })
         .to_string();
-        let the_output = the_caster.cast(Page(rally_feed))?;
+        let the_output = the_caster.cast(Draft(rally_feed))?;
 
         // ✅ Output should be non-empty (NdJsonToBulk produces action+source lines)
         assert!(!the_output.is_empty(), "Cast output should not be empty 🎯");
@@ -192,16 +192,13 @@ mod tests {
             common_config: CommonSinkConfig::default(),
         });
 
-        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
-        assert!(matches!(the_caster, PageToEntriesCaster::Passthrough(_)));
+        let the_caster = DraftToEntriesCaster::from_configs(&source, &sink);
+        assert!(matches!(the_caster, DraftToEntriesCaster::Passthrough(_)));
 
         // 🔄 Passthrough returns the feed unchanged — zero drama
         let the_input = r#"{"whatever":"goes"}"#.to_string();
-        let the_output = the_caster.cast(Page(the_input.clone()))?;
-        assert_eq!(
-            *the_output[0], the_input,
-            "Passthrough must return feed unchanged! 🚶"
-        );
+        let the_output = the_caster.cast(Draft(the_input.clone()))?;
+        assert_eq!(*the_output[0], the_input, "Passthrough must return feed unchanged! 🚶");
 
         Ok(())
     }
@@ -211,8 +208,8 @@ mod tests {
     fn the_one_where_in_memory_resolves_to_passthrough_for_testing() {
         let source = SourceConfig::InMemory(());
         let sink = SinkConfig::InMemory(());
-        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
-        assert!(matches!(the_caster, PageToEntriesCaster::Passthrough(_)));
+        let the_caster = DraftToEntriesCaster::from_configs(&source, &sink);
+        assert!(matches!(the_caster, DraftToEntriesCaster::Passthrough(_)));
     }
 
     /// 🧪 Full pipeline integration: resolve + cast multi-doc feed through NdJsonToBulk.
@@ -231,7 +228,7 @@ mod tests {
             common_config: CommonSinkConfig::default(),
         });
 
-        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
+        let the_caster = DraftToEntriesCaster::from_configs(&source, &sink);
 
         // 📄 Build a two-doc feed (newline-separated Rally blobs)
         let rally_feed = format!(
@@ -250,12 +247,9 @@ mod tests {
             })
         );
 
-        let the_output = the_caster.cast(Page(rally_feed))?;
+        let the_output = the_caster.cast(Draft(rally_feed))?;
         // ✅ NdJsonToBulk should produce non-empty output for a multi-doc feed
-        assert!(
-            !the_output.is_empty(),
-            "Cast output should not be empty for multi-doc feed 🎯"
-        );
+        assert!(!the_output.is_empty(), "Cast output should not be empty for multi-doc feed 🎯");
 
         Ok(())
     }
@@ -280,21 +274,16 @@ mod tests {
             common_config: CommonSinkConfig::default(),
         });
 
-        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
+        let the_caster = DraftToEntriesCaster::from_configs(&source, &sink);
         assert!(
-            matches!(the_caster, PageToEntriesCaster::PitToBulk(_)),
-            "💀 ES → ES should resolve to PitToBulk, not {:?}",
-            the_caster
+            matches!(the_caster, DraftToEntriesCaster::PitToBulk(_)),
+            "💀 ES → ES should resolve to PitToBulk, not {:?}", the_caster
         );
 
         // 🔄 Verify it actually casts a search response into bulk format
-        let the_search_response =
-            r#"{"hits":{"hits":[{"_index":"src","_id":"1","_source":{"ok":true}}]}}"#.to_string();
-        let the_output = the_caster.cast(Page(the_search_response))?;
-        assert!(
-            !the_output.is_empty(),
-            "💀 PitToBulk should produce output for a valid search response"
-        );
+        let the_search_response = r#"{"hits":{"hits":[{"_index":"src","_id":"1","_source":{"ok":true}}]}}"#.to_string();
+        let the_output = the_caster.cast(Draft(the_search_response))?;
+        assert!(!the_output.is_empty(), "💀 PitToBulk should produce output for a valid search response");
 
         Ok(())
     }

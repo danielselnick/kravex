@@ -29,15 +29,16 @@
 //!
 //! ⚠️ The singularity will parse JSON in constant time. Until then, we have threads.
 
-use crate::FlowKnob;
-use crate::casts::{Caster, PageToEntriesCaster};
+use crate::{Entry, Draft, Payload};
+use crate::casts::{Caster, DraftToEntriesCaster};
 use crate::manifolds::{Manifold, ManifoldBackend};
-use crate::{Entry, Page, Payload};
+use crate::FlowKnob;
 use anyhow::{Context, Result};
 use async_channel::{Receiver, Sender};
-use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use tracing::debug;
+use std::collections::VecDeque;
+
 
 /// 🧮 Epsilon buffer — headroom so casting overhead doesn't push us over the limit.
 /// 64 KiB of breathing room because payloads expand during casting
@@ -64,13 +65,13 @@ const BUFFER_EPSILON_BYTES: usize = 64 * 1024;
 pub struct Joiner {
     /// 📥 ch1 receiver — raw feeds from the pumper, delivered fresh like morning newspapers
     /// except the news is JSON and the paperboy is async_channel
-    rx: Receiver<Page>,
+    rx: Receiver<Draft>,
     /// 📤 ch2 sender — assembled payloads dispatched to drainers like care packages
     /// to the I/O frontlines
     tx: Sender<Payload>,
     /// 🔄 Per-feed format conversion — NdJsonToBulk, Passthrough, etc.
     /// Cloned per-joiner but zero-sized, so cloning costs less than this comment 🐄
-    caster: PageToEntriesCaster,
+    caster: DraftToEntriesCaster,
     /// 🎼 Payload assembly — casts each feed + joins into wire format (NDJSON, JSON array)
     /// Also zero-sized. Also free to clone. Sensing a theme here.
     manifold: ManifoldBackend,
@@ -80,7 +81,7 @@ pub struct Joiner {
     /// Like a volume knob that someone else might be turning while you're listening. 🎚️
     the_throttle_knob: FlowKnob,
     entries_buffer: VecDeque<Entry>,
-    the_running_byte_tab: usize,
+    the_running_byte_tab: usize
 }
 
 impl Joiner {
@@ -89,9 +90,9 @@ impl Joiner {
     /// "Give a joiner a feed, it processes for a millisecond.
     ///  Give a joiner a channel, it processes until the pumper dies." — Ancient proverb 🧵
     pub fn new(
-        rx: Receiver<Page>,
+        rx: Receiver<Draft>,
         tx: Sender<Payload>,
-        caster: PageToEntriesCaster,
+        caster: DraftToEntriesCaster,
         manifold: ManifoldBackend,
         the_throttle_knob: FlowKnob,
     ) -> Self {
@@ -101,7 +102,7 @@ impl Joiner {
             caster,
             manifold,
             the_throttle_knob,
-            entries_buffer: VecDeque::new(),
+            entries_buffer : VecDeque::new(),
             the_running_byte_tab: 0,
         }
     }
@@ -122,24 +123,16 @@ impl Joiner {
             loop {
                 match self.rx.recv_blocking() {
                     Ok(page) => {
-                        // 📜 Page arrives → cast into entries → buffer → flush when full
-                        let entries = self
-                            .caster
-                            .cast(page)
-                            .context("💀 Caster failed — the data fought back")?;
+                        // 📜 Draft arrives → cast into entries → buffer → flush when full
+                        let entries = self.caster.cast(page).context("💀 Caster failed — the data fought back")?;
                         for entry in entries {
                             self.the_running_byte_tab += entry.len();
                             self.entries_buffer.push_back(entry);
 
-                            let the_ceiling = self
-                                .the_throttle_knob
-                                .load(Ordering::Relaxed)
-                                .saturating_sub(BUFFER_EPSILON_BYTES);
+                            let the_ceiling = self.the_throttle_knob.load(Ordering::Relaxed).saturating_sub(BUFFER_EPSILON_BYTES);
                             if self.the_running_byte_tab > the_ceiling {
                                 let the_payload = self.manifold.join(&mut self.entries_buffer)?;
-                                self.tx.send_blocking(the_payload).context(
-                                    "💀 ch2 closed — the drainers left without saying goodbye",
-                                )?;
+                                self.tx.send_blocking(the_payload).context("💀 ch2 closed — the drainers left without saying goodbye")?;
                                 self.the_running_byte_tab = 0;
                             }
                         }
@@ -148,9 +141,7 @@ impl Joiner {
                         // 🏁 Channel closed — flush whatever's left in the buffer
                         if !self.entries_buffer.is_empty() {
                             let the_payload = self.manifold.join(&mut self.entries_buffer)?;
-                            self.tx.send_blocking(the_payload).context(
-                                "💀 ch2 closed during final flush — so close, yet so far",
-                            )?;
+                            self.tx.send_blocking(the_payload).context("💀 ch2 closed during final flush — so close, yet so far")?;
                         }
                         // tx drops here naturally — when all joiners drop their tx,
                         // ch2 closes and drainers get the signal 🏊
@@ -182,13 +173,13 @@ mod tests {
     /// and the bottle is a String. 🦆
     #[test]
     fn the_one_where_a_feed_survives_the_joiner_thread() {
-        let (tx1, rx1) = async_channel::bounded::<Page>(10);
+        let (tx1, rx1) = async_channel::bounded::<Draft>(10);
         let (tx2, rx2) = async_channel::bounded::<Payload>(10);
 
         let joiner = Joiner::new(
             rx1,
             tx2,
-            PageToEntriesCaster::Passthrough(passthrough::Passthrough),
+            DraftToEntriesCaster::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             // 📏 Huge max so we don't trigger mid-test flushes — we control the flush via channel close
             knob(usize::MAX),
@@ -198,15 +189,12 @@ mod tests {
         let the_joiner_thread = joiner.start();
 
         // 📤 Send one feed, then close ch1 to trigger final flush
-        tx1.send_blocking(Page(r#"{"doc":1}"#.to_string())).unwrap();
+        tx1.send_blocking(Draft(r#"{"doc":1}"#.to_string())).unwrap();
         tx1.close();
 
         // 📥 The joiner should have flushed and sent a JSON array payload to ch2
         let the_payload = rx2.recv_blocking().unwrap();
-        assert_eq!(
-            *the_payload, r#"[{"doc":1}]"#,
-            "🎯 Joiner should produce a JSON array wrapping the feed"
-        );
+        assert_eq!(*the_payload, r#"[{"doc":1}]"#, "🎯 Joiner should produce a JSON array wrapping the feed");
 
         // 🧵 Thread should exit cleanly after ch1 closes
         the_joiner_thread
@@ -220,13 +208,13 @@ mod tests {
     /// like a lazy postman. 📬
     #[test]
     fn the_one_where_multiple_feeds_become_one_payload() {
-        let (tx1, rx1) = async_channel::bounded::<Page>(10);
+        let (tx1, rx1) = async_channel::bounded::<Draft>(10);
         let (tx2, rx2) = async_channel::bounded::<Payload>(10);
 
         let joiner = Joiner::new(
             rx1,
             tx2,
-            PageToEntriesCaster::Passthrough(passthrough::Passthrough),
+            DraftToEntriesCaster::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             knob(usize::MAX),
         );
@@ -234,15 +222,16 @@ mod tests {
         let the_joiner_thread = joiner.start();
 
         // 📤 Send three feeds, close ch1
-        tx1.send_blocking(Page(r#"{"doc":1}"#.to_string())).unwrap();
-        tx1.send_blocking(Page(r#"{"doc":2}"#.to_string())).unwrap();
-        tx1.send_blocking(Page(r#"{"doc":3}"#.to_string())).unwrap();
+        tx1.send_blocking(Draft(r#"{"doc":1}"#.to_string())).unwrap();
+        tx1.send_blocking(Draft(r#"{"doc":2}"#.to_string())).unwrap();
+        tx1.send_blocking(Draft(r#"{"doc":3}"#.to_string())).unwrap();
         tx1.close();
 
         // 📥 All three should arrive as one JSON array payload
         let the_payload = rx2.recv_blocking().unwrap();
         assert_eq!(
-            the_payload, r#"[{"doc":1},{"doc":2},{"doc":3}]"#,
+            the_payload,
+            r#"[{"doc":1},{"doc":2},{"doc":3}]"#,
             "🎯 Three feeds should join into one JSON array"
         );
 
@@ -253,7 +242,7 @@ mod tests {
     /// Like a toilet with a sensitive flush sensor. Crude but accurate. 🚽🦆
     #[test]
     fn the_one_where_buffer_flushes_before_channel_closes() {
-        let (tx1, rx1) = async_channel::bounded::<Page>(10);
+        let (tx1, rx1) = async_channel::bounded::<Draft>(10);
         let (tx2, rx2) = async_channel::bounded::<Payload>(10);
 
         // 📏 Set max_request_size_bytes so small that even one feed triggers a flush
@@ -263,7 +252,7 @@ mod tests {
         let joiner = Joiner::new(
             rx1,
             tx2,
-            PageToEntriesCaster::Passthrough(passthrough::Passthrough),
+            DraftToEntriesCaster::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             knob(comically_small_max),
         );
@@ -271,24 +260,16 @@ mod tests {
         let the_joiner_thread = joiner.start();
 
         // 📤 Send two feeds — each should flush independently due to tiny max
-        tx1.send_blocking(Page(r#"{"doc":"first"}"#.to_string()))
-            .unwrap();
-        tx1.send_blocking(Page(r#"{"doc":"second"}"#.to_string()))
-            .unwrap();
+        tx1.send_blocking(Draft(r#"{"doc":"first"}"#.to_string())).unwrap();
+        tx1.send_blocking(Draft(r#"{"doc":"second"}"#.to_string())).unwrap();
         tx1.close();
 
         // 📥 Should get two separate payloads (one per flush)
         let payload_one = rx2.recv_blocking().unwrap();
         let payload_two = rx2.recv_blocking().unwrap();
 
-        assert_eq!(
-            *payload_one, r#"[{"doc":"first"}]"#,
-            "🎯 First feed should flush on its own"
-        );
-        assert_eq!(
-            *payload_two, r#"[{"doc":"second"}]"#,
-            "🎯 Second feed should flush on its own"
-        );
+        assert_eq!(*payload_one, r#"[{"doc":"first"}]"#, "🎯 First feed should flush on its own");
+        assert_eq!(*payload_two, r#"[{"doc":"second"}]"#, "🎯 Second feed should flush on its own");
 
         the_joiner_thread.join().unwrap().unwrap();
     }
@@ -297,13 +278,13 @@ mod tests {
     /// The joiner receives nothing. It sends nothing. It is at peace. 🧘
     #[test]
     fn the_one_where_no_feeds_means_no_payloads() {
-        let (tx1, rx1) = async_channel::bounded::<Page>(10);
+        let (tx1, rx1) = async_channel::bounded::<Draft>(10);
         let (tx2, rx2) = async_channel::bounded::<Payload>(10);
 
         let joiner = Joiner::new(
             rx1,
             tx2,
-            PageToEntriesCaster::Passthrough(passthrough::Passthrough),
+            DraftToEntriesCaster::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             knob(usize::MAX),
         );
@@ -327,7 +308,7 @@ mod tests {
     /// while you're cooking — the kitchen gets colder. 🌡️🦆
     #[test]
     fn the_one_where_the_flow_knob_changes_mid_flight() {
-        let (tx1, rx1) = async_channel::bounded::<Page>(10);
+        let (tx1, rx1) = async_channel::bounded::<Draft>(10);
         let (tx2, rx2) = async_channel::bounded::<Payload>(10);
 
         // 📏 Start with a huge knob — nothing flushes until channel close
@@ -337,7 +318,7 @@ mod tests {
         let joiner = Joiner::new(
             rx1,
             tx2,
-            PageToEntriesCaster::Passthrough(passthrough::Passthrough),
+            DraftToEntriesCaster::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             the_shared_knob,
         );
@@ -345,15 +326,13 @@ mod tests {
         let the_joiner_thread = joiner.start();
 
         // 📤 Send first feed — won't flush yet (knob is huge)
-        tx1.send_blocking(Page(r#"{"doc":"before"}"#.to_string()))
-            .unwrap();
+        tx1.send_blocking(Draft(r#"{"doc":"before"}"#.to_string())).unwrap();
 
         // 🔧 Now crank the knob down so small that the NEXT feed triggers a flush
         the_knob_clone.store(BUFFER_EPSILON_BYTES + 5, Ordering::Relaxed);
 
         // 📤 Send second feed — should trigger flush due to lowered knob
-        tx1.send_blocking(Page(r#"{"doc":"after"}"#.to_string()))
-            .unwrap();
+        tx1.send_blocking(Draft(r#"{"doc":"after"}"#.to_string())).unwrap();
 
         // 📥 First payload should arrive (both feeds flushed together when threshold hit)
         let the_first_payload = rx2.recv_blocking().unwrap();

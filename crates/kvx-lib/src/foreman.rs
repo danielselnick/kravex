@@ -32,15 +32,15 @@
 //! 💀 WORKERS ARE THE FOREMAN'S PRIVATE LITTLE MINIONS WHOM THE WORLD FORGOT ABOUT
 //! 🔒 Like Fight Club, but for async tasks. First rule: you don't pub the workers.
 
-use crate::FlowKnob;
-use crate::GaugeReading;
-use crate::casts::PageToEntriesCaster;
 use crate::config::AppConfig;
+use crate::casts::DraftToEntriesCaster;
 use crate::manifolds::ManifoldBackend;
 use crate::progress::{DrainMetrics, spawn_progress_reporter};
+use crate::FlowKnob;
 use crate::regulators::Regulators;
 use crate::workers;
 use crate::workers::{GovernorConfig, Worker};
+use crate::GaugeReading;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use tracing::info;
@@ -98,7 +98,7 @@ impl Foreman {
         &self,
         source_backend: crate::backends::SourceBackend,
         sink_backends: Vec<crate::backends::SinkBackend>,
-        caster: PageToEntriesCaster,
+        caster: DraftToEntriesCaster,
         manifold: ManifoldBackend,
         the_flow_knob: FlowKnob,
         the_governor_config: &GovernorConfig,
@@ -114,9 +114,7 @@ impl Foreman {
 
         // 📬 ch2: joiners → drainers — carries assembled payload Strings, MPMC
         // The VIP lounge of the pipeline — only processed payloads allowed past this point 🎟️
-        let (tx2, rx2) = async_channel::bounded::<crate::Payload>(
-            self.app_config.runtime.joiner_to_drainer_capacity,
-        );
+        let (tx2, rx2) = async_channel::bounded::<crate::Payload>(self.app_config.runtime.joiner_to_drainer_capacity);
 
         // 📬 ch3: drainers → governor — carries GaugeReading (latency feedback), MPSC-ish
         // Only created for latency regulation. Static mode = no channel, no Governor, no drama 🎭
@@ -144,11 +142,7 @@ impl Foreman {
             "🏗️ Foreman assembling pipeline: 1 pumper → {} joiners → {} drainers{}",
             the_joiner_count,
             sink_backends.len(),
-            if the_gauge_channel.is_some() {
-                " + Governor"
-            } else {
-                ""
-            }
+            if the_gauge_channel.is_some() { " + Governor" } else { "" }
         );
 
         // ═══════════════════════════════════════════════════════════════════

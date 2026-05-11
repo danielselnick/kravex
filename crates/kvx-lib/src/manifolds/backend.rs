@@ -10,7 +10,7 @@
 //! 🎭 **ManifoldBackend** — polymorphic dispatcher resolved from `SinkConfig`.
 //!
 //! 🧠 Knowledge graph:
-//! - Same pattern as `PageToEntriesCaster`, `SourceBackend`, `SinkBackend`
+//! - Same pattern as `DraftToEntriesCaster`, `SourceBackend`, `SinkBackend`
 //! - Resolution: SinkConfig → ManifoldBackend::from_sink_config() → concrete manifold
 //! - ES/File → NdjsonManifold | InMemory → JsonArrayManifold
 //! - The compiler monomorphizes each arm; branch prediction eliminates the match
@@ -33,7 +33,7 @@ use std::collections::VecDeque;
 
 /// 🎭 The polymorphic manifold — wraps concrete manifolds, dispatches via match.
 ///
-/// Same pattern as `PageToEntriesCaster`, `SourceBackend`, `SinkBackend`.
+/// Same pattern as `DraftToEntriesCaster`, `SourceBackend`, `SinkBackend`.
 /// The compiler monomorphizes each arm. Branch prediction eliminates the match
 /// after a couple iterations. The enum is a formality. The dispatch is basically free.
 ///

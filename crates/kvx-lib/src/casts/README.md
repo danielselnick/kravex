@@ -12,7 +12,7 @@ Feed format transformation layer. A Caster converts raw feeds from a Source into
 
 ## Dispatcher Enum
 
-`PageToEntriesCaster` — routes to concrete caster based on source/sink config combination.
+`DraftToEntriesCaster` — routes to concrete caster based on source/sink config combination.
 
 ## Concrete Casters
 
@@ -34,7 +34,7 @@ Caster selection is determined by the **source x sink config** combination at st
 ## Knowledge Graph
 
 ```
-Caster trait → PageToEntriesCaster enum → Passthrough | NdJsonToBulk | PitToBulk
-PageToEntriesCaster → resolved by from_configs(SourceConfig, SinkConfig)
+Caster trait → DraftToEntriesCaster enum → Passthrough | NdJsonToBulk | PitToBulk
+DraftToEntriesCaster → resolved by from_configs(SourceConfig, SinkConfig)
 Caster → consumed by Manifold during join()
 ```
