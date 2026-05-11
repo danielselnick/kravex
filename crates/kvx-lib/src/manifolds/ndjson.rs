@@ -27,11 +27,16 @@ use std::collections::VecDeque;
 
 /// 📡 Newline-Delimited JSON — the format ES `/_bulk` demands and files prefer.
 ///
-/// Taps each barrel, joins results with `\n`, trailing `\n`.
-/// For ES bulk, each tap result is "action\nsource" (two NDJSON lines per doc).
+/// Each draft already carries its own trailing `\n` (produced by the tapper).
+/// The manifold concatenates them verbatim. No separator is inserted between drafts.
+/// That means if any draft lacks a trailing `\n`, the output will be malformed NDJSON.
+///
+/// For ES bulk, each tapper result is "action\nsource\n" (two NDJSON lines per doc + trailing newline).
 /// After join: "action1\nsource1\naction2\nsource2\n" — valid `/_bulk` drum.
 ///
 /// For file passthrough: "doc1\ndoc2\n" — valid newline-delimited file content.
+///
+/// 📜 **Contract**: All drafts MUST include their own trailing `\n`. The manifold does NOT add one.
 ///
 /// What's the DEAL with NDJSON? It's JSON but unfriendly. Every line is lonely.
 /// No brackets to hold them. No commas to connect them. Just newlines. And silence.
@@ -48,14 +53,14 @@ impl Manifold for NdjsonManifold {
         let mut drum = String::with_capacity(estimated_size);
 
         for draft in drafts.drain(..) {
-            // -- 🔄 Each draft is already tapped — just stitch them together with newlines
-            // -- Like a quilt, but made of JSON, and nobody finds it cozy
+            // -- 🔄 Each draft is already tapped and carries its own trailing \n.
+            // -- The tapper (NdJsonToBulk, PitToBulk) is responsible for adding \n.
+            // -- We just concatenate — no separator inserted here.
             drum.push_str(&draft);
-            // We expect each draft to have \n if it's being casted to bulk
-            // drum.push('\n');
         }
 
-        // -- ✅ Trailing \n included — ES bulk requires it, files appreciate it, nobody complains.
+        // -- ✅ Trailing \n is provided by the last draft (tappers always include it).
+        // -- ES bulk requires it, files appreciate it, nobody complains.
         // -- Ancient proverb: "He who omits the trailing newline, debugs at 3am."
         Ok(Drum(drum))
     }

@@ -44,7 +44,9 @@ pub struct RuntimeConfig {
     #[serde(default = "default_pumper_to_refiner_capacity")]
     pub pumper_to_refiner_capacity: usize,
     /// 📬 Bounded channel capacity for ch2 (refiners → drainers) — assembled drums in transit 🚛
-    /// Separate from pumper_to_refiner_capacity because drums are larger than raw barrels —
+    /// Defaults to the same capacity as ch1 (refiner_count × 4). Drums are larger than raw
+    /// barrels, but the refiner pool produces them at the rate of the bottleneck, so matching
+    /// ch1 capacity avoids unnecessary backpressure asymmetry.
     /// think of ch1 as the loading dock and ch2 as the dispatch bay 🏗️
     // The byte size of this effectively becomes source max bytes * this capacity
     #[serde(default = "default_refiner_to_drainer_capacity")]
@@ -70,21 +72,23 @@ impl Default for RuntimeConfig {
     }
 }
 
-// 🔢 10: chosen by rolling a d20, getting a 10, and calling it "load tested".
+// 🔢 Scales with CPU count: (max(1, cpus-1)) × 4 — one barrel slot per refiner per channel round-trip.
 // -- The queue holds batches, not feelings, though both can become backpressure if ignored. 🦆
 fn default_pumper_to_refiner_capacity() -> usize {
     default_parallelism()
 }
 
-// 🧵 One sink lane by default: fewer moving parts, fewer ways to invent folklore during debugging.
+// 🧵 Sink parallelism scales with CPU count: (max(1, cpus-1)) × 4 × 3 = up to 12× per core.
+// -- This many lanes means high throughput at the cost of debugging surface area.
 // -- Ancient proverb: he who spawns eight writers before breakfast, debugs until dinner.
 fn default_sink_parallelism() -> usize {
     default_parallelism() * 3
 }
 
-// 📬 Drum channel (ch2, refiners → drainers): same default as ch1. Assembled drums are
-// chunkier than raw barrels, so a smaller channel is fine. Like a VIP line at the club — fewer
-// people, more velvet rope per capita. 🦆
+// 📬 Drum channel (ch2, refiners → drainers): matches ch1 capacity by default.
+// Drums are chunkier than raw barrels, but the refiner pool produces them at the
+// bottleneck rate so mirroring ch1 avoids backpressure asymmetry.
+// Like a VIP line at the club — same number of guests, just fancier outfits. 🦆
 fn default_refiner_to_drainer_capacity() -> usize {
     default_parallelism()
 }

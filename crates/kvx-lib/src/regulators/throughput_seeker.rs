@@ -14,7 +14,7 @@
 //! ```text
 //! Drainer completes → DrainResult { drum_bytes, latency_ms }
 //!   → System 1: Circuit Breaker (dual EMA crossover, every reading)
-//!     → fast EMA drops 20% below slow EMA? TRIP → immediate halve
+//!     → fast EMA drops 35% below slow EMA? TRIP → immediate halve
 //!   → System 2: Hill Climber (5s windowed median)
 //!     → improved >10%? step forward
 //!     → worsened >10%? reverse + shrink step (×0.618)

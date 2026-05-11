@@ -9,7 +9,7 @@
 //!
 //! 🎼 The Manifolds module — orchestrating the tap-and-join step.
 //!
-//! The Manifold receives raw barrels + a tapper reference, iterates barrels,
+//! The Manifold receives raw drafts
 //! calls `tapper.tap(barrel)` per barrel to get the transformed String,
 //! then joins all results into the wire-format drum.
 //!

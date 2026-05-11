@@ -370,7 +370,7 @@ impl ProgressReporter {
 
     /// 🎨 Render the full progress display as a comfy-table message on the progress bar.
     ///
-    /// Layout (6 rows x 2 cols):
+    /// Layout (5 data rows):
     /// ```text
     /// | sink: <name>
     /// | [=====>----------]
