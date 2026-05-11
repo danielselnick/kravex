@@ -9,14 +9,14 @@
 //! *["I am the Governor," it announces. "And this porridge is JUST right."]* 🔧📡🦆
 //!
 //! 📦 Governor — the unified regulator worker that listens to GaugeReading signals
-//! and adjusts the FlowKnob that Joiners read to size their drums.
+//! and adjusts the FlowKnob that Refiners read to size their drums.
 //!
 //! 🧠 Knowledge graph:
 //! ```text
 //! Drainer(s) --[ch3: GaugeReading::DrainResult]--> Governor
 //!   → regulator.regulate(reading, dt) → new flow rate (bytes)
-//!     → FlowKnob: Arc<AtomicUsize> (effective max_request_size_bytes)
-//!       → Joiner reads flow knob on every flush check
+//!     → FlowKnob: Arc<AtomicUsize> (effective max_drum_size_bytes)
+//!       → Refiner reads flow knob on every flush check
 //! ```
 //!
 //! 🔄 Shutdown: all Drainers exit → their tx3 clones drop → ch3 closes → Governor exits.
@@ -37,7 +37,7 @@ use crate::regulators::{Regulate, Regulators};
 use crate::FlowKnob;
 use super::Worker;
 
-/// 🎛️ The Governor: receives gauge readings, barrels a PID regulator, adjusts the FlowKnob.
+/// 🎛️ The Governor: receives gauge readings, feeds a PID regulator, adjusts the FlowKnob.
 ///
 /// Like a DJ reading the room and adjusting the volume — except the room is a cluster,
 /// the music is bulk drums, and nobody asked for this metaphor. 🎧🦆
@@ -88,7 +88,7 @@ impl Worker for Governor {
 
                         the_last_time_we_checked = SystemTime::now();
 
-                        // 🔧 Store the regulated output to the FlowKnob — Joiners will pick it up
+                        // 🔧 Store the regulated output to the FlowKnob — Refiners will pick it up
                         let the_old_flow = self.the_flow_knob.swap(
                             the_new_flow as usize,
                             Ordering::Relaxed,

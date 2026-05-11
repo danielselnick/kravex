@@ -11,14 +11,6 @@
 //!
 //! 🧠 Knowledge graph:
 //! - Same pattern as `BarrelToDraftsTapper`, `SourceBackend`, `SinkBackend`
-//! - Resolution: SinkConfig → ManifoldBackend::from_sink_config() → concrete manifold
-//! - ES/File → NdjsonManifold | InMemory → JsonArrayManifold
-//! - The compiler monomorphizes each arm; branch prediction eliminates the match
-//!   after a couple iterations. The enum is a formality. The dispatch is basically free.
-//! - Cloning ManifoldBackend is free — NdjsonManifold and JsonArrayManifold are zero-sized.
-//!
-//! 🦆 The duck asked why we need a backend enum when we have trait objects.
-//!    We said "monomorphization." The duck left. It didn't want a lecture.
 
 use super::{JsonArrayManifold, Manifold, NdjsonManifold};
 use crate::config::SinkConfig;
@@ -42,9 +34,9 @@ use std::collections::VecDeque;
 /// ES needs NDJSON. Files need NDJSON. InMemory wants JSON arrays. Simple.
 #[derive(Debug, Clone)]
 pub enum ManifoldBackend {
-    /// 📡 Newline-delimited JSON — cast + join with `\n`
+    /// 📡 Newline-delimited JSON — tap + join with `\n`
     Ndjson(NdjsonManifold),
-    /// 📦 JSON array — cast + wrap in `[`, commas, `]`
+    /// 📦 JSON array — tap + wrap in `[`, commas, `]`
     JsonArray(JsonArrayManifold),
 }
 

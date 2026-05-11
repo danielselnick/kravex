@@ -7,20 +7,20 @@
 //!
 //! 🎬 COLD OPEN — INT. DATA FORGE — MIDNIGHT
 //! *[raw barrels arrive, unformatted, confused, smelling faintly of source API]*
-//! *["Cast me," they whisper. "Make me worthy of the sink."]*
+//! *["Tap me," they whisper. "Make me worthy of the sink."]*
 //! *[a Tapper steps forward. It has no fear. Only `match` arms.]*
 //!
 //! Each Tapper takes a raw barrel String and casts it into the format
 //! the sink expects. Passthrough? Identity. NdJsonToBulk? ES bulk action lines.
 //!
 //! 🧠 Knowledge graph:
-//! - **Tapper** trait: `fn cast(&self, barrel: String) -> Result<String>`
+//! - **Tapper** trait: `fn tap(&self, barrel: Barrel) -> Result<Vec<Draft>>`
 //! - **BarrelToDraftsTapper** enum: dispatches to concrete tappers (same pattern as ManifoldBackend)
 //! - Resolution: `BarrelToDraftsTapper::from_configs(source, sink)` matches the pair
 //!
-//! 🦆 The duck casts no shadow. Only barrels.
+//! 🦆 The duck taps no shadow. Only barrels.
 //!
-//! ⚠️ The singularity will cast its own barrels. Until then, we have enums.
+//! ⚠️ The singularity will tap its own barrels. Until then, we have enums.
 
 pub mod passthrough;
 pub mod ndjson_to_bulk;
@@ -38,7 +38,7 @@ use crate::Draft;
 /// 🎭 A Tapper transforms a raw barrel into the sink's expected format.
 ///
 pub trait Tapper: std::fmt::Debug {
-    /// 🔄 Cast a raw source barrel into sink-format output drafts.
+    /// 🔄 Tap a raw source barrel into sink-format output drafts.
         /// The barrel goes in raw. It comes out ready. Like a pottery kiln, but for JSON. 🏺
         fn tap(&self, barrel: Barrel) -> Result<Vec<Draft>>;
 }
@@ -49,12 +49,12 @@ pub trait Tapper: std::fmt::Debug {
 ///
 /// 📦 Same pattern as `ManifoldBackend`, `SourceBackend`, `SinkBackend`:
 /// enum wraps concrete types, match dispatches, compiler monomorphizes, branch prediction
-/// eliminates the overhead after warmup. The enum is a formality. The cast is free. 🐄
+/// eliminates the overhead after warmup. The enum is a formality. The tap is free. 🐄
 #[derive(Debug, Clone)]
 pub enum BarrelToDraftsTapper {
     // -- 📡 NDJSON raw docs → ES bulk action+source pairs
     NdJsonToBulk(ndjson_to_bulk::NdJsonToBulk),
-    // -- 🚶 Identity cast — barrel passes through unchanged, like TSA PreCheck for data
+    // -- 🚶 Identity tap — barrel passes through unchanged, like TSA PreCheck for data
     Passthrough(passthrough::Passthrough),
     // -- 📡🎭 ES _search PIT response → _bulk NDJSON (extracts hits from envelope)
     PitToBulk(pit_to_bulk::PitToBulk),
@@ -166,7 +166,7 @@ mod tests {
             "File → ES should resolve to NdJsonToBulk 🏎️"
         );
 
-        // 🔄 Cast a barrel through it
+        // 🔄 Tap a barrel through it
         let rally_barrel = serde_json::json!({
             "ObjectID": 42069,
             "Name": "Test story",
@@ -176,7 +176,7 @@ mod tests {
         let the_output = the_tapper.tap(Barrel(rally_barrel))?;
 
         // ✅ Output should be non-empty (NdJsonToBulk produces action+source lines)
-        assert!(!the_output.is_empty(), "Cast output should not be empty 🎯");
+        assert!(!the_output.is_empty(), "Tap output should not be empty 🎯");
 
         Ok(())
     }
@@ -213,9 +213,9 @@ mod tests {
         assert!(matches!(the_tapper, BarrelToDraftsTapper::Passthrough(_)));
     }
 
-    /// 🧪 Full pipeline integration: resolve + cast multi-doc barrel through NdJsonToBulk.
+    /// 🧪 Full pipeline integration: resolve + tap multi-doc barrel through NdJsonToBulk.
     #[test]
-    fn the_one_where_ndjson_barrels_get_cast_via_config_resolution() -> Result<()> {
+    fn the_one_where_ndjson_barrels_get_tapped_via_config_resolution() -> Result<()> {
         let source = SourceConfig::File(FileSourceConfig {
             file_name: "data.json".to_string(),
             common_config: CommonSourceConfig::default(),
@@ -250,7 +250,7 @@ mod tests {
 
         let the_output = the_tapper.tap(Barrel(rally_barrel))?;
         // ✅ NdJsonToBulk should produce non-empty output for a multi-doc barrel
-        assert!(!the_output.is_empty(), "Cast output should not be empty for multi-doc barrel 🎯");
+        assert!(!the_output.is_empty(), "Tap output should not be empty for multi-doc barrel 🎯");
 
         Ok(())
     }

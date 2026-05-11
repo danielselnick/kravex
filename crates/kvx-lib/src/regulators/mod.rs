@@ -15,8 +15,8 @@
 //! Drainer sends GaugeReading::DrainResult { drum_bytes, latency_ms }
 //!   → Governor receives on ch3
 //!     → Regulator.regulate(reading, dt) → new flow rate (bytes)
-//!       → FlowKnob: Arc<AtomicUsize> (effective max_request_size_bytes)
-//!         → Joiner reads flow knob on every flush check
+//!       → FlowKnob: Arc<AtomicUsize> (effective max_drum_size_bytes)
+//!         → Refiner reads flow knob on every flush check
 //! ```
 //!
 //! - `Regulate` trait: `fn regulate(&mut self, reading: GaugeReading, dt: Duration) -> f64`
@@ -81,13 +81,13 @@ impl Regulators {
     /// PID math is generic — setpoint becomes target latency,
     /// error direction: high reading = overloaded → reduce output. 🎛️
     ///
-    /// 📏 `sink_max_request_size_bytes` is the hard ceiling from the sink config —
+    /// 📏 `sink_max_drum_size_bytes` is the hard ceiling from the sink config —
     /// the PID won't suggest drums bigger than what the sink can physically accept. 🦆
-    pub fn from_latency_config(config: &LatencyRegulatorConfig, sink_max_request_size_bytes: usize) -> Self {
+    pub fn from_latency_config(config: &LatencyRegulatorConfig, sink_max_drum_size_bytes: usize) -> Self {
         Regulators::Pid(PidController::new(
             config.set_point_latency_ms as f64,
             config.min_request_size_bytes as f64,
-            sink_max_request_size_bytes as f64,
+            sink_max_drum_size_bytes as f64,
             config.initial_output_bytes as f64,
         ))
     }
@@ -95,10 +95,10 @@ impl Regulators {
     /// 🏗️ Create a Regulators instance from throughput seeker config.
     /// No PID, no setpoints, no guessing — just climb toward peak throughput.
     /// Like a GPS that optimizes for "fastest route" instead of "shortest distance." 🏔️🦆
-    pub fn from_throughput_config(config: &ThroughputSeekerConfig, sink_max_request_size_bytes: usize) -> Self {
+    pub fn from_throughput_config(config: &ThroughputSeekerConfig, sink_max_drum_size_bytes: usize) -> Self {
         Regulators::ThroughputSeeker(ThroughputSeeker::new(
             config,
-            sink_max_request_size_bytes as f64,
+            sink_max_drum_size_bytes as f64,
         ))
     }
 }

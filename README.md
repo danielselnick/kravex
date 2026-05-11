@@ -102,7 +102,7 @@ curl -s "http://localhost:9200/employees/_count" | jq .count
 Kravex uses a plumbing metaphor throughout. The entire pipeline is modeled as water flowing through pipes — sources are faucets, sinks are drains, and everything in between controls the flow.
 
 ```
-Pumper (async) → ch1 → Joiner pool (std::thread) → ch2 → Drainer pool (async) → Sink
+Pumper (async) → ch1 → Refiner pool (std::thread) → ch2 → Drainer pool (async) → Sink
                             ↑                                    |
                         FlowKnob ← Governor ← Regulator ← ch3
 ```
@@ -115,26 +115,26 @@ Pumper (async) → ch1 → Joiner pool (std::thread) → ch2 → Drainer pool (a
 | **Pumper** | The handle you turn | Async tokio worker. Calls `source.pump()` in a loop, feeds raw barrels into ch1 until EOF. |
 | **Tapper** | Pipe fitting | Stateless transformer. Takes a raw barrel and casts it into the format the sink expects (e.g., PIT response → bulk NDJSON). |
 | **Manifold** | Collector pipe | Orchestrates cast-and-join. Buffers individual drafts from the Tapper and assembles them into wire-format drums sized to the current flow rate. |
-| **Joiner** | The junction | CPU-bound std::thread worker. Sits between Pumper and Drainer. Receives raw barrels from ch1, casts via Tapper, buffers via Manifold, flushes assembled drums to ch2. |
+| **Refiner** | The junction | CPU-bound std::thread worker. Sits between Pumper and Drainer. Receives raw barrels from ch1, casts via Tapper, buffers via Manifold, flushes assembled drums to ch2. |
 | **Drainer** | The drain | Async tokio worker. Receives assembled drums from ch2 and writes them to the Sink with retry logic and exponential backoff. |
 | **Sink** | Drain pipe | Pure I/O, zero logic. Accepts a fully rendered drum and sends it. Does not buffer, does not transform. |
 | **Foreman** | The plumber | Pipeline orchestrator. Wires up all channels, spawns all workers, and waits for completion. |
 | **Governor** | The foreman's clipboard | Receives gauge readings on ch3, feeds them to the active Regulator, writes the result to the FlowKnob. Orchestrates the feedback loop. |
 | **Regulator** | Pressure valve | Dynamically adjusts drum sizing based on feedback. Variants: `ThroughputSeeker` (hill-climbing optimizer), `CpuPressure` (PID controller), `Static` (fixed value). |
 | **PressureGauge** | Pressure meter | Background tokio task. Polls the sink cluster's `_nodes/stats` endpoint, feeds readings to the active Regulator. |
-| **FlowKnob** | The valve handle | `Arc<AtomicUsize>` shared between Governor (writes) and Joiners (reads). Controls how large each drum gets before flushing. |
+| **FlowKnob** | The valve handle | `Arc<AtomicUsize>` shared between Governor (writes) and Refiners (reads). Controls how large each drum gets before flushing. |
 
 ### Channels
 
 | Channel | Carries | From → To |
 |---------|---------|-----------|
-| **ch1** | Raw barrels (`Barrel`) | Pumper → Joiner pool |
-| **ch2** | Assembled drums (`Drum`) | Joiner pool → Drainer pool |
+| **ch1** | Raw barrels (`Barrel`) | Pumper → Refiner pool |
+| **ch2** | Assembled drums (`Drum`) | Refiner pool → Drainer pool |
 | **ch3** | Latency/error readings (`GaugeReading`) | Drainers → Governor |
 
 ### Why the thread split?
 
-Joiners run on `std::thread` (not tokio) because casting and drum assembly are CPU-bound. Pumpers and Drainers are async because they do network I/O. This keeps the tokio runtime free for I/O and prevents CPU work from starving network operations.
+Refiners run on `std::thread` (not tokio) because casting and drum assembly are CPU-bound. Pumpers and Drainers are async because they do network I/O. This keeps the tokio runtime free for I/O and prevents CPU work from starving network operations.
 
 ## A note on the code
 
@@ -169,7 +169,7 @@ kravex/
 │   │       ├── taps/           # Barrel-to-Draft transformers
 │   │       ├── manifolds/      # Draft-to-Drum assemblers
 │   │       ├── regulators/     # Adaptive throttle controllers (hill-climbing, PID, static)
-│   │       ├── workers/        # Pumper, Joiner, Drainer, Governor
+│   │       ├── workers/        # Pumper, Refiner, Drainer, Governor
 │   │       └── foreman.rs      # Pipeline orchestrator
 │   └── kvx-cli/      # CLI binary wrapping kvx
 │   └── kvx-api/      # REST API binary wrapping kvx
@@ -187,12 +187,12 @@ All configuration lives in a single TOML file.
 
 ### `[runtime]`
 
-| Key | Aliases | Description | Default |
-|-----|---------|-------------|---------|
-| `pumper_to_joiner_capacity` | `channel_size`, `queue_capacity` | Channel capacity (ch1) between Pumper and Joiner pool | `joiner_parallelism × 4` |
-| `joiner_to_drainer_capacity` | `drum_channel_capacity` | Channel capacity (ch2) between Joiner pool and Drainer pool | `joiner_parallelism × 4` |
-| `joiner_parallelism` | `num_joiner_workers` | Number of CPU-bound Joiner threads | `num_cpus - 1` |
-| `sink_parallelism` | `num_sink_workers` | Number of concurrent Drainer workers | `joiner_parallelism × 12` |
+| Key | Description | Default |
+|-----|-------------|---------|
+| `pumper_to_refiner_capacity` | Channel capacity (ch1) between Pumper and Refiner pool | `refiner_count × 4` |
+| `refiner_to_drainer_capacity` | Channel capacity (ch2) between Refiner pool and Drainer pool | `refiner_count × 4` |
+| `refiner_count` | Number of CPU-bound Refiner threads | `num_cpus - 1` |
+| `sink_parallelism` | Number of concurrent Drainer workers | `refiner_count × 12` |
 
 ### `[source_config]`
 
@@ -227,7 +227,7 @@ Sink backend is specified as a sub-table: `[sink_config.Elasticsearch]`, `[sink_
 
 | Key | Description |
 |-----|-------------|
-| `max_request_size_bytes` | Maximum request drum size in bytes (optional, flattened at backend level) |
+| `max_drum_size_bytes` | Maximum request drum size in bytes (optional, flattened at backend level) |
 
 #### `[sink_config.Elasticsearch]`
 
@@ -257,7 +257,6 @@ Sink backend is specified as a sub-table: `[sink_config.Elasticsearch]`, `[sink_
 ### `[governor]`
 
 Controls how Kravex adapts drum sizing during a migration. Specified as an enum-style sub-table — pick one:
-Legacy `[flow_master.*]` sections are still accepted for backward compatibility.
 
 #### `[governor.Static]`
 

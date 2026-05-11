@@ -53,7 +53,7 @@ The `_bulk` API returns HTTP 200 even when individual documents fail (mapping er
 | `username` | `Option<String>` | no | Basic auth username |
 | `password` | `Option<String>` | no | Basic auth password |
 | `api_key` | `Option<String>` | no | API key auth (priority over basic) |
-| `common_config` | `CommonSinkConfig` | no | Request sizing (max_request_size_bytes) |
+| `common_config` | `CommonSinkConfig` | no | Request sizing (max_drum_size_bytes) |
 
 ## Key Concepts
 
@@ -76,7 +76,7 @@ extract_failed_pairs() → correlate NDJSON lines to response items by index →
 BulkResponse → { errors: bool, items: Vec<BulkItemWrapper> } — serde types for _bulk response parsing
 BulkItemResult → { status: u16, error: Option<BulkItemError> } — per-document outcome
 ElasticsearchSourceConfig → CommonSourceConfig (embedded) → max_batch_size_docs, max_batch_size_bytes
-ElasticsearchSinkConfig → CommonSinkConfig (embedded) → max_request_size_bytes
+ElasticsearchSinkConfig → CommonSinkConfig (embedded) → max_drum_size_bytes
 PIT + search_after → Barrel (raw _search envelope) → PitToBulk tapper → Draft → Manifold → Sink
 _bulk API ← Drum (NDJSON action+doc pairs) ← NdjsonManifold ← Draft ← PitToBulk
 ```

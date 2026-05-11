@@ -18,7 +18,7 @@
 //! sink file with a BufWriter so we're not doing a syscall per hit like some kind
 //! of 1995 CGI script.
 //!
-//! 🚰 Source → BufReader → Vec<String> → Drainer(cast+join) → Sink → BufWriter
+//! 🚰 Source → BufReader → Vec<String> → Drainer → Sink → BufWriter
 //! 💀 Disk full → your problem now
 //! 🦆 (mandatory, no notes)
 //!

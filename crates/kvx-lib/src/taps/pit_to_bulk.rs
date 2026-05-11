@@ -87,7 +87,7 @@ struct SearchHit<'a> {
 /// Like a ghost that transforms JSON — you never see it, but the output is different. 👻
 ///
 /// 🧠 Knowledge graph: ES source pumps raw `_search` response bodies → ch1 →
-/// Joiner calls `tapper.cast(barrel)` → PitToBulk extracts hits → _bulk NDJSON out.
+/// Refiner calls `tapper.tap(barrel)` → PitToBulk extracts hits → _bulk NDJSON out.
 #[derive(Debug, Clone, Copy)]
 pub struct PitToBulk;
 

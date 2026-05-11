@@ -9,13 +9,13 @@ Pipeline execution stages. Three worker types form the data flow pipeline.
 | Worker | Runtime | Role | I/O Model |
 |---|---|---|---|
 | **Pumper** | tokio (async) | Reads feeds from Source into ch1 | Async I/O bound |
-| **Joiner** | std::thread (sync) | Casts + joins feeds into drums | CPU bound |
+| **Refiner** | std::thread (sync) | Casts + joins feeds into drums | CPU bound |
 | **Drainer** | tokio (async) | Writes drums from ch2 to Sink | Async I/O bound |
 
 ## Pipeline Flow
 
 ```
-Source → Pumper → [ch1] → Joiner → [ch2] → Drainer → Sink
+Source → Pumper → [ch1] → Refiner → [ch2] → Drainer → Sink
                                                 ↻ retry with backoff
 ```
 
@@ -28,11 +28,11 @@ Source → Pumper → [ch1] → Joiner → [ch2] → Drainer → Sink
 |---|---|---|---|
 | `Worker` | `start()` | `JoinHandle<Result<()>>` | Spawn the worker as an async task |
 
-Note: Joiner does NOT implement Worker — it uses std::thread, not tokio tasks.
+Note: Refiner does NOT implement Worker — it uses std::thread, not tokio tasks.
 
 ## Shutdown Cascade
 
-Pumper completes → ch1 closes → Joiners flush and exit → ch2 closes → Drainers exit
+Pumper completes → ch1 closes → Refiners flush and exit → ch2 closes → Drainers exit
 
 ## Retry & Backoff
 
@@ -56,18 +56,18 @@ Total attempts = 1 (initial) + max_retries. All errors are retried uniformly; gr
 - **Three-stage separation**: Async I/O (pump) → sync CPU (cast+join) → async I/O (drain)
 - **Drainer is thin + resilient**: Relay with retry — recv from ch2, send to sink with backoff
 - **DrainMetrics**: Shared `Arc<DrainMetrics>` passed to Drainer constructor. After each successful `drain_with_retry`, Drainer calls `drain_metrics.record_drain(drum_bytes, latency_ms)` to atomically update shared progress counters. Separate from `gauge_tx` (Governor feedback) — this is for progress reporting
-- **Joiner is stateful**: Buffers feeds by byte count, flushes the Manifold output
+- **Refiner is stateful**: Buffers feeds by byte count, flushes the Manifold output
 
 ## Knowledge Graph
 
 ```
-Foreman → spawns Pumper (1) + Joiner (N) + Drainer (N)
+Foreman → spawns Pumper (1) + Refiner (N) + Drainer (N)
 Pumper → Source.pump() → ch1
-Joiner → ch1 → Tapper + Manifold → ch2
+Refiner → ch1 → Tapper + Manifold → ch2
 Drainer → ch2 → Sink.drain() with exponential backoff retry
 Drainer → Arc<DrainMetrics> (progress reporting, atomic counters)
 Drainer → gauge_tx (Governor latency feedback, separate concern)
 Drainer config → DrainerConfig (workers/config.rs)
-Joiner parallelism → RuntimeConfig.joiner_parallelism
+Refiner parallelism → RuntimeConfig.refiner_parallelism
 Drainer parallelism → RuntimeConfig.sink_parallelism
 ```

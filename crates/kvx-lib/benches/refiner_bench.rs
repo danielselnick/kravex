@@ -3,25 +3,25 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
-//! 🧵📊🚀 Joiner Benchmark Suite — "The Thread Redemption"
+//! 🧵📊🚀 Refiner Benchmark Suite — "The Thread Redemption"
 //!
-//! It was a quiet Tuesday. The joiners were just sitting there, buffering barrels,
-//! casting documents, joining drums. Nobody knew how fast they really were.
+//! It was a quiet Tuesday. The refiners were just sitting there, accumulating drafts,
+//! tapping documents, joining drums. Nobody knew how fast they really were.
 //! Nobody *asked*. Until now.
 //!
 //! This benchmark answers the question: "How many MB/s and docs/s can a single
-//! Joiner thread push through ch1 → buffer → manifold.join → ch2?"
+//! Refiner thread push through ch1 → plenum → manifold.join → ch2?"
 //!
 //! Auto-discovers all `ManifoldBackend` variants via `all_variants()` — add a new
 //! manifold and it gets benched for free. Like a gym membership you actually use.
 //!
-//! 🦆 The duck wonders if we're benchmarking the joiner or the channel. Yes.
+//! 🦆 The duck wonders if we're benchmarking the refiner or the channel. Yes.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use kvx_lib::taps::passthrough::Passthrough;
 use kvx_lib::taps::BarrelToDraftsTapper;
 use kvx_lib::manifolds::ManifoldBackend;
-use kvx_lib::workers::Joiner;
+use kvx_lib::workers::Refiner;
 use kvx_lib::{Barrel, Drum};
 use std::hint::black_box;
 
@@ -29,11 +29,11 @@ use std::hint::black_box;
 // -- 1K = warm-up vibes, 10K = realistic batch, 50K = stress test energy
 const DOC_COUNTS: &[usize] = &[1_000, 10_000, 50_000];
 
-// -- 📐 Channel capacity — big enough that the sender doesn't block on the joiner
+// -- 📐 Channel capacity — big enough that the sender doesn't block on the refiner
 // -- but not so big that we're benchmarking malloc instead of join logic
 const CHANNEL_CAPACITY: usize = 1024;
 
-// -- 📏 Max request size for the joiner — 10 MiB, large enough that we flush on close
+// -- 📏 Max request size for the refiner — 10 MiB, large enough that we flush on close
 // -- not mid-stream, so we measure join throughput without flush chatter
 const MAX_REQUEST_SIZE_BYTES: usize = 10 * 1024 * 1024;
 
@@ -60,17 +60,17 @@ fn generate_barrels(count: usize) -> Vec<String> {
 
 /// 📏 Total byte size of all barrels — for Throughput::Bytes reporting.
 /// Counts raw barrel bytes, not post-join drum bytes, because we want to know
-/// how fast the joiner *processes input*, not how big the output is. 🧮
+/// how fast the refiner *processes input*, not how big the output is. 🧮
 fn total_barrel_bytes(barrels: &[String]) -> u64 {
     barrels.iter().map(|f| f.len() as u64).sum()
 }
 
-/// 🚀📡 Throughput in MB/s — how fast does the joiner chew through raw barrel bytes?
+/// 🚀📡 Throughput in MB/s — how fast does the refiner chew through raw barrel bytes?
 ///
 /// Iterates all ManifoldBackend variants × doc counts. Criterion plots MB/s curves.
 /// If your manifold is slow, this benchmark will publicly shame it. No pressure.
-fn joiner_throughput_bytes(c: &mut Criterion) {
-    let mut group = c.benchmark_group("joiner_throughput_bytes");
+fn refiner_throughput_bytes(c: &mut Criterion) {
+    let mut group = c.benchmark_group("refiner_throughput_bytes");
 
     for manifold in ManifoldBackend::all_variants() {
         for &doc_count in DOC_COUNTS {
@@ -84,11 +84,11 @@ fn joiner_throughput_bytes(c: &mut Criterion) {
                 &doc_count,
                 |b, &_n| {
                     b.iter(|| {
-                        // -- 🧵 Fresh channels + joiner per iteration — no stale state leaking between runs
+                        // -- 🧵 Fresh channels + refiner per iteration — no stale state leaking between runs
                         let (tx1, rx1) = async_channel::bounded::<Barrel>(CHANNEL_CAPACITY);
                         let (tx2, rx2) = async_channel::bounded::<Drum>(CHANNEL_CAPACITY);
 
-                        let joiner = Joiner::new(
+                        let refiner = Refiner::new(
                             rx1,
                             tx2,
                             BarrelToDraftsTapper::Passthrough(Passthrough),
@@ -96,8 +96,8 @@ fn joiner_throughput_bytes(c: &mut Criterion) {
                             std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(MAX_REQUEST_SIZE_BYTES)),
                         );
 
-                        // -- 🚀 Launch the joiner thread — it blocks on recv_blocking until barrels arrive
-                        let the_joiner_handle = joiner.start();
+                        // -- 🚀 Launch the refiner thread — it blocks on recv_blocking until barrels arrive
+                        let the_refiner_handle = refiner.start();
 
                         // -- 📤 Sender thread: shove all barrels into ch1, then close
                         let barrels_clone = barrels.clone();
@@ -105,7 +105,7 @@ fn joiner_throughput_bytes(c: &mut Criterion) {
                             for barrel in barrels_clone {
                                 tx1.send_blocking(Barrel(barrel)).unwrap();
                             }
-                            // -- 🏁 Close ch1 — triggers joiner's final flush
+                            // -- 🏁 Close ch1 — triggers refiner's final flush
                             drop(tx1);
                         });
 
@@ -116,10 +116,10 @@ fn joiner_throughput_bytes(c: &mut Criterion) {
 
                         // -- 🧹 Wait for threads to finish — clean exits only, no zombies 🧟
                         sender_handle.join().expect("💀 Sender thread panicked");
-                        the_joiner_handle
+                        the_refiner_handle
                             .join()
-                            .expect("💀 Joiner thread panicked")
-                            .expect("💀 Joiner returned an error");
+                            .expect("💀 Refiner thread panicked")
+                            .expect("💀 Refiner returned an error");
                     });
                 },
             );
@@ -128,12 +128,12 @@ fn joiner_throughput_bytes(c: &mut Criterion) {
     group.finish();
 }
 
-/// 🚀🔢 Throughput in docs/s — how many barrels can the joiner process per second?
+/// 🚀🔢 Throughput in docs/s — how many barrels can the refiner process per second?
 ///
 /// Same setup as bytes bench but with `Throughput::Elements`. Because sometimes you
 /// want to know "how many docs" not "how many bytes." Both are valid life questions.
-fn joiner_throughput_docs(c: &mut Criterion) {
-    let mut group = c.benchmark_group("joiner_throughput_docs");
+fn refiner_throughput_docs(c: &mut Criterion) {
+    let mut group = c.benchmark_group("refiner_throughput_docs");
 
     for manifold in ManifoldBackend::all_variants() {
         for &doc_count in DOC_COUNTS {
@@ -146,11 +146,11 @@ fn joiner_throughput_docs(c: &mut Criterion) {
                 &doc_count,
                 |b, &_n| {
                     b.iter(|| {
-                        // -- 🧵 Fresh channels + joiner per iteration
+                        // -- 🧵 Fresh channels + refiner per iteration
                         let (tx1, rx1) = async_channel::bounded::<Barrel>(CHANNEL_CAPACITY);
                         let (tx2, rx2) = async_channel::bounded::<Drum>(CHANNEL_CAPACITY);
 
-                        let joiner = Joiner::new(
+                        let refiner = Refiner::new(
                             rx1,
                             tx2,
                             BarrelToDraftsTapper::Passthrough(Passthrough),
@@ -158,8 +158,8 @@ fn joiner_throughput_docs(c: &mut Criterion) {
                             std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(MAX_REQUEST_SIZE_BYTES)),
                         );
 
-                        // -- 🚀 Launch the joiner thread — it blocks on recv_blocking until barrels arrive
-                        let the_joiner_handle = joiner.start();
+                        // -- 🚀 Launch the refiner thread — it blocks on recv_blocking until barrels arrive
+                        let the_refiner_handle = refiner.start();
 
                         // -- 📤 Sender thread: barrel the beast
                         let barrels_clone = barrels.clone();
@@ -177,10 +177,10 @@ fn joiner_throughput_docs(c: &mut Criterion) {
                         }
 
                         sender_handle.join().expect("💀 Sender thread panicked");
-                        the_joiner_handle
+                        the_refiner_handle
                             .join()
-                            .expect("💀 Joiner thread panicked")
-                            .expect("💀 Joiner returned an error");
+                            .expect("💀 Refiner thread panicked")
+                            .expect("💀 Refiner returned an error");
                     });
                 },
             );
@@ -189,5 +189,5 @@ fn joiner_throughput_docs(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, joiner_throughput_bytes, joiner_throughput_docs);
+criterion_group!(benches, refiner_throughput_bytes, refiner_throughput_docs);
 criterion_main!(benches);

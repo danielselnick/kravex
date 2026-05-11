@@ -11,7 +11,7 @@ use crate::Barrel;
 use crate::taps::Tapper;
 const THE_BULK_ACTION_LINE: &str = "{\"index\":{}}";
 
-/// 📡 Casts raw NDJSON docs into ES bulk format (action line + source doc).
+/// 📡 Taps raw NDJSON docs into ES bulk format (action line + source doc).
 /// Like a bouncer at a club — "you can't come in without your action line, buddy." 🦆
 #[derive(Debug, Clone, Copy)]
 pub struct NdJsonToBulk {}
@@ -19,9 +19,9 @@ pub struct NdJsonToBulk {}
 impl Tapper for NdJsonToBulk {
     #[inline]
     fn tap(&self, barrel: Barrel) -> Result<Vec<Draft>> {
-        // 📄 Split barrel by newlines, cast each non-empty line into bulk format.
+        // 📄 Split barrel by newlines, tap each non-empty line into bulk format.
         // 🧠 Each line becomes: action_line\n{json_document}
-        // -- "He who casts without an action line, gets a 400 from Elasticsearch." 💀
+        // -- "He who taps without an action line, gets a 400 from Elasticsearch." 💀
         // -- 🦆 bulk action line generation: where JSON meets its destiny
         let mut result = Vec::new();
         for line in barrel.split('\n') {
@@ -54,7 +54,7 @@ mod tests {
         let tapper = NdJsonToBulk {};
         let the_lone_doc = r#"{"ObjectID":42,"Name":"The answer to everything"}"#;
 
-        // 🚀 Act — cast it into the bulk dimension
+        // 🚀 Act — tap it into the bulk dimension
         let drafts = tapper.tap(Barrel(the_lone_doc.to_string()))?;
         let the_bulk_body = drafts_to_bulk_body(&drafts);
 

@@ -29,8 +29,8 @@ mod drainer;
 pub use drainer::Drainer;
 mod pumper;
 pub use pumper::Pumper;
-mod joiner;
-pub use joiner::Joiner;
+mod refiner;
+pub use refiner::Refiner;
 mod governor;
 pub use governor::Governor;
 

@@ -10,7 +10,7 @@
 //! 📦 ByteValue — the "static" regulator. Returns a fixed value regardless of input.
 //!
 //! 🧠 Knowledge graph:
-//! - Used when no dynamic regulation is desired — fixed max_request_size_bytes
+//! - Used when no dynamic regulation is desired — fixed max_drum_size_bytes
 //! - Implements `Regulate` but ignores both the reading and the time delta
 //! - Named `ByteValue` because `Static` is keyword-adjacent in Rust and confusing
 //!

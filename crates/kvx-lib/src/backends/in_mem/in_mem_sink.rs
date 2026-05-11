@@ -17,7 +17,7 @@ use crate::backends::{Sink, Source};
 /// time and that thing is a list of drums." Simpler than before — no Hit structs,
 /// no HitBatch wrappers, just raw drum strings the Drainer already rendered.
 ///
-/// 🧠 Knowledge graph: Sinks are I/O-only now. The Drainer does cast + binary collect.
+/// 🧠 Knowledge graph: Sinks are I/O-only now. The Refiner does tap + binary collect.
 /// This sink just stores the final drum strings for test assertions.
 ///
 /// Clone-able because tests need to peek inside after handing `self` off to the
@@ -50,7 +50,7 @@ impl InMemorySink {
 impl Sink for InMemorySink {
     /// 📡 Stores a fully rendered drum. Lock, push, done. Like a fax machine but for bytes. 🦆
     ///
-    /// 🎯 I/O-only: the Drainer already cast and binary-collected the drum.
+    /// 🎯 I/O-only: the Refiner already tapped and binary-collected the drum.
     /// We just stash it for test assertions. No parsing. No judgment. Just storage.
     async fn drain(&mut self, drum: Drum) -> Result<()> {
         // 🔒 The Mutex is load-bearing. Do not remove. I know it looks optional. It isn't.

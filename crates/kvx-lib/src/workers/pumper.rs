@@ -13,7 +13,7 @@
 //!
 //! 🧠 Knowledge graph: the channel carries `String` (raw barrels), not `Vec<String>`.
 //! Source returns one raw barrel per call. Drainer buffers barrels by byte size,
-//! then flushes via Manifold (cast + join). The source is maximally ignorant.
+//! then flushes via Manifold (tap + join). The source is maximally ignorant.
 //!
 //! 🦆 (same duck, different file, same vibe)
 //!

@@ -74,9 +74,9 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
 
     // 📏 Extract max request size from sink config — the hard ceiling for drum size.
-    let max_request_size_bytes = app_config.sink_config.max_drum_size_bytes();
+    let max_drum_size_bytes = app_config.sink_config.max_drum_size_bytes();
 
-    // 🔧 Create the FlowKnob — shared atomic valve between Governor and joiners.
+    // 🔧 Create the FlowKnob — shared atomic valve between Governor and refiners.
     // 🧠 GovernorConfig determines the initial value:
     //   - Static: fixed at output_bytes, never changes (no Governor spawned)
     //   - Latency: starts at initial_output_bytes, PID adjusts based on drain latency
@@ -110,7 +110,7 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
             manifold,
             the_flow_knob,
             &app_config.governor,
-            max_request_size_bytes,
+            max_drum_size_bytes,
             pipeline_name,
             total_expected_bytes,
         )
@@ -245,7 +245,7 @@ impl PartialEq<&str> for Draft {
 
 /// 🔧 The FlowKnob — a shared atomic valve that controls drum size.
 ///
-/// The Governor writes it. The joiners read it. Nobody else touches it.
+/// The Governor writes it. The refiners read it. Nobody else touches it.
 /// Like the office thermostat, except this one actually works. 🌡️
 pub type FlowKnob = Arc<AtomicUsize>;
 
@@ -273,10 +273,10 @@ mod tests {
     async fn the_one_where_four_docs_made_it_home_safely() -> Result<()> {
         let app_config = AppConfig {
             runtime: RuntimeConfig {
-                pumper_to_joiner_capacity: 10,
-                joiner_to_drainer_capacity: 10,
+                pumper_to_refiner_capacity: 10,
+                refiner_to_drainer_capacity: 10,
                 sink_parallelism: 1,
-                joiner_parallelism: 1,
+                refiner_count: 1,
             },
             source_config: SourceConfig::InMemory(()),
             sink_config: SinkConfig::InMemory(()),
@@ -298,19 +298,19 @@ mod tests {
         let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
 
         // 📏 Max request size from sink config
-        let max_request_size_bytes = app_config.sink_config.max_drum_size_bytes();
+        let max_drum_size_bytes = app_config.sink_config.max_drum_size_bytes();
 
         // 🔧 No regulator for tests — static flow knob at max 🎚️
-        let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_request_size_bytes));
+        let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_drum_size_bytes));
 
         let the_governor_config = GovernorConfig::default();
         let foreman = Foreman::new(app_config);
         foreman
-            .start_workers(source, vec![sink], tapper, manifold, the_test_flow_knob, &the_governor_config, max_request_size_bytes, "test-pipeline".to_string(), 0)
+            .start_workers(source, vec![sink], tapper, manifold, the_test_flow_knob, &the_governor_config, max_drum_size_bytes, "test-pipeline".to_string(), 0)
             .await?;
 
-        // 📦 Joiner received 1 barrel (4 docs newline-delimited), passthrough-cast and joined into JSON array.
-        // Joiner buffers raw barrels → manifold.join(buffer, tapper) → drum on ch2 → Drainer relays to sink.
+        // 📦 Refiner received 1 barrel (4 docs newline-delimited), passthrough-tapped and joined into JSON array.
+        // Refiner accumulates raw barrels → manifold.join(plenum, tapper) → drum on ch2 → Drainer relays to sink.
         // 🧠 Passthrough treats entire barrel as one item → drum = '[{"doc":1}\n{"doc":2}\n{"doc":3}\n{"doc":4}]'
         // The barrel content includes newlines because passthrough doesn't split — that's by design!
         let received = sink_inner.received.lock().await;
@@ -356,10 +356,10 @@ mod tests {
         // "In a world where configs lied... one test dared to trust the enum dispatch."
         let app_config = AppConfig {
             runtime: RuntimeConfig {
-                pumper_to_joiner_capacity: 10,
-                joiner_to_drainer_capacity: 10,
+                pumper_to_refiner_capacity: 10,
+                refiner_to_drainer_capacity: 10,
                 sink_parallelism: 1,
-                joiner_parallelism: 1,
+                refiner_count: 1,
             },
             source_config: SourceConfig::Elasticsearch(ElasticsearchSourceConfig {
                 url: "http://source-cluster-that-doesnt-exist:9200".to_string(),
@@ -405,10 +405,10 @@ mod tests {
         let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
 
         // 📏 Max request size from sink config — with default 64MB, all 3 hits fit in one drum
-        let max_request_size_bytes = app_config.sink_config.max_drum_size_bytes();
+        let max_drum_size_bytes = app_config.sink_config.max_drum_size_bytes();
 
         // 🔧 Static flow knob — no regulator, full throttle, send it and pray 🙏
-        let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_request_size_bytes));
+        let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_drum_size_bytes));
 
         let the_governor_config = GovernorConfig::default();
         let foreman = Foreman::new(app_config);
@@ -420,13 +420,13 @@ mod tests {
                 manifold,
                 the_test_flow_knob,
                 &the_governor_config,
-                max_request_size_bytes,
+                max_drum_size_bytes,
                 "es-to-es-pit-to-bulk-gauntlet".to_string(),
                 0,
             )
             .await?;
 
-        // 📦 Collect all drums and concatenate — resilient to Joiner batching decisions
+        // 📦 Collect all drums and concatenate — resilient to Refiner batching decisions
         let received = sink_inner.received.lock().await;
         assert!(
             !received.is_empty(),

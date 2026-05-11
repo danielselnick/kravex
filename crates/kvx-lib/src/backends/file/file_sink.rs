@@ -19,7 +19,7 @@ use super::config::FileSinkConfig;
 /// Does not retry. Does not have opinions about your data format. It writes what you give it.
 ///
 /// 🧠 Knowledge graph: Sinks are pure I/O abstractions now. The Drainer upstream handles
-/// cast + binary collect. FileSink just writes the final drum bytes to disk.
+/// tap + binary collect. FileSink just writes the final drum bytes to disk.
 /// Think of it as a very loyal golden retriever. You throw it data, it writes it.
 ///
 /// ⚠️ `File::create` truncates if the file exists. No warning. No backup. Just gone.
@@ -66,7 +66,7 @@ impl FileSink {
 impl Sink for FileSink {
     /// 📡 Write a fully rendered drum to the file. One write_all call. That's the whole job.
     ///
-    /// The Drainer already cast and binary-collected. We just dump bytes to disk.
+    /// The Drainer already tapped and binary-collected. We just dump bytes to disk.
     /// No parsing. No iterating over hits. No drama. Just I/O.
     /// "What do you do?" "I write bytes." "That's it?" "That's everything." 🦆
     async fn drain(&mut self, drum: Drum) -> Result<()> {

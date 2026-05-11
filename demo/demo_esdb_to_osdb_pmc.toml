@@ -7,9 +7,9 @@
 
 [runtime]
 sink_parallelism = 8
-joiner_parallelism = 4
-pumper_to_joiner_capacity = 2
-joiner_to_drainer_capacity = 2
+refiner_count = 4
+pumper_to_refiner_capacity = 2
+refiner_to_drainer_capacity = 2
 
 [source_config.Elasticsearch]
 url = "http://localhost:19200"
@@ -22,7 +22,7 @@ max_batch_size_docs = 10000
 [sink_config.Elasticsearch]
 url = "http://localhost:19201"
 index = "pmc"
-max_request_size_bytes = 1000000
+max_drum_size_bytes = 1000000
 
 [governor.Static]
 output_bytes = 10000000

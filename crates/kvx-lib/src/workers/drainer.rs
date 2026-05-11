@@ -12,13 +12,13 @@
 //! and sends them to the sink. Now with retry logic, because even data deserves second chances.
 //!
 //! ```text
-//! Joiner(s) (std::thread) → ch2 → Drainer(s) (tokio::spawn) → Sink (HTTP/file/memory)
+//! Refiner(s) (std::thread) → ch2 → Drainer(s) (tokio::spawn) → Sink (HTTP/file/memory)
 //!                                                                  ↻ retry with backoff
 //! ```
 //!
-//! 🧠 Knowledge graph: the Drainer was once a complex beast that buffered raw barrels,
-//! cast them via BarrelToDraftsTapper, joined them via Manifold, AND sent them to the sink.
-//! That CPU-bound work now lives in the Joiner (on std::thread). The Drainer has been
+//! 🧠 Knowledge graph: the Drainer was once a complex beast that accumulated raw barrels,
+//! tapped them via BarrelToDraftsTapper, joined them via Manifold, AND sent them to the sink.
+//! That CPU-bound work now lives in the Refiner (on std::thread). The Drainer has been
 //! liberated. It is now a thin async relay with retry armor: recv drum → send to sink
 //! → if rejected, back off exponentially → retry → repeat. Like a polite debt collector. 📬
 //!
@@ -39,7 +39,7 @@ use tracing::{debug, warn};
 
 /// 🗑️ The Drainer: async relay from ch2 to sink, now with retry superpowers.
 ///
-/// Receives pre-assembled drum Strings from joiners via ch2,
+/// Receives pre-assembled drum Strings from refiners via ch2,
 /// sends them to the sink with exponential backoff on failure.
 /// Like a postman who delivers, gets the door slammed in his face,
 /// waits politely, and tries again. 📬
@@ -49,11 +49,11 @@ use tracing::{debug, warn};
 /// 2. **Drain**: drum → Sink::drain (HTTP POST, file write, memory push)
 ///    - On failure: exponential backoff → retry up to max_retries
 ///    - On exhaustion: propagate error (pipeline dies with dignity) 💀
-/// 3. **Repeat** until ch2 closes (all joiners done)
+/// 3. **Repeat** until ch2 closes (all refiners done)
 /// 4. **Close**: Sink::close — flush and finalize 🦆
 #[derive(Debug)]
 pub struct Drainer {
-    /// 📥 ch2 receiver — assembled drums from the joiner thread pool
+    /// 📥 ch2 receiver — assembled drums from the refiner thread pool
     rx: Receiver<Drum>,
     /// 🚰 The final destination — where drums go to live their best life (or die trying)
     sink: SinkBackend,
@@ -141,7 +141,7 @@ async fn drain_with_retry(
     // Like sending 4 texts and getting no reply. Time to accept it.
     Err(the_last_error.unwrap()).context(format!(
         "💀 Drainer exhausted all {} retry attempts — the sink said 'no' {} times. \
-         The drum was assembled with care by a joiner thread. The sink was unmoved. \
+         The drum was assembled with care by a refiner thread. The sink was unmoved. \
          Like writing a heartfelt cover letter and getting an automated rejection.",
         config.max_retries + 1,
         config.max_retries + 1,
@@ -159,7 +159,7 @@ impl Worker for Drainer {
                         debug!("📄 Drainer received {} byte drum from ch2", the_drum.len());
 
                         // 📡 Send the assembled drum to the sink, with retries.
-                        // Skip empty drums — the joiner should filter these, but belt AND suspenders 🩳
+                        // Skip empty drums — the refiner should filter these, but belt AND suspenders 🩳
                         if !the_drum.is_empty() && *the_drum != "[]" {
                             // ⏱️ Time the drain — Governor needs to know how long the sink took
                             let the_stopwatch = std::time::Instant::now();
@@ -188,8 +188,8 @@ impl Worker for Drainer {
                         }
                     }
                     Err(_) => {
-                        // 🏁 ch2 closed — all joiners are done. Close the sink and exit.
-                        debug!("🏁 Drainer: ch2 closed. All joiners done. Closing sink. Goodnight. 💤");
+                        // 🏁 ch2 closed — all refiners are done. Close the sink and exit.
+                        debug!("🏁 Drainer: ch2 closed. All refiners done. Closing sink. Goodnight. 💤");
                         self.sink
                             .close()
                             .await

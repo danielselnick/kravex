@@ -68,8 +68,8 @@ struct BulkItemError {
 /// 📡 The sink side of the Elasticsearch backend — pure I/O, zero buffering.
 ///
 /// `ElasticsearchSink` accepts a fully rendered NDJSON drum string and POSTs it
-/// to the `_bulk` API. That's it. No internal buffer. No cast logic.
-/// The Drainer upstream handles cast + binary collect + size management.
+/// to the `_bulk` API. That's it. No internal plenum. No tap logic.
+/// The Drainer upstream handles tap + binary collect + size management.
 ///
 /// 🧠 Knowledge graph: Sinks are I/O-only abstractions now. This one does HTTP POST.
 /// The FileSink does file write. The InMemorySink does Vec push.
@@ -92,7 +92,7 @@ pub struct ElasticsearchSink {
 impl Sink for ElasticsearchSink {
     /// 📡 POST the fully rendered NDJSON drum to /_bulk. Pure I/O. No buffering. No drama.
     ///
-    /// The Drainer upstream already cast each doc and binary-collected them into
+    /// The Drainer upstream already tapped each doc and binary-collected them into
     /// a single NDJSON drum string. We just fire it into the elastic void.
     /// "In a world where sinks had too many responsibilities... one refactor dared to simplify."
     async fn drain(&mut self, drum: Drum) -> Result<()> {

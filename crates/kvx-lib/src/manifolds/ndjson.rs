@@ -27,8 +27,8 @@ use std::collections::VecDeque;
 
 /// 📡 Newline-Delimited JSON — the format ES `/_bulk` demands and files prefer.
 ///
-/// Casts each barrel, joins results with `\n`, trailing `\n`.
-/// For ES bulk, each cast result is "action\nsource" (two NDJSON lines per doc).
+/// Taps each barrel, joins results with `\n`, trailing `\n`.
+/// For ES bulk, each tap result is "action\nsource" (two NDJSON lines per doc).
 /// After join: "action1\nsource1\naction2\nsource2\n" — valid `/_bulk` drum.
 ///
 /// For file passthrough: "doc1\ndoc2\n" — valid newline-delimited file content.
@@ -48,7 +48,7 @@ impl Manifold for NdjsonManifold {
         let mut drum = String::with_capacity(estimated_size);
 
         for draft in drafts.drain(..) {
-            // -- 🔄 Each draft is already cast — just stitch them together with newlines
+            // -- 🔄 Each draft is already tapped — just stitch them together with newlines
             // -- Like a quilt, but made of JSON, and nobody finds it cozy
             drum.push_str(&draft);
             // We expect each draft to have \n if it's being casted to bulk

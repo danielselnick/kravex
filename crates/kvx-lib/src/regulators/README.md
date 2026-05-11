@@ -8,7 +8,7 @@ Adaptive throttling via feedback control. Regulators dynamically adjust drum siz
 | Term | Definition |
 |---|---|
 | **Regulator** | Controls a value based on feedback signals |
-| **FlowKnob** | Shared atomic value read by Joiner to size drums |
+| **FlowKnob** | Shared atomic value read by Refiner to size drums |
 | **Governor** | Consumer of GaugeReading signals — drives the regulator, adjusts the FlowKnob |
 | **GaugeReading** | Signal from the drain: `DrainResult` or `Error` |
 | **DrainResult** | Gauge signal carrying `drum_bytes` and `latency_ms` from a completed drain |
@@ -55,7 +55,7 @@ Drainer (error/429)      → GaugeReading::Error() → Governor → Regulator �
 Regulate trait → Regulators enum → ByteValue | PidController | ThroughputSeeker
 Drainer → sends DrainResult or Error via async_channel to Governor
 Governor → receives GaugeReading → runs Regulator → writes FlowKnob
-FlowKnob → read by Joiner for dynamic drum sizing
+FlowKnob → read by Refiner for dynamic drum sizing
 ThroughputSeeker → System 1 (circuit breaker, every reading) + System 2 (hill climber, 5s windows)
 TOML → [governor.Throughput] | [governor.Latency] | [governor.Static]
 ```
