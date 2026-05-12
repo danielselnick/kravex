@@ -253,7 +253,6 @@ impl ProgressReporter {
         let the_bytes_drained = self.drain_metrics.bytes_drained.load(Ordering::Relaxed);
         let the_requests_completed = self.drain_metrics.requests_completed.load(Ordering::Relaxed);
         let the_latency_sum_ms = self.drain_metrics.latency_sum_ms.load(Ordering::Relaxed);
-        let the_latency_max_ms = self.drain_metrics.latency_max_ms.load(Ordering::Relaxed);
         let the_last_request_size = self.drain_metrics.last_request_size_bytes.load(Ordering::Relaxed);
         let the_last_latency_ms = self.drain_metrics.last_latency_ms.load(Ordering::Relaxed);
 
@@ -271,7 +270,6 @@ impl ProgressReporter {
             the_estimated_docs,
             the_requests_completed,
             the_latency_sum_ms,
-            the_latency_max_ms,
             the_last_request_size,
             the_last_latency_ms,
         );
@@ -391,7 +389,6 @@ impl ProgressReporter {
         the_estimated_docs: u64,
         the_requests_completed: u64,
         the_latency_sum_ms: u64,
-        the_latency_max_ms: u64,
         the_last_request_size: u64,
         the_last_latency_ms: u64,
     ) {

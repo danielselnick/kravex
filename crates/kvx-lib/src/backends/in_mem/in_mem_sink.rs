@@ -6,7 +6,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::Drum;
-use crate::backends::{Sink, Source};
+use crate::backends::Sink;
 /// 📦 A sink that never forgets. Unlike my dad, who forgot my soccer game in 1998.
 ///
 /// `InMemorySink` receives fully rendered drum strings and hoards them in a shared Vec

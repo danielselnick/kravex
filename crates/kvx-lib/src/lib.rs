@@ -10,8 +10,6 @@
 //!
 //! ⚠️ "The singularity will happen, and it'll still use TOML"
 
-// -- 🗑️ allow(dead_code) — keeping the lights on for modules under construction
-#![allow(dead_code, unused_variables, unused_imports)]
 pub mod config;
 pub mod backends;
 pub mod manifolds;
@@ -28,7 +26,7 @@ use crate::backends::file::{FileSink, FileSource};
 use crate::backends::in_mem::{InMemorySink, InMemorySource};
 use crate::backends::{SinkBackend, SourceBackend};
 use crate::foreman::Foreman;
-use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
+use crate::config::{SinkConfig, SourceConfig};
 use crate::manifolds::ManifoldBackend;
 use crate::taps::BarrelToDraftsTapper;
 use crate::workers::GovernorConfig;
@@ -258,8 +256,7 @@ pub enum GaugeReading {
 mod tests {
     use super::*;
     use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
-    use crate::backends::{CommonSourceConfig, CommonSinkConfig};
-    use crate::backends::file::FileSourceConfig;
+
 
     /// 🧪 Full pipeline integration: InMemory→Passthrough→InMemory.
     /// Four raw docs in (as one newline-delimited barrel), one JSON array drum out.

@@ -12,7 +12,7 @@ use tokio::{
 use tracing::trace;
 
 use crate::Barrel;
-use crate::backends::{CommonSourceConfig, Source};
+use crate::backends::Source;
 use super::config::FileSourceConfig;
 // 📏 128 KiB per OS read — the Goldilocks zone between "too many syscalls" and "too much RAM".
 // BufReader's default is 8 KiB. We're 16x that. Fewer context switches, happier kernel.
@@ -255,6 +255,7 @@ impl Source for FileSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backends::CommonSourceConfig;
     use anyhow::Result;
     use std::io::Write;
     use tempfile::NamedTempFile;
