@@ -27,7 +27,6 @@ use super::config::FileSinkConfig;
 #[derive(Debug)]
 pub struct FileSink {
     file_buf: io::BufWriter<File>,
-    _sink_config: FileSinkConfig,
 }
 
 impl FileSink {
@@ -55,10 +54,7 @@ impl FileSink {
         // -- Batch those writes. Your kernel will thank you. Your SRE will thank you.
         // -- Your future self at 3am will bow before the altar of buffered I/O.
         let file_buf = io::BufWriter::new(file_handle);
-        Ok(Self {
-            file_buf,
-            _sink_config: sink_config,
-        })
+        Ok(Self { file_buf })
     }
 }
 

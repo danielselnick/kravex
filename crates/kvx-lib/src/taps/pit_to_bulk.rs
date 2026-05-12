@@ -38,12 +38,6 @@ use crate::Draft;
 use crate::Barrel;
 
 
-// 🧠 Field name constants — configurable extraction deferred to config layer.
-// -- "He who hardcodes field names, refactors in production." — Ancient DevOps proverb 🦆
-const _HIT_ID_FIELD: &str = "_id";
-const _HIT_INDEX_FIELD: &str = "_index";
-const _HIT_ROUTING_FIELD: &str = "_routing";
-
 // ===== Serde structs — zero-copy via borrow =====
 
 /// 📡 The outermost envelope of an ES `_search` response.

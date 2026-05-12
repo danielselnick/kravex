@@ -30,7 +30,7 @@ use tokio::task::JoinHandle;
 /// Tri-modal like a Swiss Army knife: Basic, ApiKey, or just walk in like you own the place.
 /// "He who polls without credentials, gets 401 in production." — Ancient proverb 📜
 #[derive(Debug, Clone)]
-pub enum ClusterAuth {
+pub(crate) enum ClusterAuth {
     // -- 🔑 username:password — the OG authentication, like a deadbolt on your front door
     Basic { username: String, password: String },
     // -- 🗝️ API key auth — fancier, like a keycard at a hotel you can't afford
@@ -48,7 +48,7 @@ pub enum ClusterAuth {
 /// Averaged across all nodes. Two numbers. That's it. That's the tweet. 🐦
 /// CPU tells you if the cluster is sweating. JVM heap tells you if the GC is panicking.
 #[derive(Debug, Clone, Copy)]
-pub struct ClusterSnapshot {
+pub(crate) struct ClusterSnapshot {
     // -- 🧠 average CPU% across all nodes — 0-100, like a midterm grade
     pub cpu_percent: f64,
     // -- 📦 average JVM heap used% across all nodes — when this hits 90+ start praying
@@ -67,7 +67,7 @@ pub struct ClusterSnapshot {
 /// on it when you feel like it. 🌱
 ///
 /// "If you're reading this, the code review went poorly." 🦆
-pub struct ClusterStatsPoller {
+pub(crate) struct ClusterStatsPoller {
     // -- 📡 base URL of the cluster (e.g., "http://localhost:9200")
     url: String,
     // -- 🔒 auth credentials — cached from config at construction time
