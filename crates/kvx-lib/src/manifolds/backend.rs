@@ -5,24 +5,16 @@
 // ai
 //! 🎬 *[two manifolds walk into a bar. the dispatcher buys both a drink.]*
 //! *[one wants newlines. one wants brackets. the enum holds them both.]*
-//! *["In a world where payloads needed joining... one enum dared to dispatch."]*
+//! *["In a world where drums needed joining... one enum dared to dispatch."]*
 //!
 //! 🎭 **ManifoldBackend** — polymorphic dispatcher resolved from `SinkConfig`.
 //!
 //! 🧠 Knowledge graph:
-//! - Same pattern as `PageToEntriesCaster`, `SourceBackend`, `SinkBackend`
-//! - Resolution: SinkConfig → ManifoldBackend::from_sink_config() → concrete manifold
-//! - ES/File → NdjsonManifold | InMemory → JsonArrayManifold
-//! - The compiler monomorphizes each arm; branch prediction eliminates the match
-//!   after a couple iterations. The enum is a formality. The dispatch is basically free.
-//! - Cloning ManifoldBackend is free — NdjsonManifold and JsonArrayManifold are zero-sized.
-//!
-//! 🦆 The duck asked why we need a backend enum when we have trait objects.
-//!    We said "monomorphization." The duck left. It didn't want a lecture.
+//! - Same pattern as `BarrelToDraftsTapper`, `SourceBackend`, `SinkBackend`
 
 use super::{JsonArrayManifold, Manifold, NdjsonManifold};
 use crate::config::SinkConfig;
-use crate::{Entry, Payload};
+use crate::{Draft, Drum};
 use anyhow::Result;
 use std::collections::VecDeque;
 
@@ -33,18 +25,18 @@ use std::collections::VecDeque;
 
 /// 🎭 The polymorphic manifold — wraps concrete manifolds, dispatches via match.
 ///
-/// Same pattern as `PageToEntriesCaster`, `SourceBackend`, `SinkBackend`.
+/// Same pattern as `BarrelToDraftsTapper`, `SourceBackend`, `SinkBackend`.
 /// The compiler monomorphizes each arm. Branch prediction eliminates the match
 /// after a couple iterations. The enum is a formality. The dispatch is basically free.
 ///
-/// 🧠 Knowledge graph: resolved from `SinkConfig` because the payload format
+/// 🧠 Knowledge graph: resolved from `SinkConfig` because the drum format
 /// is determined by where the data is going, not where it came from.
 /// ES needs NDJSON. Files need NDJSON. InMemory wants JSON arrays. Simple.
 #[derive(Debug, Clone)]
 pub enum ManifoldBackend {
-    /// 📡 Newline-delimited JSON — cast + join with `\n`
+    /// 📡 Newline-delimited JSON — tap + join with `\n`
     Ndjson(NdjsonManifold),
-    /// 📦 JSON array — cast + wrap in `[`, commas, `]`
+    /// 📦 JSON array — tap + wrap in `[`, commas, `]`
     JsonArray(JsonArrayManifold),
 }
 
@@ -87,12 +79,12 @@ impl ManifoldBackend {
 
 impl Manifold for ManifoldBackend {
     #[inline]
-    fn join(&self, entries: &mut VecDeque<Entry>) -> Result<Payload> {
+    fn join(&self, drafts: &mut VecDeque<Draft>) -> Result<Drum> {
         // -- 🎭 Dispatch to the concrete manifold — the match arm that wins is the one that deserves to
         // -- TODO: win the lottery, retire, replace this with a lookup table. Just kidding. This is fine.
         match self {
-            Self::Ndjson(m) => m.join(entries),
-            Self::JsonArray(m) => m.join(entries),
+            Self::Ndjson(m) => m.join(drafts),
+            Self::JsonArray(m) => m.join(drafts),
         }
     }
 }
@@ -138,11 +130,11 @@ mod tests {
     fn backend_the_one_where_join_dispatches_correctly() -> Result<()> {
         // 🧪 ManifoldBackend dispatches to the right concrete manifold
         let manifold = ManifoldBackend::from_sink_config(&SinkConfig::InMemory(()));
-        let mut entries = VecDeque::from(vec![
-            Entry(r#"{"a":1}"#.to_string()),
-            Entry(r#"{"b":2}"#.to_string()),
+        let mut drafts = VecDeque::from(vec![
+            Draft(r#"{"a":1}"#.to_string()),
+            Draft(r#"{"b":2}"#.to_string()),
         ]);
-        let result = manifold.join(&mut entries)?;
+        let result = manifold.join(&mut drafts)?;
         assert_eq!(*result, r#"[{"a":1},{"b":2}]"#);
         Ok(())
     }

@@ -30,5 +30,5 @@ name = "file_source_bench"
 harness = false
 
 [[bench]]
-name = "joiner_bench"
+name = "refiner_bench"
 harness = false

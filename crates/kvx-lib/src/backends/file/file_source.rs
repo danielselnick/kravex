@@ -5,12 +5,15 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use memchr::memchr;
-use tokio::{fs::File, io::AsyncReadExt};
+use tokio::{
+    fs::File,
+    io::AsyncReadExt,
+};
 use tracing::trace;
 
+use crate::Barrel;
+use crate::backends::Source;
 use super::config::FileSourceConfig;
-use crate::Page;
-use crate::backends::{CommonSourceConfig, Source};
 // 📏 128 KiB per OS read — the Goldilocks zone between "too many syscalls" and "too much RAM".
 // BufReader's default is 8 KiB. We're 16x that. Fewer context switches, happier kernel.
 // KNOWLEDGE GRAPH: this constant controls the I/O batch size for raw file reads.
@@ -19,7 +22,7 @@ use crate::backends::{CommonSourceConfig, Source};
 const CHUNK_SIZE: usize = 128 * 1024;
 
 /// 📂 FileSource — reads a file in fat 128 KiB chunks, scans for newlines with SIMD via memchr,
-/// and batches docs into feeds without the overhead of per-line syscalls. 🚀
+/// and batches docs into barrels without the overhead of per-line syscalls. 🚀
 ///
 /// Think of it like a very diligent intern who reads a massive CSV, never complains,
 /// and only stops when (a) the file ends, (b) the batch is full by doc count,
@@ -44,7 +47,7 @@ pub struct FileSource {
     read_buf: Vec<u8>,
     // 🧩 leftover bytes from the previous pump() call — the tail end of a chunk
     // that didn't end on a newline. Gets prepended to working_buf on the next call.
-    // KNOWLEDGE GRAPH: this is the key to correctness across page boundaries.
+    // KNOWLEDGE GRAPH: this is the key to correctness across barrel boundaries.
     // Without it, lines that span two chunks would get split into two incomplete docs.
     remainder: Vec<u8>,
     pub(crate) source_config: FileSourceConfig,
@@ -64,7 +67,7 @@ impl std::fmt::Debug for FileSource {
 
 impl FileSource {
     /// 🚀 Opens the source file, grabs its size for the progress bar, allocates our chunk buffers,
-    /// and returns a fully initialized `FileSource` ready to vend feeds at ludicrous speed.
+    /// and returns a fully initialized `FileSource` ready to vend barrels at ludicrous speed.
     ///
     /// If the file doesn't exist: 💀 anyhow will tell you with *theatrical flair*.
     /// If metadata fails: we assume 0 bytes, progress bar shows unknown. Shrug emoji as a service.
@@ -104,14 +107,14 @@ impl FileSource {
 
 #[async_trait]
 impl Source for FileSource {
-    /// 📄 Read the next feed of lines from the file. Returns `None` when EOF.
+    /// 📄 Read the next barrel of lines from the file. Returns `None` when EOF.
     ///
-    /// 🧠 Knowledge graph: sources return `Option<String>` — one raw feed of newline-delimited
+    /// 🧠 Knowledge graph: sources return `Option<String>` — one raw barrel of newline-delimited
     /// content, uninterpreted. The source accumulates lines up to byte/doc caps and returns
     /// the whole thing as a single String. The Manifold downstream splits and casts.
     ///
     /// KNOWLEDGE GRAPH: two exit conditions exist beyond EOF —
-    ///   1. `max_batch_size_docs`: line count cap. Don't build a feed the size of Texas.
+    ///   1. `max_batch_size_docs`: line count cap. Don't build a barrel the size of Texas.
     ///   2. `max_batch_size_bytes`: byte cap. Protects against memory-busting accumulation.
     /// Both are checked on every iteration. Whichever fires first wins.
     ///
@@ -125,19 +128,19 @@ impl Source for FileSource {
     /// safe for any valid UTF-8 input. The final `String::from_utf8` validates the output.
     ///
     /// "He who reads the entire file into one String, OOMs in production." — Ancient proverb 📜
-    async fn pump(&mut self) -> Result<Option<Page>> {
-        let max_docs = self.source_config.common_config.max_batch_size_docs;
-        let max_bytes = self.source_config.common_config.max_batch_size_bytes;
+    async fn pump(&mut self) -> Result<Option<Barrel>> {
+        let max_docs = self.source_config.common_config.max_barrel_size_docs;
+                let max_bytes = self.source_config.common_config.max_barrel_size_bytes;
 
-        // 🧱 feed accumulator — raw bytes, converted to String at the end.
+        // 🧱 barrel accumulator — raw bytes, converted to String at the end.
         // We work in bytes to avoid repeated UTF-8 validation on every append.
-        let mut feed: Vec<u8> = Vec::with_capacity(max_bytes);
+        let mut barrel: Vec<u8> = Vec::with_capacity(max_bytes);
         let mut doc_count = 0usize;
         let mut total_bytes_from_file = 0usize;
 
         // 🧩 drain the remainder from the previous call — these are bytes that were
         // left over after the last newline in the previous chunk. They form the
-        // prefix of the first line in this page.
+        // prefix of the first line in this barrel.
         let mut working_buf: Vec<u8> = std::mem::take(&mut self.remainder);
 
         // -- 🔄 the main loop: read chunks, scan for newlines, accumulate docs
@@ -151,7 +154,9 @@ impl Source for FileSource {
             while let Some(newline_offset) = memchr(b'\n', &working_buf[cursor..]) {
                 let line_end = cursor + newline_offset;
                 // 🧹 strip \r if this is a \r\n line ending (Windows refugees welcome)
-                let line_content_end = if line_end > cursor && working_buf[line_end - 1] == b'\r' {
+                let line_content_end = if line_end > cursor
+                    && working_buf[line_end - 1] == b'\r'
+                {
                     line_end - 1
                 } else {
                     line_end
@@ -161,11 +166,11 @@ impl Source for FileSource {
 
                 // ⏭️ skip empty lines — they're not docs, they're just vibes
                 if !line.is_empty() {
-                    // 🔗 separate docs with \n in the feed, but no trailing newline
-                    if !feed.is_empty() {
-                        feed.push(b'\n');
+                    // 🔗 separate docs with \n in the barrel, but no trailing newline
+                    if !barrel.is_empty() {
+                        barrel.push(b'\n');
                     }
-                    feed.extend_from_slice(line);
+                    barrel.extend_from_slice(line);
                     doc_count += 1;
                 }
 
@@ -173,7 +178,7 @@ impl Source for FileSource {
                 cursor = line_end + 1;
 
                 // 🎯 check batch limits — whichever fires first wins
-                if doc_count >= max_docs || feed.len() >= max_bytes {
+                if doc_count >= max_docs || barrel.len() >= max_bytes {
                     batch_limit_reached = true;
                     break;
                 }
@@ -201,10 +206,10 @@ impl Source for FileSource {
                     fragment.len()
                 };
                 if content_end > 0 {
-                    if !feed.is_empty() {
-                        feed.push(b'\n');
+                    if !barrel.is_empty() {
+                        barrel.push(b'\n');
                     }
-                    feed.extend_from_slice(&fragment[..content_end]);
+                    barrel.extend_from_slice(&fragment[..content_end]);
                     // doc_count not incremented here — EOF fragment, loop exits next
                 }
                 break;
@@ -226,20 +231,20 @@ impl Source for FileSource {
             total_bytes_from_file
         );
 
-        // 📄 Empty feed = EOF. The well is dry. Return None. 🏁
-        if feed.is_empty() {
+        // 📄 Empty barrel = EOF. The well is dry. Return None. 🏁
+        if barrel.is_empty() {
             // -- 🏁 "That's all folks!" — Porky Pig, and also this file source
             Ok(None)
         } else {
             // ✅ convert bytes to String — this validates UTF-8 in one pass at the end
             // rather than on every line. Efficiency AND correctness. Chef's kiss. 🤌
-            let feed_string = String::from_utf8(feed).context(
+            let barrel_string = String::from_utf8(barrel).context(
                 "💀 The file contained bytes that aren't valid UTF-8. \
                 We tried to make a String. The String said no. \
                 Like trying to fit a square peg in a round hole, \
                 except the peg is binary garbage and the hole is Unicode.",
             )?;
-            Ok(Some(Page(feed_string)))
+            Ok(Some(Barrel(barrel_string)))
         }
     }
 }
@@ -250,6 +255,7 @@ impl Source for FileSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backends::CommonSourceConfig;
     use anyhow::Result;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -265,8 +271,7 @@ mod tests {
         max_bytes: usize,
     ) -> (FileSource, NamedTempFile) {
         // -- 📁 write content to a temp file that self-destructs on drop (very Mission Impossible 🕵️)
-        let mut tmp =
-            NamedTempFile::new().expect("💀 Failed to create temp file. The OS has forsaken us.");
+        let mut tmp = NamedTempFile::new().expect("💀 Failed to create temp file. The OS has forsaken us.");
         tmp.write_all(content.as_bytes())
             .expect("💀 Failed to write test content. The disk is either full or haunted.");
         tmp.flush()
@@ -276,8 +281,8 @@ mod tests {
         let config = FileSourceConfig {
             file_name: path,
             common_config: CommonSourceConfig {
-                max_batch_size_docs: max_docs,
-                max_batch_size_bytes: max_bytes,
+                max_barrel_size_docs: max_docs,
+                                max_barrel_size_bytes: max_bytes,
             },
         };
         let source = FileSource::new(config)
@@ -286,36 +291,36 @@ mod tests {
         (source, tmp)
     }
 
-    // -- 🧪 helper: drains all pages from a source and returns them as a Vec
+    // -- 🧪 helper: drains all barrels from a source and returns them as a Vec
     // -- because manually calling pump() in a loop is beneath us (barely)
-    /// 🔄 Drains every page from the source until EOF.
-    /// Returns all non-None pages in order. Like squeezing a tube of toothpaste
+    /// 🔄 Drains every barrel from the source until EOF.
+    /// Returns all non-None barrels in order. Like squeezing a tube of toothpaste
     /// until nothing comes out. 🦷
-    async fn drain_all_pages(source: &mut FileSource) -> Result<Vec<Page>> {
+    async fn drain_all_barrels(source: &mut FileSource) -> Result<Vec<Barrel>> {
         // -- 🦆 this function exists because copy-pasting while loops is a code smell
-        let mut pages = Vec::new();
-        while let Some(page) = source.pump().await? {
-            pages.push(page);
+        let mut barrels = Vec::new();
+        while let Some(barrel) = source.pump().await? {
+            barrels.push(barrel);
         }
-        Ok(pages)
+        Ok(barrels)
     }
 
     #[tokio::test]
-    async fn the_one_where_three_lines_come_home_in_one_feed() -> Result<()> {
-        // -- 🧪 basic happy path: small file, no limits hit, everything in one page
+    async fn the_one_where_three_lines_come_home_in_one_barrel() -> Result<()> {
+        // -- 🧪 basic happy path: small file, no limits hit, everything in one barrel
         let (mut source, _tmp) =
             summon_file_source("line1\nline2\nline3\n", 10_000, 10 * 1024 * 1024).await;
 
-        let page1 = source.pump().await?;
+        let barrel1 = source.pump().await?;
         assert_eq!(
-            page1,
-            Some(Page("line1\nline2\nline3".to_string())),
-            "💀 Expected all three lines in one feed, got something else. The vibes are off."
+            barrel1,
+            Some(Barrel("line1\nline2\nline3".to_string())),
+            "💀 Expected all three lines in one barrel, got something else. The vibes are off."
         );
 
-        let page2 = source.pump().await?;
+        let barrel2 = source.pump().await?;
         assert_eq!(
-            page2, None,
+            barrel2, None,
             "💀 Expected None (EOF), but the source kept talking. It doesn't know when to stop."
         );
         Ok(())
@@ -323,67 +328,52 @@ mod tests {
 
     #[tokio::test]
     async fn the_one_where_doc_count_limit_rations_the_buffet() -> Result<()> {
-        // -- 🧪 10 docs, max 3 per page → pages of 3, 3, 3, 1, then None
+        // -- 🧪 10 docs, max 3 per barrel → barrels of 3, 3, 3, 1, then None
         let content: String = (0..10).map(|i| format!("doc{i}\n")).collect();
         let (mut source, _tmp) = summon_file_source(&content, 3, 10 * 1024 * 1024).await;
 
-        let pages = drain_all_pages(&mut source).await?;
+        let barrels = drain_all_barrels(&mut source).await?;
 
-        // -- 🎯 verify page count: ceil(10/3) = 4 pages
-        assert_eq!(
-            pages.len(),
-            4,
-            "💀 Expected 4 pages (3+3+3+1), got {}",
-            pages.len()
-        );
+        // -- 🎯 verify barrel count: ceil(10/3) = 4 barrels
+        assert_eq!(barrels.len(), 4, "💀 Expected 4 barrels (3+3+3+1), got {}", barrels.len());
 
-        // -- 🎯 verify doc counts per page
-        let doc_counts: Vec<usize> = pages.iter().map(|p| p.split('\n').count()).collect();
+        // -- 🎯 verify doc counts per barrel
+        let doc_counts: Vec<usize> = barrels.iter().map(|p| p.split('\n').count()).collect();
         assert_eq!(
             doc_counts,
             vec![3, 3, 3, 1],
-            "💀 Doc distribution across pages is wrong. The buffet rations are off."
+            "💀 Doc distribution across barrels is wrong. The buffet rations are off."
         );
 
         // -- ✅ verify total content integrity — no docs lost in the mail
-        let all_docs: String = pages
-            .iter()
-            .map(|f| f.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let expected: String = (0..10)
-            .map(|i| format!("doc{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_eq!(
-            all_docs, expected,
-            "💀 Total content mismatch. Some docs went AWOL."
-        );
+        let all_docs: String = barrels.iter().map(|f| f.as_str()).collect::<Vec<_>>().join("\n");
+        let expected: String = (0..10).map(|i| format!("doc{i}")).collect::<Vec<_>>().join("\n");
+        assert_eq!(all_docs, expected, "💀 Total content mismatch. Some docs went AWOL.");
         Ok(())
     }
 
     #[tokio::test]
-    async fn the_one_where_byte_limit_chops_the_feed() -> Result<()> {
+    async fn the_one_where_byte_limit_chops_the_barrel() -> Result<()> {
         // -- 🧪 5 lines of "aaaaaaaaaa" (10 bytes each), max_bytes=25
-        // -- first page: 2 docs (10 + 1 + 10 = 21 bytes, next would be 32 > 25)
+        // -- first barrel: 2 docs (10 + 1 + 10 = 21 bytes, next would be 32 > 25)
         // -- actually the limit check is >= so let's verify empirically
         let content = "aaaaaaaaaa\nbbbbbbbbbb\ncccccccccc\ndddddddddd\neeeeeeeeee\n";
         let (mut source, _tmp) = summon_file_source(content, 10_000, 25).await;
 
-        let pages = drain_all_pages(&mut source).await?;
+        let barrels = drain_all_barrels(&mut source).await?;
 
-        // -- 🎯 verify we got multiple pages (byte limit forced splits)
+        // -- 🎯 verify we got multiple barrels (byte limit forced splits)
         assert!(
-            pages.len() > 1,
-            "💀 Expected multiple pages due to byte limit, got {} page(s). The chopper is broken.",
-            pages.len()
+            barrels.len() > 1,
+            "💀 Expected multiple barrels due to byte limit, got {} barrel(s). The chopper is broken.",
+            barrels.len()
         );
 
         // -- ✅ verify all 5 docs survived the chopping
-        let total_docs: usize = pages.iter().map(|p| p.split('\n').count()).sum();
+        let total_docs: usize = barrels.iter().map(|p| p.split('\n').count()).sum();
         assert_eq!(
             total_docs, 5,
-            "💀 Expected 5 total docs across all pages, got {total_docs}. Some bytes went missing."
+            "💀 Expected 5 total docs across all barrels, got {total_docs}. Some bytes went missing."
         );
         Ok(())
     }
@@ -393,9 +383,9 @@ mod tests {
         // -- 🧪 empty file → immediate None. Nothing to see here. Like my bank account.
         let (mut source, _tmp) = summon_file_source("", 10_000, 10 * 1024 * 1024).await;
 
-        let page = source.pump().await?;
+        let barrel = source.pump().await?;
         assert_eq!(
-            page, None,
+            barrel, None,
             "💀 Empty file should return None immediately. The void stares back, but silently."
         );
         Ok(())
@@ -408,10 +398,10 @@ mod tests {
         let (mut source, _tmp) =
             summon_file_source("alpha\nbeta\ngamma", 10_000, 10 * 1024 * 1024).await;
 
-        let page = source.pump().await?;
+        let barrel = source.pump().await?;
         assert_eq!(
-            page,
-            Some(Page("alpha\nbeta\ngamma".to_string())),
+            barrel,
+            Some(Barrel("alpha\nbeta\ngamma".to_string())),
             "💀 Missing trailing newline should not eat the last doc. gamma deserves better."
         );
 
@@ -427,10 +417,10 @@ mod tests {
         let (mut source, _tmp) =
             summon_file_source("hello\r\nworld\r\n", 10_000, 10 * 1024 * 1024).await;
 
-        let page = source.pump().await?;
+        let barrel = source.pump().await?;
         assert_eq!(
-            page,
-            Some(Page("hello\nworld".to_string())),
+            barrel,
+            Some(Barrel("hello\nworld".to_string())),
             "💀 \\r\\n should be stripped to \\n. Windows line endings are not welcome here."
         );
         Ok(())
@@ -443,19 +433,19 @@ mod tests {
         let (mut source, _tmp) =
             summon_file_source("a\n\n\nb\n\nc\n", 10_000, 10 * 1024 * 1024).await;
 
-        let page = source.pump().await?;
+        let barrel = source.pump().await?;
         assert_eq!(
-            page,
-            Some(Page("a\nb\nc".to_string())),
-            "💀 Empty lines should be ghosted. Only real docs make it to the feed."
+            barrel,
+            Some(Barrel("a\nb\nc".to_string())),
+            "💀 Empty lines should be ghosted. Only real docs make it to the barrel."
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn the_one_where_remainder_carries_its_weight_across_pages() -> Result<()> {
-        // -- 🧪 10 docs split across pages via doc limit. Verify ZERO data loss across
-        // -- page boundaries — the remainder buffer must faithfully carry leftover bytes.
+    async fn the_one_where_remainder_carries_its_weight_across_barrels() -> Result<()> {
+        // -- 🧪 10 docs split across barrels via doc limit. Verify ZERO data loss across
+        // -- barrel boundaries — the remainder buffer must faithfully carry leftover bytes.
         // -- This is the trust-fall exercise of buffered I/O. 🤝
         let lines: Vec<String> = (0..10)
             .map(|i| format!("{{\"id\":{i},\"name\":\"doc_{i}\"}}"))
@@ -463,27 +453,23 @@ mod tests {
         let content = lines.join("\n") + "\n";
         let (mut source, _tmp) = summon_file_source(&content, 4, 10 * 1024 * 1024).await;
 
-        let pages = drain_all_pages(&mut source).await?;
+        let barrels = drain_all_barrels(&mut source).await?;
 
-        // -- 🎯 reconstruct full content from pages and compare to original
-        let reconstructed = pages
-            .iter()
-            .map(|f| f.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
+        // -- 🎯 reconstruct full content from barrels and compare to original
+        let reconstructed = barrels.iter().map(|f| f.as_str()).collect::<Vec<_>>().join("\n");
         let expected = lines.join("\n");
         assert_eq!(
             reconstructed, expected,
-            "💀 Data integrity violation across page boundaries! \
+            "💀 Data integrity violation across barrel boundaries! \
             The remainder buffer dropped the ball. This is a trust-fall failure."
         );
 
-        // -- ✅ verify correct page structure (4 + 4 + 2)
-        let doc_counts: Vec<usize> = pages.iter().map(|p| p.split('\n').count()).collect();
+        // -- ✅ verify correct barrel structure (4 + 4 + 2)
+        let doc_counts: Vec<usize> = barrels.iter().map(|p| p.split('\n').count()).collect();
         assert_eq!(
             doc_counts,
             vec![4, 4, 2],
-            "💀 Page structure should be [4, 4, 2] with max_docs=4 and 10 docs."
+            "💀 Barrel structure should be [4, 4, 2] with max_docs=4 and 10 docs."
         );
         Ok(())
     }

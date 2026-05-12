@@ -11,9 +11,9 @@
 //! It wakes up, calls `pump()` until the well runs dry, then closes the channel
 //! and quietly exits stage left, never to be heard from again.
 //!
-//! 🧠 Knowledge graph: the channel carries `String` (raw feeds), not `Vec<String>`.
-//! Source returns one raw feed per call. Drainer buffers feeds by byte size,
-//! then flushes via Manifold (cast + join). The source is maximally ignorant.
+//! 🧠 Knowledge graph: the channel carries `String` (raw barrels), not `Vec<String>`.
+//! Source returns one raw barrel per call. Drainer buffers barrels by byte size,
+//! then flushes via Manifold (tap + join). The source is maximally ignorant.
 //!
 //! 🦆 (same duck, different file, same vibe)
 //!
@@ -21,31 +21,31 @@
 //! It respects `None`. It knows when to let go. Unlike the rest of us.
 
 use super::Worker;
-use crate::Page;
 use crate::backends::{Source, SourceBackend};
+use crate::Barrel;
 use anyhow::{Context, Result};
 use async_channel::Sender;
 use tokio::task::JoinHandle;
 use tracing::debug;
 
-/// 🚰 The Pumper: reads raw feeds from a backend, sends each `String` to the channel.
+/// 🚰 The Pumper: reads raw barrels from a backend, sends each `String` to the channel.
 ///
-/// 🧠 Knowledge graph: Sources return `Option<String>` — one raw feed per call.
-/// The channel carries `String`. The Drainer buffers feeds, then flushes via Manifold.
+/// 🧠 Knowledge graph: Sources return `Option<String>` — one raw barrel per call.
+/// The channel carries `String`. The Drainer buffers barrels, then flushes via Manifold.
 /// Like a barista, but for data. And less tips. And the drinks are just raw bytes.
 #[derive(Debug)]
 pub struct Pumper {
-    tx: Sender<Page>,
+    tx: Sender<Barrel>,
     source: SourceBackend,
 }
 
 impl Pumper {
     /// 🏗️ Constructs a new Pumper — the headwaters of the pipeline.
     ///
-    /// Give it a sender (where the raw feeds go) and a source backend (where the data comes from).
+    /// Give it a sender (where the raw barrels go) and a source backend (where the data comes from).
     /// It will faithfully poll `pump()` like a golden retriever waiting by the door.
     /// `None` = the retriever goes home. The channel closes. 🐕
-    pub fn new(tx: Sender<Page>, source: SourceBackend) -> Self {
+    pub fn new(tx: Sender<Barrel>, source: SourceBackend) -> Self {
         Self { tx, source }
     }
 }
@@ -53,17 +53,17 @@ impl Pumper {
 impl Worker for Pumper {
     fn start(mut self) -> JoinHandle<Result<()>> {
         tokio::spawn(async move {
-            debug!("🚀 Pumper started pumping raw feeds into the channel...");
+            debug!("🚀 Pumper started pumping raw barrels into the channel...");
             loop {
                 match self
                     .source
                     .pump()
                     .await
-                    .context("💀 Pumper failed to get next feed — the well collapsed")?
+                    .context("💀 Pumper failed to get next barrel — the well collapsed")?
                 {
-                    Some(feed) => {
-                        debug!("📤 Pumper sending {} byte feed to channel", feed.len());
-                        self.tx.send(feed).await?;
+                    Some(barrel) => {
+                        debug!("📤 Pumper sending {} byte barrel to channel", barrel.len());
+                        self.tx.send(barrel).await?;
                     }
                     None => {
                         // 🏁 EOF — source is exhausted. Just break out of the loop.

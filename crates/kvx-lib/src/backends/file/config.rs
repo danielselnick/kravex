@@ -64,6 +64,7 @@ pub struct FileSinkConfig {
 ///
 /// This function is here because serde's `default = "fn_name"` attribute requires a *function*,
 /// not just `Default::default` inline. Bureaucracy, but in type-system form.
+#[allow(dead_code)] // serde default fn — referenced by string name in #[serde(default = "...")]
 fn default_file_common_sink_config() -> CommonSinkConfig {
     // -- ✅ ancient proverb: "He who ships with defaults, panics in production with style"
     CommonSinkConfig::default()

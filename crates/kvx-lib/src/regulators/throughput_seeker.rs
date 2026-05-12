@@ -12,9 +12,9 @@
 //!
 //! 🧠 Knowledge graph:
 //! ```text
-//! Drainer completes → DrainResult { payload_bytes, latency_ms }
+//! Drainer completes → DrainResult { drum_bytes, latency_ms }
 //!   → System 1: Circuit Breaker (dual EMA crossover, every reading)
-//!     → fast EMA drops 20% below slow EMA? TRIP → immediate halve
+//!     → fast EMA drops 35% below slow EMA? TRIP → immediate halve
 //!   → System 2: Hill Climber (5s windowed median)
 //!     → improved >10%? step forward
 //!     → worsened >10%? reverse + shrink step (×0.618)
@@ -54,7 +54,7 @@ const THE_ERROR_COOLDOWN: Duration = Duration::from_secs(5);
 /// 🏔️ ThroughputSeeker — a dual-system regulator that climbs toward peak throughput.
 ///
 /// System 1 (Circuit Breaker): Dual EMA crossover detects sudden degradation.
-/// Fast EMA drops 20% below slow EMA? TRIP — immediate halve. Like a fuse box
+/// Fast EMA drops 35% below slow EMA? TRIP — immediate halve. Like a fuse box
 /// for your data pipeline. Except you can't just flip it back and pretend nothing happened. ⚡
 ///
 /// System 2 (Hill Climber): 5-second windowed median comparison.
@@ -101,7 +101,7 @@ impl ThroughputSeeker {
     /// 🏗️ Birth of a seeker — armed with config and a ceiling to respect.
     ///
     /// "Every mountain climber starts at base camp.
-    ///  Ours starts at 4 MiB and dreams of bigger payloads." — Edmund Hillary (probably) 🏔️🦆
+    ///  Ours starts at 4 MiB and dreams of bigger drums." — Edmund Hillary (probably) 🏔️🦆
     pub fn new(config: &ThroughputSeekerConfig, the_ceiling: f64) -> Self {
         let the_starting_point = config.initial_output_bytes as f64;
         let the_right_now = Instant::now();
@@ -351,15 +351,15 @@ impl Regulate for ThroughputSeeker {
     fn regulate(&mut self, reading: GaugeReading, _since_last_checked_ms: Duration) -> f64 {
         match reading {
             GaugeReading::DrainResult {
-                payload_bytes,
+                drum_bytes,
                 latency_ms,
             } => {
                 // 📊 bytes/sec = bytes / (ms / 1000) = bytes * 1000 / ms
                 let the_throughput = if latency_ms == 0 {
                     // ⚡ Zero latency? Either time travel or an in-memory sink
-                    payload_bytes as f64 * 1000.0
+                    drum_bytes as f64 * 1000.0
                 } else {
-                    payload_bytes as f64 / (latency_ms as f64 / 1000.0)
+                    drum_bytes as f64 / (latency_ms as f64 / 1000.0)
                 };
 
                 self.on_drain_complete(the_throughput)
@@ -380,7 +380,7 @@ fn the_wisdom_of_the_middle(the_values: &mut [f64]) -> f64 {
     }
     the_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let the_len = the_values.len();
-    if the_len % 2 == 0 {
+    if the_len.is_multiple_of(2) {
         (the_values[the_len / 2 - 1] + the_values[the_len / 2]) / 2.0
     } else {
         the_values[the_len / 2]
@@ -403,16 +403,16 @@ mod tests {
         }
     }
 
-    /// 🔧 Shorthand: build a DrainResult from payload size + latency 📦
-    fn drain_reading(payload_bytes: u64, latency_ms: u64) -> GaugeReading {
+    /// 🔧 Shorthand: build a DrainResult from drum size + latency 📦
+    fn drain_reading(drum_bytes: u64, latency_ms: u64) -> GaugeReading {
         GaugeReading::DrainResult {
-            payload_bytes,
+            drum_bytes,
             latency_ms,
         }
     }
 
     /// 🔧 Feed a reading and return the output — the regulate() convenience wrapper 🎛️
-    fn feed(seeker: &mut ThroughputSeeker, reading: GaugeReading) -> f64 {
+    fn barrel(seeker: &mut ThroughputSeeker, reading: GaugeReading) -> f64 {
         seeker.regulate(reading, Duration::from_millis(100))
     }
 
@@ -424,9 +424,9 @@ mod tests {
         let mut the_seeker = ThroughputSeeker::new(&test_config(), 64_000_000.0);
 
         // 🚀 Phase 1: improving throughput — 40→50→67 MB/s
-        let the_initial = feed(&mut the_seeker, drain_reading(4_000_000, 100));
-        feed(&mut the_seeker, drain_reading(4_000_000, 80));
-        let the_ascending_peak = feed(&mut the_seeker, drain_reading(4_000_000, 60));
+        let the_initial = barrel(&mut the_seeker, drain_reading(4_000_000, 100));
+        barrel(&mut the_seeker, drain_reading(4_000_000, 80));
+        let the_ascending_peak = barrel(&mut the_seeker, drain_reading(4_000_000, 60));
 
         // 🎯 Request size should have stepped up during ascending phase
         assert!(
@@ -438,7 +438,7 @@ mod tests {
 
         // 📉 Phase 2: worsening throughput — 20 MB/s (5x worse than peak)
         for _ in 0..5 {
-            feed(&mut the_seeker, drain_reading(4_000_000, 200));
+            barrel(&mut the_seeker, drain_reading(4_000_000, 200));
         }
 
         let the_after_decline = the_seeker.the_current_request_size;
@@ -460,16 +460,16 @@ mod tests {
         let mut the_seeker = ThroughputSeeker::new(&test_config(), 64_000_000.0);
 
         // 🎬 Init EMAs at 40 MB/s baseline
-        feed(&mut the_seeker, drain_reading(4_000_000, 100));
+        barrel(&mut the_seeker, drain_reading(4_000_000, 100));
 
         // 🔄 Alternate 40 vs 30 MB/s — triggers hill climber reversals without circuit breaker
         // Initial step = 4MiB/4 = 1MiB. After ×0.618 per reversal:
         // 1048K → 648K → 400K → 247K → 153K → 94K → 58K < 64K → converged (6 reversals)
         for i in 0..20 {
             if i % 2 == 0 {
-                feed(&mut the_seeker, drain_reading(4_000_000, 100));
+                barrel(&mut the_seeker, drain_reading(4_000_000, 100));
             } else {
-                feed(&mut the_seeker, drain_reading(4_000_000, 133));
+                barrel(&mut the_seeker, drain_reading(4_000_000, 133));
             }
         }
 
@@ -490,14 +490,14 @@ mod tests {
 
         // 📈 Build up stable 40 MB/s baseline — EMAs converge to 40
         for _ in 0..30 {
-            feed(&mut the_seeker, drain_reading(4_000_000, 100));
+            barrel(&mut the_seeker, drain_reading(4_000_000, 100));
         }
 
         let the_size_before_trip = the_seeker.the_current_request_size;
 
         // 💥 Sudden 10x throughput collapse — 4 MB/s
         for _ in 0..3 {
-            feed(&mut the_seeker, drain_reading(4_000_000, 1000));
+            barrel(&mut the_seeker, drain_reading(4_000_000, 1000));
         }
 
         let the_size_after_trip = the_seeker.the_current_request_size;
@@ -521,12 +521,12 @@ mod tests {
 
         // 📈 Build up state with stable throughput
         for _ in 0..30 {
-            feed(&mut the_seeker, drain_reading(4_000_000, 100));
+            barrel(&mut the_seeker, drain_reading(4_000_000, 100));
         }
 
         // 💥 Trip the circuit breaker with sudden collapse
         for _ in 0..3 {
-            feed(&mut the_seeker, drain_reading(4_000_000, 1000));
+            barrel(&mut the_seeker, drain_reading(4_000_000, 1000));
         }
 
         // 🎯 Hill climber state should be fully reset
@@ -554,7 +554,7 @@ mod tests {
         let the_initial_size = the_seeker.the_current_request_size;
 
         // 💀 Error hits
-        let the_output = feed(&mut the_seeker, GaugeReading::Error());
+        let the_output = barrel(&mut the_seeker, GaugeReading::Error());
 
         let the_expected = (the_initial_size * 0.5).max(131_072.0);
         assert!(
@@ -565,7 +565,7 @@ mod tests {
         );
 
         // 🎯 Double error → halve again
-        let the_double_output = feed(&mut the_seeker, GaugeReading::Error());
+        let the_double_output = barrel(&mut the_seeker, GaugeReading::Error());
         let the_double_expected = (the_expected * 0.5).max(131_072.0);
         assert!(
             (the_double_output - the_double_expected).abs() < 1.0,
@@ -587,14 +587,14 @@ mod tests {
         let mut the_seeker = ThroughputSeeker::new(&the_config, 64_000_000.0);
 
         // 🎬 Reading 1: init EMAs
-        feed(&mut the_seeker, drain_reading(4_000_000, 100));
+        barrel(&mut the_seeker, drain_reading(4_000_000, 100));
 
         // 🧗 Reading 2: first window — establishes baseline, steps forward
-        feed(&mut the_seeker, drain_reading(4_000_000, 100));
+        barrel(&mut the_seeker, drain_reading(4_000_000, 100));
 
         // 😐 Readings 3-7: same throughput → noise band → boredom 1..5
         for _ in 0..5 {
-            feed(&mut the_seeker, drain_reading(4_000_000, 100));
+            barrel(&mut the_seeker, drain_reading(4_000_000, 100));
         }
 
         // 🎯 After 5 noise-band windows, re-exploration should have triggered —
@@ -623,7 +623,7 @@ mod tests {
         ];
 
         for &latency in &the_latencies {
-            feed(&mut the_seeker, drain_reading(4_000_000, latency));
+            barrel(&mut the_seeker, drain_reading(4_000_000, latency));
         }
 
         // 🎯 Request size should be above the floor — no catastrophic collapse
@@ -683,7 +683,7 @@ mod tests {
         let the_initial = the_seeker.the_current_request_size;
 
         // 💀 Feed an Error — should halve
-        let the_after_error = feed(&mut the_seeker, GaugeReading::Error());
+        let the_after_error = barrel(&mut the_seeker, GaugeReading::Error());
 
         assert!(
             the_after_error < the_initial,

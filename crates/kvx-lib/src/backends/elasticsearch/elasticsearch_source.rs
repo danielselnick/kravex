@@ -24,9 +24,9 @@ use reqwest::RequestBuilder;
 use serde_json::Value;
 use tracing::{debug, warn};
 
-use super::config::ElasticsearchSourceConfig;
-use crate::Page;
+use crate::Barrel;
 use crate::backends::Source;
+use super::config::ElasticsearchSourceConfig;
 
 // -- 🦆 A duck walked into an Elasticsearch cluster. It asked for all documents. It got a 429.
 
@@ -34,7 +34,7 @@ use crate::backends::Source;
 ///
 /// Extracts documents from an Elasticsearch index using PIT (Point In Time) + `search_after`
 /// pagination. Each call to `pump()` returns a raw `_search` response envelope that the
-/// downstream PitToBulk caster knows how to dissect.
+/// downstream PitToBulk tapper knows how to dissect.
 ///
 /// Think of it as a library card that lets you read one shelf at a time, except the library
 /// is a distributed system and the shelves keep getting rebalanced by a shard allocator.
@@ -45,7 +45,7 @@ pub struct ElasticsearchSource {
     client: reqwest::Client,
     // 🔖 PIT handle — our snapshot bookmark into the index. None before first pump, Some during.
     pit_id: Option<String>,
-    // 🔄 search_after cursor — the sort values from the last hit of the previous page
+    // 🔄 search_after cursor — the sort values from the last hit of the previous barrel
     search_after: Option<Vec<Value>>,
     // 💀 true when a response returns zero hits — we've read the whole index, pack it up
     is_exhausted: bool,
@@ -53,16 +53,16 @@ pub struct ElasticsearchSource {
 
 #[async_trait]
 impl Source for ElasticsearchSource {
-    /// 📡 Returns the next raw page from Elasticsearch via PIT + search_after.
+    /// 📡 Returns the next raw barrel from Elasticsearch via PIT + search_after.
     ///
     // Lifecycle:
-    // 1st call: opens PIT, issues first _search, returns Page
-    // Nth call: uses search_after cursor from last hit, returns Page
+    // 1st call: opens PIT, issues first _search, returns Barrel
+    // Nth call: uses search_after cursor from last hit, returns Barrel
     // Final: hits.hits is empty, closes PIT, returns None (EOF)
     //
     // The raw _search response envelope is returned as-is — PitToBulk
     // downstream know how to extract hits from the `{"hits":{"hits":[...]}}` structure.
-    async fn pump(&mut self) -> Result<Option<Page>> {
+    async fn pump(&mut self) -> Result<Option<Barrel>> {
         // -- 💀 "Are we there yet?" "We were there 3 calls ago." — backseat pagination
         if self.is_exhausted {
             return Ok(None);
@@ -79,7 +79,7 @@ impl Source for ElasticsearchSource {
 
         // 🔧 Build the _search request body
         let mut body = serde_json::json!({
-            "size": self.config.common_config.max_batch_size_docs,
+            "size": self.config.common_config.max_barrel_size_docs,
             "pit": {
                 "id": pit_id,
                 "keep_alive": "5m"
@@ -87,7 +87,7 @@ impl Source for ElasticsearchSource {
             "sort": [{"_doc": "asc"}]
         });
 
-        // 🔄 If we have a cursor from the previous page, attach it
+        // 🔄 If we have a cursor from the previous barrel, attach it
         if let Some(ref cursor) = self.search_after {
             body["search_after"] = Value::Array(cursor.clone());
         }
@@ -103,26 +103,21 @@ impl Source for ElasticsearchSource {
 
         let status = response.status();
         if !status.is_success() {
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "no body".to_string());
+            let error_body = response.text().await.unwrap_or_else(|_| "no body".to_string());
             anyhow::bail!(
                 "💀 _search returned {} — the cluster spoke, and what it said was not kind. Body: {}",
-                status,
-                error_body
+                status, error_body
             );
         }
 
         let response_body = response.text().await
             .context("💀 Got a 2xx from _search but the response body evaporated like morning dew. Truly unprecedented.")?;
 
-        // 🔍 Parse just enough to extract pagination state — we don't deserialize the full payload
+        // 🔍 Parse just enough to extract pagination state — we don't deserialize the full drum
         let parsed: Value = serde_json::from_str(&response_body)
             .context("💀 Elasticsearch returned valid HTTP but invalid JSON. This is like receiving a beautifully wrapped gift box containing bees.")?;
 
-        let hits = parsed
-            .get("hits")
+        let hits = parsed.get("hits")
             .and_then(|h| h.get("hits"))
             .and_then(|h| h.as_array());
 
@@ -135,11 +130,14 @@ impl Source for ElasticsearchSource {
                 );
 
                 // 🔄 Update search_after with the sort values from the last hit
-                if let Some(last_hit) = hit_array.last() {
-                    if let Some(sort_values) = last_hit.get("sort") {
-                        self.search_after =
-                            Some(sort_values.as_array().cloned().unwrap_or_default());
-                    }
+                if let Some(last_hit) = hit_array.last()
+                    && let Some(sort_values) = last_hit.get("sort")
+                {
+                    self.search_after = Some(
+                        sort_values.as_array()
+                            .cloned()
+                            .unwrap_or_default()
+                    );
                 }
 
                 // 🔖 PIT id can rotate between responses — always use the latest
@@ -147,7 +145,7 @@ impl Source for ElasticsearchSource {
                     self.pit_id = Some(new_pit_id.to_string());
                 }
 
-                Ok(Some(Page(response_body)))
+                Ok(Some(Barrel(response_body)))
             }
             _ => {
                 // 💤 No more hits — we've exhausted the index. Close the PIT and signal EOF.
@@ -220,15 +218,11 @@ impl ElasticsearchSource {
         if !index_response.status().is_success() {
             anyhow::bail!(
                 "💀 Source index '{}' does not exist (status {}). We looked. It wasn't there. Like my motivation on Monday mornings.",
-                config.index,
-                index_response.status()
+                config.index, index_response.status()
             );
         }
 
-        debug!(
-            "✅ Source index '{}' exists and is ready for extraction",
-            config.index
-        );
+        debug!("✅ Source index '{}' exists and is ready for extraction", config.index);
 
         Ok(Self {
             config,
@@ -258,24 +252,18 @@ impl ElasticsearchSource {
 
         let status = response.status();
         if !status.is_success() {
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "no body".to_string());
+            let error_body = response.text().await.unwrap_or_else(|_| "no body".to_string());
             anyhow::bail!(
                 "💀 PIT open returned {} — cluster refused our snapshot request. Body: {}",
-                status,
-                error_body
+                status, error_body
             );
         }
 
-        let response_text = response.text().await.context(
-            "💀 PIT open response body evaporated. The cluster giveth and the network taketh away.",
-        )?;
+        let response_text = response.text().await
+            .context("💀 PIT open response body evaporated. The cluster giveth and the network taketh away.")?;
 
-        let body: Value = serde_json::from_str(&response_text).context(
-            "💀 PIT open response was not valid JSON. The cluster is speaking in tongues.",
-        )?;
+        let body: Value = serde_json::from_str(&response_text)
+            .context("💀 PIT open response was not valid JSON. The cluster is speaking in tongues.")?;
 
         let pit_id = body.get("id")
             .and_then(|v| v.as_str())
@@ -297,8 +285,7 @@ impl ElasticsearchSource {
             let pit_url = format!("{}/_pit", self.config.url.trim_end_matches('/'));
             let body = serde_json::json!({ "id": pit_id });
 
-            let result = self
-                .apply_auth(self.client.delete(&pit_url))
+            let result = self.apply_auth(self.client.delete(&pit_url))
                 .header("Content-Type", "application/json")
                 .body(body.to_string())
                 .send()
@@ -306,9 +293,7 @@ impl ElasticsearchSource {
 
             match result {
                 Ok(resp) if resp.status().is_success() => {
-                    debug!(
-                        "🗑️ PIT closed successfully — snapshot released, memory freed, closure achieved"
-                    );
+                    debug!("🗑️ PIT closed successfully — snapshot released, memory freed, closure achieved");
                 }
                 Ok(resp) => {
                     // -- ⚠️ PIT close returned non-2xx but we don't care enough to fail
@@ -319,10 +304,7 @@ impl ElasticsearchSource {
                 }
                 Err(e) => {
                     // -- ⚠️ Network error on PIT close. The PIT will expire. Life goes on.
-                    warn!(
-                        "⚠️ Failed to close PIT: {} — it'll self-destruct in 5 minutes anyway",
-                        e
-                    );
+                    warn!("⚠️ Failed to close PIT: {} — it'll self-destruct in 5 minutes anyway", e);
                 }
             }
         }
@@ -383,10 +365,7 @@ mod tests {
         assert!(result.is_none(), "🎯 Exhausted source should return None");
 
         let result2 = source.pump().await.unwrap();
-        assert!(
-            result2.is_none(),
-            "🎯 Still None. Still exhausted. Still relatable."
-        );
+        assert!(result2.is_none(), "🎯 Still None. Still exhausted. Still relatable.");
     }
 
     #[test]
@@ -403,16 +382,8 @@ mod tests {
 
         // 🎯 Build the request and inspect — API key should be present
         let built = request.build().unwrap();
-        let auth_header = built
-            .headers()
-            .get("Authorization")
-            .unwrap()
-            .to_str()
-            .unwrap();
-        assert_eq!(
-            auth_header, "ApiKey my-secret-key",
-            "🎯 API key must take priority"
-        );
+        let auth_header = built.headers().get("Authorization").unwrap().to_str().unwrap();
+        assert_eq!(auth_header, "ApiKey my-secret-key", "🎯 API key must take priority");
     }
 
     #[test]
@@ -427,16 +398,8 @@ mod tests {
         let request = source.apply_auth(client.get("http://example.com"));
 
         let built = request.build().unwrap();
-        let auth_header = built
-            .headers()
-            .get("Authorization")
-            .unwrap()
-            .to_str()
-            .unwrap();
-        assert!(
-            auth_header.starts_with("Basic "),
-            "🎯 Should use Basic auth as fallback"
-        );
+        let auth_header = built.headers().get("Authorization").unwrap().to_str().unwrap();
+        assert!(auth_header.starts_with("Basic "), "🎯 Should use Basic auth as fallback");
     }
 
     #[test]
@@ -459,7 +422,7 @@ mod tests {
         let source = test_source(test_config());
 
         let body = serde_json::json!({
-            "size": source.config.common_config.max_batch_size_docs,
+            "size": source.config.common_config.max_barrel_size_docs,
             "pit": {
                 "id": "test-pit-id",
                 "keep_alive": "5m"
@@ -467,16 +430,10 @@ mod tests {
             "sort": [{"_doc": "asc"}]
         });
 
-        assert_eq!(
-            body["size"],
-            source.config.common_config.max_batch_size_docs
-        );
+        assert_eq!(body["size"], source.config.common_config.max_barrel_size_docs);
         assert_eq!(body["pit"]["keep_alive"], "5m");
         assert_eq!(body["sort"][0]["_doc"], "asc");
-        assert!(
-            body.get("search_after").is_none(),
-            "🎯 First call should not have search_after"
-        );
+        assert!(body.get("search_after").is_none(), "🎯 First call should not have search_after");
     }
 
     #[test]
@@ -486,7 +443,7 @@ mod tests {
         source.search_after = Some(vec![Value::Number(serde_json::Number::from(42))]);
 
         let mut body = serde_json::json!({
-            "size": source.config.common_config.max_batch_size_docs,
+            "size": source.config.common_config.max_barrel_size_docs,
             "pit": {
                 "id": "test-pit-id",
                 "keep_alive": "5m"
@@ -498,9 +455,6 @@ mod tests {
             body["search_after"] = Value::Array(cursor.clone());
         }
 
-        assert_eq!(
-            body["search_after"][0], 42,
-            "🎯 search_after should carry the cursor from previous page"
-        );
+        assert_eq!(body["search_after"][0], 42, "🎯 search_after should carry the cursor from previous barrel");
     }
 }

@@ -9,7 +9,6 @@
 //! sets up logging, and then lets the real code do the heavy lifting.
 //! Like a manager. 🦆
 
-#![allow(dead_code, unused_variables, unused_imports)]
 use anyhow::{Context, Ok, Result};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
@@ -35,7 +34,7 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let path_arg = match args.get(1) {
         Some(s) => s,
-        None => &format!("kvx.toml"), // -- 🔧 default: the ol' reliable
+        None => "kvx.toml", // -- 🔧 default: the ol' reliable
     };
 
     // -- 🔒 Validate the config file exists before we get too emotionally attached

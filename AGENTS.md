@@ -16,7 +16,7 @@ You _MUST_ utilize tools in such a way that the tools usage results in the least
 
 # Rules:
 - If a `Cargo.toml` exists, a `README.md` MUST exist in the same directory
-- Every folder under /crates/kvx/src must have a `README.md`
+- Every folder under `crates/kvx-lib/src/` must have a `README.md`
 - Readme must be distilled documentation for a new user, anything unnecessary is removed. Anything which no longer exists in code must be removed.
 - Must explicitly use keywords, terminology, conceptual, with no implementation details.
 - You MUST proactively read, create, update, and delete README.md files and their contents

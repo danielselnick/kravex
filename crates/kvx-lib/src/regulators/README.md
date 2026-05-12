@@ -1,23 +1,23 @@
 
 # Regulators
 
-Adaptive throttling via feedback control. Regulators dynamically adjust payload sizing based on drain feedback signals and throughput measurements.
+Adaptive throttling via feedback control. Regulators dynamically adjust drum sizing based on drain feedback signals and throughput measurements.
 
 ## Vocabulary
 
 | Term | Definition |
 |---|---|
 | **Regulator** | Controls a value based on feedback signals |
-| **FlowKnob** | Shared atomic value read by Joiner to size payloads |
+| **FlowKnob** | Shared atomic value read by Refiner to size drums |
 | **Governor** | Consumer of GaugeReading signals — drives the regulator, adjusts the FlowKnob |
 | **GaugeReading** | Signal from the drain: `DrainResult` or `Error` |
-| **DrainResult** | Gauge signal carrying `payload_bytes` and `latency_ms` from a completed drain |
+| **DrainResult** | Gauge signal carrying `drum_bytes` and `latency_ms` from a completed drain |
 
 ## Trait
 
 | Trait | Method | Returns | Purpose |
 |---|---|---|---|
-| `Regulate` | `regulate(reading, dt)` | `f64` | Given a GaugeReading and time delta, return the desired payload size in bytes |
+| `Regulate` | `regulate(reading, dt)` | `f64` | Given a GaugeReading and time delta, return the desired drum size in bytes |
 
 ## Dispatcher Enum
 
@@ -34,19 +34,19 @@ Adaptive throttling via feedback control. Regulators dynamically adjust payload 
 ## Signal Flow
 
 ```
-Drainer (drain complete) → GaugeReading::DrainResult { payload_bytes, latency_ms } → Governor → Regulator → FlowKnob
+Drainer (drain complete) → GaugeReading::DrainResult { drum_bytes, latency_ms } → Governor → Regulator → FlowKnob
 Drainer (error/429)      → GaugeReading::Error() → Governor → Regulator → FlowKnob
 ```
 
 ## Key Concepts
 
 - **ThroughputSeeker**: Dual-system design — fast circuit breaker (per-reading) + slow hill climber (5s windows)
-- **Circuit Breaker**: Dual EMA crossover — fast EMA drops 20% below slow EMA → immediate halve + cooldown
+- **Circuit Breaker**: Dual EMA crossover — fast EMA drops 35% below slow EMA → immediate halve + cooldown
 - **Hill Climbing**: Windowed median comparison — step forward on improvement, reverse + shrink (×0.618) on worsening
 - **Convergence**: Step size shrinks below 64 KiB → seeker holds position. Re-explores after 30 settled windows.
 - **PID Controller**: Proportional-Integral-Derivative feedback loop for latency setpoints
 - **EMA Smoothing**: Exponential moving average dampens noise in both PID and circuit breaker
-- **Auto-tuned Gains**: PID gains derived from min/max payload size ratio
+- **Auto-tuned Gains**: PID gains derived from min/max drum size ratio
 - **FlowKnob is atomic**: Lock-free reads from hot-path workers
 
 ## Knowledge Graph
@@ -55,7 +55,7 @@ Drainer (error/429)      → GaugeReading::Error() → Governor → Regulator �
 Regulate trait → Regulators enum → ByteValue | PidController | ThroughputSeeker
 Drainer → sends DrainResult or Error via async_channel to Governor
 Governor → receives GaugeReading → runs Regulator → writes FlowKnob
-FlowKnob → read by Joiner for dynamic payload sizing
+FlowKnob → read by Refiner for dynamic drum sizing
 ThroughputSeeker → System 1 (circuit breaker, every reading) + System 2 (hill climber, 5s windows)
 TOML → [governor.Throughput] | [governor.Latency] | [governor.Static]
 ```

@@ -3,20 +3,20 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
-//! 🎬 *[a dark and stormy deploy. the sink demands newlines. the caster obliges.]*
+//! 🎬 *[a dark and stormy deploy. the sink demands newlines. the tapper obliges.]*
 //! *[every line, alone. no brackets. no comfort. just `\n`. this is NDJSON.]*
 //!
-//! 📡 **NdjsonManifold** — casts feeds and joins them into newline-delimited JSON payloads.
+//! 📡 **NdjsonManifold** — casts barrels and joins them into newline-delimited JSON drums.
 //!
 //! 🧠 Knowledge graph:
 //! - Used by: ES `/_bulk` and file sinks — both want `item\nitem\n` format
-//! - For ES bulk: caster emits two lines per doc (action + source)
+//! - For ES bulk: tapper emits two lines per doc (action + source)
 //! - Trailing `\n` is mandatory for ES bulk, appreciated by file sinks, ignored by nobody
 //!
 //! 🦆 The duck asked what NDJSON stands for. We told it. It left anyway.
 
 use super::Manifold;
-use crate::{Entry, Payload};
+use crate::{Draft, Drum};
 use anyhow::Result;
 use std::collections::VecDeque;
 
@@ -27,11 +27,16 @@ use std::collections::VecDeque;
 
 /// 📡 Newline-Delimited JSON — the format ES `/_bulk` demands and files prefer.
 ///
-/// Casts each feed, joins results with `\n`, trailing `\n`.
-/// For ES bulk, each cast result is "action\nsource" (two NDJSON lines per doc).
-/// After join: "action1\nsource1\naction2\nsource2\n" — valid `/_bulk` payload.
+/// Each draft already carries its own trailing `\n` (produced by the tapper).
+/// The manifold concatenates them verbatim. No separator is inserted between drafts.
+/// That means if any draft lacks a trailing `\n`, the output will be malformed NDJSON.
+///
+/// For ES bulk, each tapper result is "action\nsource\n" (two NDJSON lines per doc + trailing newline).
+/// After join: "action1\nsource1\naction2\nsource2\n" — valid `/_bulk` drum.
 ///
 /// For file passthrough: "doc1\ndoc2\n" — valid newline-delimited file content.
+///
+/// 📜 **Contract**: All drafts MUST include their own trailing `\n`. The manifold does NOT add one.
 ///
 /// What's the DEAL with NDJSON? It's JSON but unfriendly. Every line is lonely.
 /// No brackets to hold them. No commas to connect them. Just newlines. And silence.
@@ -41,23 +46,23 @@ pub struct NdjsonManifold;
 
 impl Manifold for NdjsonManifold {
     #[inline]
-    fn join(&self, entries: &mut VecDeque<Entry>) -> Result<Payload> {
-        // -- 🧮 Pre-allocate based on total entry bytes — a vibes-based estimate that's usually close
-        // -- Knowledge graph: +1 per entry for the \n separator, because math is caring
-        let estimated_size: usize = entries.iter().map(|e| e.len() + 1).sum();
-        let mut payload = String::with_capacity(estimated_size);
+    fn join(&self, drafts: &mut VecDeque<Draft>) -> Result<Drum> {
+        // -- 🧮 Pre-allocate based on total draft bytes — a vibes-based estimate that's usually close
+        // -- Knowledge graph: +1 per draft for the \n separator, because math is caring
+        let estimated_size: usize = drafts.iter().map(|e| e.len() + 1).sum();
+        let mut drum = String::with_capacity(estimated_size);
 
-        for entry in entries.drain(..) {
-            // -- 🔄 Each entry is already cast — just stitch them together with newlines
-            // -- Like a quilt, but made of JSON, and nobody finds it cozy
-            payload.push_str(&entry);
-            // We expect each entry to have \n if it's being casted to bulk
-            // payload.push('\n');
+        for draft in drafts.drain(..) {
+            // -- 🔄 Each draft is already tapped and carries its own trailing \n.
+            // -- The tapper (NdJsonToBulk, PitToBulk) is responsible for adding \n.
+            // -- We just concatenate — no separator inserted here.
+            drum.push_str(&draft);
         }
 
-        // -- ✅ Trailing \n included — ES bulk requires it, files appreciate it, nobody complains.
+        // -- ✅ Trailing \n is provided by the last draft (tappers always include it).
+        // -- ES bulk requires it, files appreciate it, nobody complains.
         // -- Ancient proverb: "He who omits the trailing newline, debugs at 3am."
-        Ok(Payload(payload))
+        Ok(Drum(drum))
     }
 }
 
@@ -66,38 +71,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ndjson_the_one_where_single_entry_joins_to_ndjson() -> Result<()> {
-        // 🧪 One entry with its own trailing \n → concatenated as-is
+    fn ndjson_the_one_where_single_draft_joins_to_ndjson() -> Result<()> {
+        // 🧪 One draft with its own trailing \n → concatenated as-is
         let manifold = NdjsonManifold;
-        let mut entries = VecDeque::from(vec![Entry("{\"doc\":1}\n".to_string())]);
-        let result = manifold.join(&mut entries)?;
+        let mut drafts = VecDeque::from(vec![Draft("{\"doc\":1}\n".to_string())]);
+        let result = manifold.join(&mut drafts)?;
         assert_eq!(*result, "{\"doc\":1}\n");
-        assert!(
-            entries.is_empty(),
-            "🎯 drain(..) should leave the VecDeque empty but allocated"
-        );
+        assert!(drafts.is_empty(), "🎯 drain(..) should leave the VecDeque empty but allocated");
         Ok(())
     }
 
     #[test]
-    fn ndjson_the_one_where_multiple_entries_join() -> Result<()> {
-        // 🧪 Two entries already carrying their \n — concatenated in order
+    fn ndjson_the_one_where_multiple_drafts_join() -> Result<()> {
+        // 🧪 Two drafts already carrying their \n — concatenated in order
         let manifold = NdjsonManifold;
-        let mut entries = VecDeque::from(vec![
-            Entry("{\"doc\":1}\n".to_string()),
-            Entry("{\"doc\":2}\n".to_string()),
+        let mut drafts = VecDeque::from(vec![
+            Draft("{\"doc\":1}\n".to_string()),
+            Draft("{\"doc\":2}\n".to_string()),
         ]);
-        let result = manifold.join(&mut entries)?;
+        let result = manifold.join(&mut drafts)?;
         assert_eq!(*result, "{\"doc\":1}\n{\"doc\":2}\n");
         Ok(())
     }
 
     #[test]
-    fn ndjson_the_one_where_empty_entries_produces_nothing() -> Result<()> {
-        // 🧪 No entries, no payload. The void stares back. It is empty. 🦆
+    fn ndjson_the_one_where_empty_drafts_produce_nothing() -> Result<()> {
+        // 🧪 No drafts, no drum. The void stares back. It is empty. 🦆
         let manifold = NdjsonManifold;
-        let mut entries = VecDeque::new();
-        let result = manifold.join(&mut entries)?;
+        let mut drafts = VecDeque::new();
+        let result = manifold.join(&mut drafts)?;
         assert!(result.is_empty(), "Empty input → empty output. Zen.");
         Ok(())
     }

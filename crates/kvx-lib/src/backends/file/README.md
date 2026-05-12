@@ -6,11 +6,11 @@ File-based Source and Sink implementations for NDJSON data.
 
 ## Source
 
-Reads NDJSON files using chunked I/O with SIMD-accelerated newline scanning via `memchr`. Returns one page of newline-delimited records per `pump()` call.
+Reads NDJSON files using chunked I/O with SIMD-accelerated newline scanning via `memchr`. Returns one barrel of newline-delimited records per `pump()` call.
 
 ## Sink
 
-Writes NDJSON payloads to a file. Appends rendered payloads directly.
+Writes NDJSON drums to a file. Appends rendered drums directly.
 
 ## Config
 

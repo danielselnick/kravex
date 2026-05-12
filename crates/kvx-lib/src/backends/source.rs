@@ -5,34 +5,34 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::Page;
+use crate::Barrel;
 use crate::backends::{elasticsearch, file, in_mem};
 
-/// 🚰 A source that produces one raw feed per call — maximally ignorant of content format.
+/// 🚰 A source that produces one raw barrel per call — maximally ignorant of content format.
 ///
 /// Implement this trait and you too can be the origin of someone else's data problems.
 /// Guaranteed to dispense only the finest organic, free-range, artisanal bytes.
 ///
 /// # Contract 📜
-/// - `pump` returns `Option<String>` — one raw feed of data, uninterpreted.
+/// - `pump` returns `Option<String>` — one raw barrel of data, uninterpreted.
 /// - `None` = EOF. The well is dry. The golden retriever goes home. 🐕
 /// - The source does NOT parse, split, or understand its content. It's a faucet, not a chef.
-/// - The Manifold downstream handles format understanding via the Caster.
+/// - The Manifold downstream handles format understanding via the Tapper.
 /// - The borrow checker demands `&mut self` because sources have state. And feelings. Mostly state.
 ///
 /// # Knowledge Graph 🧠
 /// - Pattern: trait → concrete impls (FileSource, InMemorySource, ElasticsearchSource) → SourceBackend enum
-/// - Source returns raw feeds → channel(String) → Drainer buffers → Manifold casts+joins
+/// - Source returns raw barrels → channel(String) → Drainer buffers → Manifold casts+joins
 /// - Source is a data faucet 🚿 — it pours, the pipeline catches
-/// - **Zero-copy enabled**: Source doesn't split docs, Manifold borrows from buffered feeds via Cow
+/// - **Zero-copy enabled**: Source doesn't split docs, Manifold borrows from buffered barrels via Cow
 #[async_trait]
 pub trait Source: std::fmt::Debug {
-    /// 📄 Fetch the next raw feed of data.
+    /// 📄 Fetch the next raw barrel of data.
     ///
-    /// Returns `Ok(Some(feed))` while data flows — one feed per call, content uninterpreted.
+    /// Returns `Ok(Some(barrel))` while data flows — one barrel per call, content uninterpreted.
     /// Returns `Ok(None)` when the tap runs dry. EOF. Fin. The end. 🏁
     /// Returns `Err(...)` when something has gone sideways, sidelong, or fully upside-down.
-    async fn pump(&mut self) -> Result<Option<Page>>;
+    async fn pump(&mut self) -> Result<Option<Barrel>>;
 }
 
 /// 🎭 The many faces of a Source — a polymorphic casting call for data origins.
@@ -52,7 +52,7 @@ pub enum SourceBackend {
 
 #[async_trait]
 impl Source for SourceBackend {
-    async fn pump(&mut self) -> Result<Option<Page>> {
+    async fn pump(&mut self) -> Result<Option<Barrel>> {
         match self {
             SourceBackend::InMemory(i) => i.pump().await,
             SourceBackend::File(f) => f.pump().await,

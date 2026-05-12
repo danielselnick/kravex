@@ -39,7 +39,7 @@ fn format_bytes_adaptive(bytes: u64) -> String {
         // -- 📦 KiB zone — still respectable
         format!("{:.2} KiB", bytes as f64 / 1024.0)
     } else {
-        // -- 🐛 raw bytes mode. we believe in you though. small payloads need love too.
+        // -- 🐛 raw bytes mode. we believe in you though. small drums need love too.
         format!("{} bytes", bytes)
     }
 }
@@ -51,7 +51,7 @@ fn format_number(n: u64) -> String {
     // -- 🧵 pre-allocate like we know what we're doing (we do, we read the book)
     let mut result = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(c);
@@ -92,25 +92,16 @@ impl std::fmt::Debug for DrainMetrics {
         // -- 🐛 Snapshot the atomics for a clean debug view — no raw AtomicU64 noise
         f.debug_struct("DrainMetrics")
             .field("bytes_drained", &self.bytes_drained.load(Ordering::Relaxed))
-            .field(
-                "requests_completed",
-                &self.requests_completed.load(Ordering::Relaxed),
-            )
-            .field(
-                "latency_sum_ms",
-                &self.latency_sum_ms.load(Ordering::Relaxed),
-            )
-            .field(
-                "latency_max_ms",
-                &self.latency_max_ms.load(Ordering::Relaxed),
-            )
+            .field("requests_completed", &self.requests_completed.load(Ordering::Relaxed))
+            .field("latency_sum_ms", &self.latency_sum_ms.load(Ordering::Relaxed))
+            .field("latency_max_ms", &self.latency_max_ms.load(Ordering::Relaxed))
             .finish()
     }
 }
 
 pub struct DrainMetrics {
     // -- 🦆 quack quack — this struct is public because drainers and the foreman need it
-    /// 📦 total bytes drained — payload sizes accumulate like a 401k, except this one actually grows
+    /// 📦 total bytes drained — drum sizes accumulate like a 401k, except this one actually grows
     pub bytes_drained: AtomicU64,
     /// ✅ total drain requests completed — one per successful drain_with_retry
     pub requests_completed: AtomicU64,
@@ -122,6 +113,12 @@ pub struct DrainMetrics {
     pub last_request_size_bytes: AtomicU64,
     /// 📡 most recent drain latency in ms — store (not add), always the latest
     pub last_latency_ms: AtomicU64,
+}
+
+impl Default for DrainMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DrainMetrics {
@@ -140,16 +137,14 @@ impl DrainMetrics {
     /// 📡 Record a completed drain — called by Drainer after each successful drain_with_retry.
     /// fetch_add for accumulators, fetch_max for high-water mark, store for "latest" fields.
     /// All Relaxed ordering — the reporter just needs a ballpark, not a courtroom transcript. ⚖️
-    pub fn record_drain(&self, payload_bytes: u64, latency_ms: u64) {
+    pub fn record_drain(&self, drum_bytes: u64, latency_ms: u64) {
         // -- 📦 accumulate the evidence of hard work
-        self.bytes_drained
-            .fetch_add(payload_bytes, Ordering::Relaxed);
+        self.bytes_drained.fetch_add(drum_bytes, Ordering::Relaxed);
         self.requests_completed.fetch_add(1, Ordering::Relaxed);
         self.latency_sum_ms.fetch_add(latency_ms, Ordering::Relaxed);
         self.latency_max_ms.fetch_max(latency_ms, Ordering::Relaxed);
         // -- 📡 latest values — overwrites are fine, we only care about the most recent
-        self.last_request_size_bytes
-            .store(payload_bytes, Ordering::Relaxed);
+        self.last_request_size_bytes.store(drum_bytes, Ordering::Relaxed);
         self.last_latency_ms.store(latency_ms, Ordering::Relaxed);
     }
 }
@@ -256,19 +251,12 @@ impl ProgressReporter {
 
         // -- 📊 Phase 3: Snapshot drain metrics atomics
         let the_bytes_drained = self.drain_metrics.bytes_drained.load(Ordering::Relaxed);
-        let the_requests_completed = self
-            .drain_metrics
-            .requests_completed
-            .load(Ordering::Relaxed);
+        let the_requests_completed = self.drain_metrics.requests_completed.load(Ordering::Relaxed);
         let the_latency_sum_ms = self.drain_metrics.latency_sum_ms.load(Ordering::Relaxed);
-        let the_latency_max_ms = self.drain_metrics.latency_max_ms.load(Ordering::Relaxed);
-        let the_last_request_size = self
-            .drain_metrics
-            .last_request_size_bytes
-            .load(Ordering::Relaxed);
+        let the_last_request_size = self.drain_metrics.last_request_size_bytes.load(Ordering::Relaxed);
         let the_last_latency_ms = self.drain_metrics.last_latency_ms.load(Ordering::Relaxed);
 
-        // 📊 estimate doc count from bytes — heuristic: count \n in bulk payload ÷ 2
+        // 📊 estimate doc count from bytes — heuristic: count \n in bulk drum ÷ 2
         // (bulk format has action line + doc line per document, separated by \n)
         // For non-bulk formats this is a rough approximation. Good enough for a progress bar.
         // -- "Close enough for government work" — every engineer, ever
@@ -282,7 +270,6 @@ impl ProgressReporter {
             the_estimated_docs,
             the_requests_completed,
             the_latency_sum_ms,
-            the_latency_max_ms,
             the_last_request_size,
             the_last_latency_ms,
         );
@@ -296,42 +283,22 @@ impl ProgressReporter {
     /// Like checking if your pizza delivery tracker has changed status. 🍕
     async fn harvest_cluster_snapshots(&mut self) {
         // -- 📡 source cluster — is_finished() check makes the .await return instantly
-        if self
-            .source_fetch_handle
-            .as_ref()
-            .is_some_and(|h| h.is_finished())
-        {
+        if self.source_fetch_handle.as_ref().is_some_and(|h| h.is_finished()) {
             let the_handle = self.source_fetch_handle.take().unwrap();
             match the_handle.await {
                 Ok(Ok(snapshot)) => self.source_last_snapshot = Some(snapshot),
-                Ok(Err(e)) => warn!(
-                    "⚠️ Source cluster stats fetch failed — keeping last known values. Error: {}",
-                    e
-                ),
-                Err(e) => warn!(
-                    "⚠️ Source cluster stats task panicked — like socks in a dryer 🧦 Error: {}",
-                    e
-                ),
+                Ok(Err(e)) => warn!("⚠️ Source cluster stats fetch failed — keeping last known values. Error: {}", e),
+                Err(e) => warn!("⚠️ Source cluster stats task panicked — like socks in a dryer 🧦 Error: {}", e),
             }
         }
 
         // -- 📡 sink cluster — same pattern, different existential dread
-        if self
-            .sink_fetch_handle
-            .as_ref()
-            .is_some_and(|h| h.is_finished())
-        {
+        if self.sink_fetch_handle.as_ref().is_some_and(|h| h.is_finished()) {
             let the_handle = self.sink_fetch_handle.take().unwrap();
             match the_handle.await {
                 Ok(Ok(snapshot)) => self.sink_last_snapshot = Some(snapshot),
-                Ok(Err(e)) => warn!(
-                    "⚠️ Sink cluster stats fetch failed — keeping last known values. Error: {}",
-                    e
-                ),
-                Err(e) => warn!(
-                    "⚠️ Sink cluster stats task panicked — another victim of the garbage collector 🗑️ Error: {}",
-                    e
-                ),
+                Ok(Err(e)) => warn!("⚠️ Sink cluster stats fetch failed — keeping last known values. Error: {}", e),
+                Err(e) => warn!("⚠️ Sink cluster stats task panicked — another victim of the garbage collector 🗑️ Error: {}", e),
             }
         }
     }
@@ -340,17 +307,17 @@ impl ProgressReporter {
     /// Non-blocking — tokio::spawn returns immediately. We'll check back next tick. 🔄
     fn kick_off_cluster_fetches(&mut self) {
         // -- 📡 source: only fetch if we have a poller and no fetch is in-flight
-        if self.source_fetch_handle.is_none() {
-            if let Some(poller) = &self.source_poller {
-                self.source_fetch_handle = Some(poller.fetch());
-            }
+        if self.source_fetch_handle.is_none()
+            && let Some(poller) = &self.source_poller
+        {
+            self.source_fetch_handle = Some(poller.fetch());
         }
 
         // -- 📡 sink: same deal — poller exists, no in-flight fetch → go
-        if self.sink_fetch_handle.is_none() {
-            if let Some(poller) = &self.sink_poller {
-                self.sink_fetch_handle = Some(poller.fetch());
-            }
+        if self.sink_fetch_handle.is_none()
+            && let Some(poller) = &self.sink_poller
+        {
+            self.sink_fetch_handle = Some(poller.fetch());
         }
     }
 
@@ -401,7 +368,7 @@ impl ProgressReporter {
 
     /// 🎨 Render the full progress display as a comfy-table message on the progress bar.
     ///
-    /// Layout (6 rows x 2 cols):
+    /// Layout (5 data rows):
     /// ```text
     /// | sink: <name>
     /// | [=====>----------]
@@ -422,7 +389,6 @@ impl ProgressReporter {
         the_estimated_docs: u64,
         the_requests_completed: u64,
         the_latency_sum_ms: u64,
-        the_latency_max_ms: u64,
         the_last_request_size: u64,
         the_last_latency_ms: u64,
     ) {
@@ -482,26 +448,10 @@ impl ProgressReporter {
 
         if the_has_cluster_columns {
             // -- 📡 4-column mode: drain metrics | cumulative | source cluster | sink cluster
-            let the_source_cpu = self.format_cluster_metric(
-                self.source_last_snapshot,
-                self.source_poller.is_some(),
-                |s| format!("CPU {}%", s.cpu_percent as u64),
-            );
-            let the_sink_cpu = self.format_cluster_metric(
-                self.sink_last_snapshot,
-                self.sink_poller.is_some(),
-                |s| format!("CPU {}%", s.cpu_percent as u64),
-            );
-            let the_source_mem = self.format_cluster_metric(
-                self.source_last_snapshot,
-                self.source_poller.is_some(),
-                |s| format!("MEM {}%", s.jvm_heap_percent as u64),
-            );
-            let the_sink_mem = self.format_cluster_metric(
-                self.sink_last_snapshot,
-                self.sink_poller.is_some(),
-                |s| format!("MEM {}%", s.jvm_heap_percent as u64),
-            );
+            let the_source_cpu = self.format_cluster_metric(self.source_last_snapshot, self.source_poller.is_some(), |s| format!("CPU {}%", s.cpu_percent as u64));
+            let the_sink_cpu = self.format_cluster_metric(self.sink_last_snapshot, self.sink_poller.is_some(), |s| format!("CPU {}%", s.cpu_percent as u64));
+            let the_source_mem = self.format_cluster_metric(self.source_last_snapshot, self.source_poller.is_some(), |s| format!("MEM {}%", s.jvm_heap_percent as u64));
+            let the_sink_mem = self.format_cluster_metric(self.sink_last_snapshot, self.sink_poller.is_some(), |s| format!("MEM {}%", s.jvm_heap_percent as u64));
 
             // 🚀 row 1: throughput rates | source header | sink header
             table.add_row(vec![
@@ -512,34 +462,22 @@ impl ProgressReporter {
             ]);
             // 📦 row 2: byte throughput | CPU stats
             table.add_row(vec![
-                Cell::new(format!("{:.2} MiB/s", rates.mib_per_sec))
-                    .set_alignment(CellAlignment::Right),
-                Cell::new(format_bytes_adaptive(the_bytes_drained))
-                    .set_alignment(CellAlignment::Right),
+                Cell::new(format!("{:.2} MiB/s", rates.mib_per_sec)).set_alignment(CellAlignment::Right),
+                Cell::new(format_bytes_adaptive(the_bytes_drained)).set_alignment(CellAlignment::Right),
                 Cell::new(the_source_cpu).set_alignment(CellAlignment::Center),
                 Cell::new(the_sink_cpu).set_alignment(CellAlignment::Center),
             ]);
             // ⏱️ row 3: latency | MEM stats
             table.add_row(vec![
-                Cell::new(format!("avg {}ms", the_avg_latency_ms))
-                    .set_alignment(CellAlignment::Right),
-                Cell::new(format!("last {}ms", the_last_latency_ms))
-                    .set_alignment(CellAlignment::Right),
+                Cell::new(format!("avg {}ms", the_avg_latency_ms)).set_alignment(CellAlignment::Right),
+                Cell::new(format!("last {}ms", the_last_latency_ms)).set_alignment(CellAlignment::Right),
                 Cell::new(the_source_mem).set_alignment(CellAlignment::Center),
                 Cell::new(the_sink_mem).set_alignment(CellAlignment::Center),
             ]);
             // 📏 row 4: request size
             table.add_row(vec![
-                Cell::new(format!(
-                    "avg {}",
-                    format_bytes_adaptive(the_avg_request_size)
-                ))
-                .set_alignment(CellAlignment::Right),
-                Cell::new(format!(
-                    "last {}",
-                    format_bytes_adaptive(the_last_request_size)
-                ))
-                .set_alignment(CellAlignment::Right),
+                Cell::new(format!("avg {}", format_bytes_adaptive(the_avg_request_size))).set_alignment(CellAlignment::Right),
+                Cell::new(format!("last {}", format_bytes_adaptive(the_last_request_size))).set_alignment(CellAlignment::Right),
                 Cell::new("").set_alignment(CellAlignment::Center),
                 Cell::new("").set_alignment(CellAlignment::Center),
             ]);
@@ -559,30 +497,18 @@ impl ProgressReporter {
             ]);
             // 📦 row 2: byte throughput and cumulative bytes
             table.add_row(vec![
-                Cell::new(format!("{:.2} MiB/s", rates.mib_per_sec))
-                    .set_alignment(CellAlignment::Right),
-                Cell::new(format_bytes_adaptive(the_bytes_drained))
-                    .set_alignment(CellAlignment::Right),
+                Cell::new(format!("{:.2} MiB/s", rates.mib_per_sec)).set_alignment(CellAlignment::Right),
+                Cell::new(format_bytes_adaptive(the_bytes_drained)).set_alignment(CellAlignment::Right),
             ]);
             // ⏱️ row 3: latency — avg and last
             table.add_row(vec![
-                Cell::new(format!("avg {}ms", the_avg_latency_ms))
-                    .set_alignment(CellAlignment::Right),
-                Cell::new(format!("last {}ms", the_last_latency_ms))
-                    .set_alignment(CellAlignment::Right),
+                Cell::new(format!("avg {}ms", the_avg_latency_ms)).set_alignment(CellAlignment::Right),
+                Cell::new(format!("last {}ms", the_last_latency_ms)).set_alignment(CellAlignment::Right),
             ]);
             // 📏 row 4: request size — avg and last
             table.add_row(vec![
-                Cell::new(format!(
-                    "avg {}",
-                    format_bytes_adaptive(the_avg_request_size)
-                ))
-                .set_alignment(CellAlignment::Right),
-                Cell::new(format!(
-                    "last {}",
-                    format_bytes_adaptive(the_last_request_size)
-                ))
-                .set_alignment(CellAlignment::Right),
+                Cell::new(format!("avg {}", format_bytes_adaptive(the_avg_request_size))).set_alignment(CellAlignment::Right),
+                Cell::new(format!("last {}", format_bytes_adaptive(the_last_request_size))).set_alignment(CellAlignment::Right),
             ]);
             // ⏱️ row 5: time elapsed and estimated time remaining
             table.add_row(vec![
@@ -631,15 +557,9 @@ mod tests {
         metrics.record_drain(512, 25);
 
         // -- 📦 accumulators should sum up
-        assert_eq!(
-            metrics.bytes_drained.load(Ordering::Relaxed),
-            1024 + 2048 + 512
-        );
+        assert_eq!(metrics.bytes_drained.load(Ordering::Relaxed), 1024 + 2048 + 512);
         assert_eq!(metrics.requests_completed.load(Ordering::Relaxed), 3);
-        assert_eq!(
-            metrics.latency_sum_ms.load(Ordering::Relaxed),
-            50 + 100 + 25
-        );
+        assert_eq!(metrics.latency_sum_ms.load(Ordering::Relaxed), 50 + 100 + 25);
         // -- ⏱️ max should be the highest latency seen
         assert_eq!(metrics.latency_max_ms.load(Ordering::Relaxed), 100);
         // -- 📡 last values should be from the most recent call
@@ -689,8 +609,13 @@ mod tests {
         metrics.record_drain(4096, 42);
 
         // -- 🏗️ construct reporter directly — no pollers, classic 2-column mode
-        let mut the_reporter =
-            ProgressReporter::new("test-pipeline".to_string(), metrics.clone(), 0, None, None);
+        let mut the_reporter = ProgressReporter::new(
+            "test-pipeline".to_string(),
+            metrics.clone(),
+            0,
+            None,
+            None,
+        );
 
         // -- 🔄 tick it once — should render without exploding
         the_reporter.tick().await;
@@ -744,30 +669,32 @@ mod tests {
         };
 
         // -- ✅ snapshot present + poller active → formatted value
-        let cpu_str = the_reporter.format_cluster_metric(Some(the_snapshot), true, |s| {
-            format!("CPU {}%", s.cpu_percent as u64)
-        });
+        let cpu_str = the_reporter.format_cluster_metric(
+            Some(the_snapshot), true, |s| format!("CPU {}%", s.cpu_percent as u64),
+        );
         assert_eq!(cpu_str, "CPU 42%");
 
-        let mem_str = the_reporter.format_cluster_metric(Some(the_snapshot), true, |s| {
-            format!("MEM {}%", s.jvm_heap_percent as u64)
-        });
+        let mem_str = the_reporter.format_cluster_metric(
+            Some(the_snapshot), true, |s| format!("MEM {}%", s.jvm_heap_percent as u64),
+        );
         assert_eq!(mem_str, "MEM 67%");
 
         // -- 💤 no snapshot yet + poller active → "..." (loading state)
-        let loading_str = the_reporter
-            .format_cluster_metric(None, true, |s| format!("CPU {}%", s.cpu_percent as u64));
+        let loading_str = the_reporter.format_cluster_metric(
+            None, true, |s| format!("CPU {}%", s.cpu_percent as u64),
+        );
         assert_eq!(loading_str, "...");
 
         // -- 🚫 no poller → empty string (backend doesn't support cluster stats)
-        let empty_str = the_reporter
-            .format_cluster_metric(None, false, |s| format!("CPU {}%", s.cpu_percent as u64));
+        let empty_str = the_reporter.format_cluster_metric(
+            None, false, |s| format!("CPU {}%", s.cpu_percent as u64),
+        );
         assert_eq!(empty_str, "");
 
         // -- 🐛 edge case: snapshot exists but no poller → empty (shouldn't happen, but defensive)
-        let weird_str = the_reporter.format_cluster_metric(Some(the_snapshot), false, |s| {
-            format!("CPU {}%", s.cpu_percent as u64)
-        });
+        let weird_str = the_reporter.format_cluster_metric(
+            Some(the_snapshot), false, |s| format!("CPU {}%", s.cpu_percent as u64),
+        );
         assert_eq!(weird_str, "");
     }
 
@@ -779,34 +706,24 @@ mod tests {
         let metrics = Arc::new(DrainMetrics::new());
         metrics.record_drain(10240, 100);
 
-        let mut the_reporter =
-            ProgressReporter::new("file-to-file".to_string(), metrics.clone(), 0, None, None);
+        let mut the_reporter = ProgressReporter::new(
+            "file-to-file".to_string(),
+            metrics.clone(),
+            0,
+            None,
+            None,
+        );
 
         // -- 🔄 tick to render
         the_reporter.tick().await;
 
         // -- 📊 the rendered message should NOT contain "source" or "sink" column headers
         let the_message = the_reporter.progress_bar.message().to_string();
-        assert!(
-            !the_message.contains("source"),
-            "Classic 2-col layout should not have 'source' column header"
-        );
-        assert!(
-            !the_message.contains("CPU"),
-            "Classic 2-col layout should not have CPU metric"
-        );
-        assert!(
-            !the_message.contains("MEM"),
-            "Classic 2-col layout should not have MEM metric"
-        );
+        assert!(!the_message.contains("source"), "Classic 2-col layout should not have 'source' column header");
+        assert!(!the_message.contains("CPU"), "Classic 2-col layout should not have CPU metric");
+        assert!(!the_message.contains("MEM"), "Classic 2-col layout should not have MEM metric");
         // -- ✅ but it should still have drain metrics
-        assert!(
-            the_message.contains("Docs/min"),
-            "Should still show docs/min rate"
-        );
-        assert!(
-            the_message.contains("elapsed"),
-            "Should still show elapsed time"
-        );
+        assert!(the_message.contains("Docs/min"), "Should still show docs/min rate");
+        assert!(the_message.contains("elapsed"), "Should still show elapsed time");
     }
 }

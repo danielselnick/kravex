@@ -10,9 +10,9 @@
 //! 🏗️ Powered by Figment, because manually parsing env vars is a form of
 //! self-harm that even the borrow checker wouldn't approve of.
 
+use anyhow::Context;
 use crate::workers::DrainerConfig;
 use crate::workers::GovernorConfig;
-use anyhow::Context;
 use serde::Deserialize;
 // -- 🔧 To load the configuration, so I don't have to manually parse
 // -- environment variables or files. Bleh. Like doing taxes but for bytes.
@@ -40,71 +40,68 @@ use tracing::info;
 /// immediately explode on first run, ambitious enough to migrate actual data. 🦆
 #[derive(Debug, Deserialize, Clone)]
 pub struct RuntimeConfig {
-    /// 📬 Bounded channel capacity for ch1 (pumper → joiners) — raw feeds in transit 🚚
-    #[serde(
-        default = "default_pumper_to_joiner_capacity",
-        alias = "channel_size",
-        alias = "queue_capacity"
-    )]
-    pub pumper_to_joiner_capacity: usize,
-    /// 📬 Bounded channel capacity for ch2 (joiners → drainers) — assembled payloads in transit 🚛
-    /// Separate from pumper_to_joiner_capacity because payloads are larger than raw feeds —
+    /// 📬 Bounded channel capacity for ch1 (pumper → refiners) — raw barrels in transit 🚚
+    #[serde(default = "default_pumper_to_refiner_capacity")]
+    pub pumper_to_refiner_capacity: usize,
+    /// 📬 Bounded channel capacity for ch2 (refiners → drainers) — assembled drums in transit 🚛
+    /// Defaults to the same capacity as ch1 (refiner_count × 4). Drums are larger than raw
+    /// barrels, but the refiner pool produces them at the rate of the bottleneck, so matching
+    /// ch1 capacity avoids unnecessary backpressure asymmetry.
     /// think of ch1 as the loading dock and ch2 as the dispatch bay 🏗️
     // The byte size of this effectively becomes source max bytes * this capacity
-    #[serde(
-        default = "default_joiner_to_drainer_capacity",
-        alias = "payload_channel_capacity"
-    )]
-    pub joiner_to_drainer_capacity: usize,
+    #[serde(default = "default_refiner_to_drainer_capacity")]
+    pub refiner_to_drainer_capacity: usize,
     /// 🧵 How many sink workers run in parallel — more lanes, more throughput, more debugging
-    #[serde(default = "default_sink_parallelism", alias = "num_sink_workers")]
+    #[serde(default = "default_sink_parallelism")]
     pub sink_parallelism: usize,
-    /// 🧵 How many joiner threads to spawn for CPU-bound casting+joining work.
+    /// 🧵 How many refiner threads to spawn for CPU-bound tapping+joining work.
     /// Defaults to (cpu_count - 1, minimum 1) because we're generous enough to leave
     /// one core for the OS, the async runtime, and whatever else wants to live. 🦆
-    #[serde(default = "default_joiner_parallelism", alias = "num_joiner_workers")]
-    pub joiner_parallelism: usize,
+    #[serde(default = "default_refiner_count")]
+    pub refiner_count: usize,
 }
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
-            pumper_to_joiner_capacity: default_pumper_to_joiner_capacity(),
-            joiner_to_drainer_capacity: default_joiner_to_drainer_capacity(),
+            pumper_to_refiner_capacity: default_pumper_to_refiner_capacity(),
+            refiner_to_drainer_capacity: default_refiner_to_drainer_capacity(),
             sink_parallelism: default_sink_parallelism(),
-            joiner_parallelism: default_joiner_parallelism(),
+            refiner_count: default_refiner_count(),
         }
     }
 }
 
-// 🔢 10: chosen by rolling a d20, getting a 10, and calling it "load tested".
+// 🔢 Scales with CPU count: (max(1, cpus-1)) × 4 — one barrel slot per refiner per channel round-trip.
 // -- The queue holds batches, not feelings, though both can become backpressure if ignored. 🦆
-fn default_pumper_to_joiner_capacity() -> usize {
+fn default_pumper_to_refiner_capacity() -> usize {
     default_parallelism()
 }
 
-// 🧵 One sink lane by default: fewer moving parts, fewer ways to invent folklore during debugging.
+// 🧵 Sink parallelism scales with CPU count: (max(1, cpus-1)) × 4 × 3 = up to 12× per core.
+// -- This many lanes means high throughput at the cost of debugging surface area.
 // -- Ancient proverb: he who spawns eight writers before breakfast, debugs until dinner.
 fn default_sink_parallelism() -> usize {
     default_parallelism() * 3
 }
 
-// 📬 Payload channel (ch2, joiners → drainers): same default as ch1. Assembled payloads are
-// chunkier than raw feeds, so a smaller buffer is fine. Like a VIP line at the club — fewer
-// people, more velvet rope per capita. 🦆
-fn default_joiner_to_drainer_capacity() -> usize {
+// 📬 Drum channel (ch2, refiners → drainers): matches ch1 capacity by default.
+// Drums are chunkier than raw barrels, but the refiner pool produces them at the
+// bottleneck rate so mirroring ch1 avoids backpressure asymmetry.
+// Like a VIP line at the club — same number of guests, just fancier outfits. 🦆
+fn default_refiner_to_drainer_capacity() -> usize {
     default_parallelism()
 }
 
 fn default_parallelism() -> usize {
-    default_joiner_parallelism() * 4
+    default_refiner_count() * 4
 }
 
-// 🧵 Joiner threads: cpu_count - 1, because leaving one core for the OS and tokio is the
+// 🧵 Refiner threads: cpu_count - 1, because leaving one core for the OS and tokio is the
 // polite thing to do. Like leaving one slice of pizza for the next person.
-// Nobody does it, but we pretend we would. Minimum 1 because 0 joiners means 0 progress
+// Nobody does it, but we pretend we would. Minimum 1 because 0 refiners means 0 progress
 // and that's called a government agency.
-fn default_joiner_parallelism() -> usize {
+fn default_refiner_count() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get().saturating_sub(1).max(1))
         .unwrap_or(1)
@@ -128,7 +125,7 @@ pub struct AppConfig {
     pub drainer: DrainerConfig,
     /// 🎛️ Governor config — the unified regulator. Static = fixed flow, Latency = PID from
     /// drain latency, CPU = PID from cluster CPU stats. Replaces the old `regulator` field. 🔧
-    #[serde(default, alias = "flow_master")]
+    #[serde(default)]
     pub governor: GovernorConfig,
 }
 
@@ -141,8 +138,8 @@ pub struct AppConfig {
 /// 📐 DESIGN NOTE (no cap, this is tribal knowledge):
 ///   - If `config_file_name` is None  → env vars only. No file. No assumptions. No pizza defaults.
 ///   - If `config_file_name` is Some  → env vars + TOML file, merged. TOML wins on conflicts.
-///   Previously kravex always fell back to "config.toml" — like assuming everyone wants pineapple
-///   on their pizza. We fixed that. ethos showed us the light.
+///     Previously kravex always fell back to "config.toml" — like assuming everyone wants pineapple
+///     on their pizza. We fixed that. ethos showed us the light.
 ///
 /// 💀 Returns an error if config is unparseable. Which it will be. Check the error message though —
 /// it's contextual, informative, and written with love. Or despair. Hard to tell at 3am.
@@ -151,7 +148,7 @@ pub fn load_config(config_file_name: Option<&Path>) -> anyhow::Result<AppConfig>
     // -- of every 3am incident. "The config loaded fine." — famous last words.
     info!(
         "🔧 Loading configuration: {:#?}",
-        config_file_name.unwrap_or(&Path::new(""))
+        config_file_name.unwrap_or(Path::new(""))
     );
 
     // -- 🏗️ Start with env vars as the base layer — like a good sourdough starter.
@@ -214,7 +211,7 @@ mod tests {
         let config_path = write_test_config(
             r#"
             [runtime]
-            pumper_to_joiner_capacity = 8
+            pumper_to_refiner_capacity = 8
             sink_parallelism = 3
 
             [source_config.File]
@@ -222,7 +219,7 @@ mod tests {
 
             [sink_config.File]
             file_name = "output.json"
-            max_request_size_bytes = 123456
+            max_drum_size_bytes = 123456
             "#,
         );
 
@@ -230,11 +227,11 @@ mod tests {
             "💀 Runtime config should parse. The schema drift goblin does not get this win.",
         );
 
-        assert_eq!(app_config.runtime.pumper_to_joiner_capacity, 8);
+        assert_eq!(app_config.runtime.pumper_to_refiner_capacity, 8);
         assert_eq!(app_config.runtime.sink_parallelism, 3);
         match app_config.sink_config {
             SinkConfig::File(file_config) => {
-                assert_eq!(file_config.common_config.max_request_size_bytes, 123456);
+                assert_eq!(file_config.common_config.max_drum_size_bytes, 123456);
             }
             honestly_who_knows => panic!(
                 "💀 Expected File sink config in the test, but serde took us to {:?}. Plot twist energy.",
@@ -262,25 +259,19 @@ mod tests {
             .extract()
             .expect("💀 Default runtime config should exist. Serde left us on read otherwise.");
 
-        assert_eq!(
-            app_config.runtime.pumper_to_joiner_capacity,
-            RuntimeConfig::default().pumper_to_joiner_capacity
-        );
-        assert_eq!(
-            app_config.runtime.sink_parallelism,
-            RuntimeConfig::default().sink_parallelism
-        );
+        assert_eq!(app_config.runtime.pumper_to_refiner_capacity, RuntimeConfig::default().pumper_to_refiner_capacity);
+        assert_eq!(app_config.runtime.sink_parallelism, RuntimeConfig::default().sink_parallelism);
 
         // 🧹 TempPath auto-deletes on drop — no manual cleanup needed
     }
 
     #[test]
-    fn the_one_where_runtime_accepts_its_former_stage_names() {
+    fn the_one_where_runtime_knobs_use_new_names() {
         let config_path = write_test_config(
             r#"
             [runtime]
-            channel_size = 12
-            num_sink_workers = 4
+            pumper_to_refiner_capacity = 12
+            sink_parallelism = 4
 
             [source_config.File]
             file_name = "input.json"
@@ -291,16 +282,16 @@ mod tests {
         );
 
         let app_config = load_config(Some(&config_path))
-            .expect("💀 Runtime aliases should parse. The witness protection paperwork was valid.");
+            .expect("💀 Runtime config with new field names should parse nicely.");
 
-        assert_eq!(app_config.runtime.pumper_to_joiner_capacity, 12);
+        assert_eq!(app_config.runtime.pumper_to_refiner_capacity, 12);
         assert_eq!(app_config.runtime.sink_parallelism, 4);
 
         // 🧹 TempPath auto-deletes on drop — no manual cleanup needed
     }
 
     #[test]
-    fn the_one_where_governor_accepts_legacy_flow_master_table_name() {
+    fn the_one_where_governor_config_uses_governor_section_name() {
         let config_path = write_test_config(
             r#"
             [source_config.File]
@@ -309,23 +300,20 @@ mod tests {
             [sink_config.File]
             file_name = "output.json"
 
-            [flow_master.Static]
+            [governor.Static]
             output_bytes = 777777
             "#,
         );
 
         let app_config = load_config(Some(&config_path))
-            .expect("💀 Legacy [flow_master.*] should still deserialize into governor config");
+            .expect("💀 [governor.*] should deserialize into governor config");
 
         match app_config.governor {
             GovernorConfig::Static(cfg) => {
-                assert_eq!(
-                    cfg.output_bytes, 777_777,
-                    "🎯 Legacy alias should map to governor static output"
-                );
+                assert_eq!(cfg.output_bytes, 777_777, "🎯 governor.Static should map to governor static output");
             }
             honestly_who_knows => panic!(
-                "💀 Expected GovernorConfig::Static from legacy [flow_master.Static], got {:?}",
+                "💀 Expected GovernorConfig::Static from [governor.Static], got {:?}",
                 honestly_who_knows
             ),
         }

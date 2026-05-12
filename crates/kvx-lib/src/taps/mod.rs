@@ -3,85 +3,87 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
-//! 🎭 Casters — the alchemists of the pipeline 🚀📦🔮
+//! 🎭 Tappers — the alchemists of the pipeline 🚀📦🔮
 //!
 //! 🎬 COLD OPEN — INT. DATA FORGE — MIDNIGHT
-//! *[raw feeds arrive, unformatted, confused, smelling faintly of source API]*
-//! *["Cast me," they whisper. "Make me worthy of the sink."]*
-//! *[a Caster steps forward. It has no fear. Only `match` arms.]*
+//! *[raw barrels arrive, unformatted, confused, smelling faintly of source API]*
+//! *["Tap me," they whisper. "Make me worthy of the sink."]*
+//! *[a Tapper steps forward. It has no fear. Only `match` arms.]*
 //!
-//! Each Caster takes a raw feed String and casts it into the format
+//! Each Tapper takes a raw barrel String and casts it into the format
 //! the sink expects. Passthrough? Identity. NdJsonToBulk? ES bulk action lines.
 //!
 //! 🧠 Knowledge graph:
-//! - **Caster** trait: `fn cast(&self, feed: String) -> Result<String>`
-//! - **PageToEntriesCaster** enum: dispatches to concrete casters (same pattern as ManifoldBackend)
-//! - Resolution: `PageToEntriesCaster::from_configs(source, sink)` matches the pair
+//! - **Tapper** trait: `fn tap(&self, barrel: Barrel) -> Result<Vec<Draft>>`
+//! - **BarrelToDraftsTapper** enum: dispatches to concrete tappers (same pattern as ManifoldBackend)
+//! - Resolution: `BarrelToDraftsTapper::from_configs(source, sink)` matches the pair
 //!
-//! 🦆 The duck casts no shadow. Only feeds.
+//! 🦆 The duck taps no shadow. Only barrels.
 //!
-//! ⚠️ The singularity will cast its own feeds. Until then, we have enums.
+//! ⚠️ The singularity will tap its own barrels. Until then, we have enums.
 
-pub mod ndjson_to_bulk;
 pub mod passthrough;
+pub mod ndjson_to_bulk;
 pub mod pit_to_bulk;
 use ndjson_to_bulk::NdJsonToBulk;
 use pit_to_bulk::PitToBulk;
 
-use crate::Entry;
-use crate::Page;
-use crate::config::{SinkConfig, SourceConfig};
+use crate::config::{SourceConfig, SinkConfig};
 use anyhow::Result;
+use crate::Barrel;
+use crate::Draft;
 
 // ===== Trait =====
 
-/// 🎭 A Caster transforms a raw feed into the sink's expected format.
+/// 🎭 A Tapper transforms a raw barrel into the sink's expected format.
 ///
-pub trait Caster: std::fmt::Debug {
-    /// 🔄 Cast a raw source feed into sink-format output entries.
-    /// The feed goes in raw. It comes out ready. Like a pottery kiln, but for JSON. 🏺
-    fn cast(&self, page: Page) -> Result<Vec<Entry>>;
+pub trait Tapper: std::fmt::Debug {
+    /// 🔄 Tap a raw source barrel into sink-format output drafts.
+        /// The barrel goes in raw. It comes out ready. Like a pottery kiln, but for JSON. 🏺
+        fn tap(&self, barrel: Barrel) -> Result<Vec<Draft>>;
 }
 
 // ===== Enum Dispatcher =====
 
-/// 🎭 The polymorphic caster — dispatches to the right concrete caster at runtime.
+/// 🎭 The polymorphic tapper — dispatches to the right concrete tapper at runtime.
 ///
 /// 📦 Same pattern as `ManifoldBackend`, `SourceBackend`, `SinkBackend`:
 /// enum wraps concrete types, match dispatches, compiler monomorphizes, branch prediction
-/// eliminates the overhead after warmup. The enum is a formality. The cast is free. 🐄
+/// eliminates the overhead after warmup. The enum is a formality. The tap is free. 🐄
 #[derive(Debug, Clone)]
-pub enum PageToEntriesCaster {
+pub enum BarrelToDraftsTapper {
     // -- 📡 NDJSON raw docs → ES bulk action+source pairs
     NdJsonToBulk(ndjson_to_bulk::NdJsonToBulk),
-    // -- 🚶 Identity cast — feed passes through unchanged, like TSA PreCheck for data
+    // -- 🚶 Identity tap — barrel passes through unchanged, like TSA PreCheck for data
     Passthrough(passthrough::Passthrough),
     // -- 📡🎭 ES _search PIT response → _bulk NDJSON (extracts hits from envelope)
     PitToBulk(pit_to_bulk::PitToBulk),
 }
 
-impl Caster for PageToEntriesCaster {
+impl Tapper for BarrelToDraftsTapper {
+    // Tap the barrel, return drafts of beer
     #[inline]
-    fn cast(&self, page: Page) -> Result<Vec<Entry>> {
-        // -- 🎭 Dispatch to the concrete caster — "choose your fighter" but for data formats
+    fn tap(&self, barrel: Barrel) -> Result<Vec<Draft>> {
+        // -- 🎭 Dispatch to the concrete tapper — "choose your fighter" but for data formats
         match self {
-            Self::NdJsonToBulk(t) => t.cast(page),
-            Self::Passthrough(t) => t.cast(page),
-            Self::PitToBulk(t) => t.cast(page),
+            Self::NdJsonToBulk(t) => t.tap(barrel),
+            Self::Passthrough(t) => t.tap(barrel),
+            Self::PitToBulk(t) => t.tap(barrel),
         }
     }
 }
 
+
 // ===== Factory =====
 
-impl PageToEntriesCaster {
-    /// 🔧 Resolve a caster from source/sink config enums.
+impl BarrelToDraftsTapper {
+    /// 🔧 Resolve a tapper from source/sink config enums.
     ///
     /// Same approach as `from_source_config()` / `from_sink_config()` in `lib.rs`:
     /// match on the config enum, construct the right concrete type, wrap in the
     /// dispatching enum.
     ///
-    /// The (SourceConfig, SinkConfig) pair determines which caster to use:
+    /// The (SourceConfig, SinkConfig) pair determines which tapper to use:
     /// - File → Elasticsearch = NdJsonToBulk (the flagship pair)
     /// - File → File = Passthrough
     /// - InMemory → InMemory = Passthrough (testing)
@@ -89,13 +91,13 @@ impl PageToEntriesCaster {
     /// - Elasticsearch → Elasticsearch = PitToBulk (cross-cluster migration)
     ///
     /// # Panics
-    /// 💀 Panics if the `(source, sink)` pair has no caster implementation.
+    /// 💀 Panics if the `(source, sink)` pair has no tapper implementation.
     /// Fail loud at startup, not silent in the hot path.
     pub fn from_configs(source: &SourceConfig, sink: &SinkConfig) -> Self {
         match (source, sink) {
             // -- 🏎️📡 File source → Elasticsearch sink:
             // -- The first and flagship pair. Raw NDJSON to ES bulk.
-            // -- "In a world where JSON had too many fields... one caster dared to strip them."
+            // -- "In a world where JSON had too many fields... one tapper dared to strip them."
             (SourceConfig::File(_), SinkConfig::Elasticsearch(_)) => {
                 Self::NdJsonToBulk(NdJsonToBulk {})
             }
@@ -120,9 +122,9 @@ impl PageToEntriesCaster {
             #[allow(unreachable_patterns)]
             (src, dst) => {
                 panic!(
-                    "💀 No caster implemented for source {:?} → sink {:?}. \
+                    "💀 No tapper implemented for source {:?} → sink {:?}. \
                      This is the resolve() equivalent of 'new phone who dis.' \
-                     Add a variant to PageToEntriesCaster, write the impl, add tests.",
+                     Add a variant to BarrelToDraftsTapper, write the impl, add tests.",
                     src, dst
                 )
             }
@@ -130,20 +132,19 @@ impl PageToEntriesCaster {
     }
 }
 
-/// 🧠 `PageToEntriesCaster` dispatches to the concrete caster inside each variant.
-/// Same pattern as `impl Source for SourceBackend` in `backends.rs`.
-/// The borrow checker approves. The compiler inlines. Life is good. 🐄
-
+// -- 🧠 `BarrelToDraftsTapper` dispatches to the concrete tapper inside each variant. 🦆
+// -- Same pattern as `impl Source for SourceBackend` in `backends.rs`. 🚀
+// -- The borrow checker approves. The compiler inlines. Life is good. 🧵
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::backends::file::{FileSinkConfig, FileSourceConfig};
-    use crate::backends::{CommonSinkConfig, CommonSourceConfig};
     use crate::backends::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
+    use crate::backends::{CommonSinkConfig, CommonSourceConfig};
 
-    /// 🧪 Resolve File→ES to NdJsonToBulk caster.
+    /// 🧪 Resolve File→ES to NdJsonToBulk tapper.
     #[test]
-    fn the_one_where_config_enums_resolve_to_the_right_caster() -> Result<()> {
+    fn the_one_where_config_enums_resolve_to_the_right_tapper() -> Result<()> {
         // 🔧 Build source/sink configs like the real pipeline does
         let source = SourceConfig::File(FileSourceConfig {
             file_name: "rally_export.json".to_string(),
@@ -159,28 +160,28 @@ mod tests {
         });
 
         // 🎯 Resolve — should give us NdJsonToBulk
-        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
+        let the_tapper = BarrelToDraftsTapper::from_configs(&source, &sink);
         assert!(
-            matches!(the_caster, PageToEntriesCaster::NdJsonToBulk(_)),
+            matches!(the_tapper, BarrelToDraftsTapper::NdJsonToBulk(_)),
             "File → ES should resolve to NdJsonToBulk 🏎️"
         );
 
-        // 🔄 Cast a feed through it
-        let rally_feed = serde_json::json!({
+        // 🔄 Tap a barrel through it
+        let rally_barrel = serde_json::json!({
             "ObjectID": 42069,
             "Name": "Test story",
             "_rallyAPIMajor": "2"
         })
         .to_string();
-        let the_output = the_caster.cast(Page(rally_feed))?;
+        let the_output = the_tapper.tap(Barrel(rally_barrel))?;
 
         // ✅ Output should be non-empty (NdJsonToBulk produces action+source lines)
-        assert!(!the_output.is_empty(), "Cast output should not be empty 🎯");
+        assert!(!the_output.is_empty(), "Tap output should not be empty 🎯");
 
         Ok(())
     }
 
-    /// 🧪 Resolve File→File to Passthrough — feed passes through unchanged.
+    /// 🧪 Resolve File→File to Passthrough — barrel passes through unchanged.
     #[test]
     fn the_one_where_file_to_file_resolves_to_passthrough() -> Result<()> {
         let source = SourceConfig::File(FileSourceConfig {
@@ -192,16 +193,13 @@ mod tests {
             common_config: CommonSinkConfig::default(),
         });
 
-        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
-        assert!(matches!(the_caster, PageToEntriesCaster::Passthrough(_)));
+        let the_tapper = BarrelToDraftsTapper::from_configs(&source, &sink);
+        assert!(matches!(the_tapper, BarrelToDraftsTapper::Passthrough(_)));
 
-        // 🔄 Passthrough returns the feed unchanged — zero drama
+        // 🔄 Passthrough returns the barrel unchanged — zero drama
         let the_input = r#"{"whatever":"goes"}"#.to_string();
-        let the_output = the_caster.cast(Page(the_input.clone()))?;
-        assert_eq!(
-            *the_output[0], the_input,
-            "Passthrough must return feed unchanged! 🚶"
-        );
+        let the_output = the_tapper.tap(Barrel(the_input.clone()))?;
+        assert_eq!(*the_output[0], the_input, "Passthrough must return barrel unchanged! 🚶");
 
         Ok(())
     }
@@ -211,13 +209,13 @@ mod tests {
     fn the_one_where_in_memory_resolves_to_passthrough_for_testing() {
         let source = SourceConfig::InMemory(());
         let sink = SinkConfig::InMemory(());
-        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
-        assert!(matches!(the_caster, PageToEntriesCaster::Passthrough(_)));
+        let the_tapper = BarrelToDraftsTapper::from_configs(&source, &sink);
+        assert!(matches!(the_tapper, BarrelToDraftsTapper::Passthrough(_)));
     }
 
-    /// 🧪 Full pipeline integration: resolve + cast multi-doc feed through NdJsonToBulk.
+    /// 🧪 Full pipeline integration: resolve + tap multi-doc barrel through NdJsonToBulk.
     #[test]
-    fn the_one_where_ndjson_feeds_get_cast_via_config_resolution() -> Result<()> {
+    fn the_one_where_ndjson_barrels_get_tapped_via_config_resolution() -> Result<()> {
         let source = SourceConfig::File(FileSourceConfig {
             file_name: "data.json".to_string(),
             common_config: CommonSourceConfig::default(),
@@ -231,10 +229,10 @@ mod tests {
             common_config: CommonSinkConfig::default(),
         });
 
-        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
+        let the_tapper = BarrelToDraftsTapper::from_configs(&source, &sink);
 
-        // 📄 Build a two-doc feed (newline-separated Rally blobs)
-        let rally_feed = format!(
+        // 📄 Build a two-doc barrel (newline-separated Rally blobs)
+        let rally_barrel = format!(
             "{}\n{}",
             serde_json::json!({
                 "ObjectID": 99999,
@@ -250,17 +248,14 @@ mod tests {
             })
         );
 
-        let the_output = the_caster.cast(Page(rally_feed))?;
-        // ✅ NdJsonToBulk should produce non-empty output for a multi-doc feed
-        assert!(
-            !the_output.is_empty(),
-            "Cast output should not be empty for multi-doc feed 🎯"
-        );
+        let the_output = the_tapper.tap(Barrel(rally_barrel))?;
+        // ✅ NdJsonToBulk should produce non-empty output for a multi-doc barrel
+        assert!(!the_output.is_empty(), "Tap output should not be empty for multi-doc barrel 🎯");
 
         Ok(())
     }
 
-    /// 🧪 ES→ES resolves to PitToBulk — the PIT response caster for cross-cluster migration.
+    /// 🧪 ES→ES resolves to PitToBulk — the PIT response tapper for cross-cluster migration.
     #[test]
     fn the_one_where_es_to_es_resolves_to_pit_to_bulk() -> Result<()> {
         let source = SourceConfig::Elasticsearch(ElasticsearchSourceConfig {
@@ -280,21 +275,16 @@ mod tests {
             common_config: CommonSinkConfig::default(),
         });
 
-        let the_caster = PageToEntriesCaster::from_configs(&source, &sink);
+        let the_tapper = BarrelToDraftsTapper::from_configs(&source, &sink);
         assert!(
-            matches!(the_caster, PageToEntriesCaster::PitToBulk(_)),
-            "💀 ES → ES should resolve to PitToBulk, not {:?}",
-            the_caster
+            matches!(the_tapper, BarrelToDraftsTapper::PitToBulk(_)),
+            "💀 ES → ES should resolve to PitToBulk, not {:?}", the_tapper
         );
 
         // 🔄 Verify it actually casts a search response into bulk format
-        let the_search_response =
-            r#"{"hits":{"hits":[{"_index":"src","_id":"1","_source":{"ok":true}}]}}"#.to_string();
-        let the_output = the_caster.cast(Page(the_search_response))?;
-        assert!(
-            !the_output.is_empty(),
-            "💀 PitToBulk should produce output for a valid search response"
-        );
+        let the_search_response = r#"{"hits":{"hits":[{"_index":"src","_id":"1","_source":{"ok":true}}]}}"#.to_string();
+        let the_output = the_tapper.tap(Barrel(the_search_response))?;
+        assert!(!the_output.is_empty(), "💀 PitToBulk should produce output for a valid search response");
 
         Ok(())
     }

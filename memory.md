@@ -82,7 +82,7 @@
 - 10 retries max — persistent rejections (mapping errors) won't loop forever
 - Cap sampled error reasons at 5 (avoid OOM on catastrophic bulk failure)
 - Empty body = success (backward compat with mocks/proxies)
-- Non-JSON body = error (catches reverse proxy HTML error pages)
+- Non-JSON body = error (catches reverse proxy HTML error barrels)
 
 ---
 ## 2026-03-26 — ElasticsearchSource Implementation (PIT + search_after)
@@ -94,7 +94,7 @@
 - HTTP client: 10s connect timeout, 30s response timeout (mirrors sink pattern)
 - Auth: API key > basic auth > anonymous (same hierarchy as sink)
 - Startup validation: ping cluster, verify index exists (HEAD request)
-- Returns raw _search response envelope as Page — PitToBulk/PitToJson casters extract hits downstream
+- Returns raw _search response envelope as Page — PitToBulk/PitToJson Tappers extract hits downstream
 - Added 6 unit tests (exhaustion, auth priority, request body structure)
 - Updated elasticsearch README.md with full config table and knowledge graph
 - Fixed 3 existing tests in casts/mod.rs and lib.rs (missing `index` field)

@@ -10,27 +10,25 @@
 //!
 //! ⚠️ "The singularity will happen, and it'll still use TOML"
 
-// -- 🗑️ allow(dead_code) — keeping the lights on for modules under construction
-#![allow(dead_code, unused_variables, unused_imports)]
-pub mod backends;
-pub mod casts;
 pub mod config;
-pub mod foreman;
+pub mod backends;
 pub mod manifolds;
 pub mod progress;
+pub mod foreman;
+pub mod taps;
 pub mod regulators;
-pub mod victory_laps;
 pub mod workers;
+pub mod victory_laps;
 
+use crate::config::AppConfig;
 use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSource};
 use crate::backends::file::{FileSink, FileSource};
 use crate::backends::in_mem::{InMemorySink, InMemorySource};
 use crate::backends::{SinkBackend, SourceBackend};
-use crate::casts::PageToEntriesCaster;
-use crate::config::AppConfig;
-use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
 use crate::foreman::Foreman;
+use crate::config::{SinkConfig, SourceConfig};
 use crate::manifolds::ManifoldBackend;
+use crate::taps::BarrelToDraftsTapper;
 use crate::workers::GovernorConfig;
 use anyhow::{Context, Result};
 use std::ops::Deref;
@@ -38,6 +36,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::SystemTime;
 use tracing::info;
+
 
 /// 🚀 The grand entry point. The big kahuna. The main event.
 pub async fn run(app_config: AppConfig) -> Result<()> {
@@ -61,34 +60,35 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
         );
     }
 
-    // 🔄 Resolve the caster from source/sink config pair.
-    // 🧠 Knowledge graph: PageToEntriesCaster::from_configs() matches (source, sink) → caster.
+    // 🔄 Resolve the tapper from source/sink config pair.
+    // 🧠 Knowledge graph: BarrelToDraftsTapper::from_configs() matches (source, sink) → tapper.
     // File→ES = NdJsonToBulk, File→File = Passthrough, InMemory→InMemory = Passthrough, etc.
-    let caster =
-        PageToEntriesCaster::from_configs(&app_config.source_config, &app_config.sink_config);
+    let tapper =
+        BarrelToDraftsTapper::from_configs(&app_config.source_config, &app_config.sink_config);
 
     // 🎼 Resolve the manifold from sink config.
     // 🧠 ES/File → NdjsonManifold, InMemory → JsonArrayManifold.
-    // The Manifold casts raw feeds AND joins them into wire format. Two birds, one Cow. 🐄
+    // The Manifold casts raw barrels AND joins them into wire format. Two birds, one Cow. 🐄
     let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
 
-    // 📏 Extract max request size from sink config — the hard ceiling for payload size.
-    let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
+    // 📏 Extract max request size from sink config — the hard ceiling for drum size.
+    let max_drum_size_bytes = app_config.sink_config.max_drum_size_bytes();
 
-    // 🔧 Create the FlowKnob — shared atomic valve between Governor and joiners.
+    // 🔧 Create the FlowKnob — shared atomic valve between Governor and refiners.
     // 🧠 GovernorConfig determines the initial value:
     //   - Static: fixed at output_bytes, never changes (no Governor spawned)
     //   - Latency: starts at initial_output_bytes, PID adjusts based on drain latency
-    let the_initial_flow = match &app_config.governor {
+    let the_governator = match &app_config.governor {
         GovernorConfig::Static(cfg) => cfg.output_bytes,
         GovernorConfig::Latency(cfg) => cfg.initial_output_bytes,
         GovernorConfig::Throughput(cfg) => cfg.initial_output_bytes,
     };
-    let the_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(the_initial_flow));
+    let the_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(the_governator));
 
     info!(
         "🎛️ Governor mode: {} — initial flow: {} bytes",
-        &app_config.governor, the_initial_flow
+        &app_config.governor,
+        the_governator
     );
 
     // 📏 Extract pipeline name and total_expected_bytes for progress reporting.
@@ -104,11 +104,11 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
         .start_workers(
             source_backend,
             sink_backends,
-            caster,
+            tapper,
             manifold,
             the_flow_knob,
             &app_config.governor,
-            max_request_size_bytes,
+            max_drum_size_bytes,
             pipeline_name,
             total_expected_bytes,
         )
@@ -179,9 +179,9 @@ pub async fn stop() -> Result<()> {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Page(pub String);
+pub struct Barrel(pub String);
 
-impl Deref for Page {
+impl Deref for Barrel {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
@@ -189,17 +189,17 @@ impl Deref for Page {
     }
 }
 
-impl From<String> for Page {
+impl From<String> for Barrel {
     fn from(s: String) -> Self {
-        Page(s)
+        Barrel(s)
     }
 }
 
-// 📦 A fully assembled, wire-ready payload — the final form before I/O.
+// 📦 A fully assembled, wire-ready drum — the final form before I/O.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Payload(pub String);
+pub struct Drum(pub String);
 
-impl Deref for Payload {
+impl Deref for Drum {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
@@ -207,21 +207,21 @@ impl Deref for Payload {
     }
 }
 
-impl From<String> for Payload {
+impl From<String> for Drum {
     fn from(s: String) -> Self {
-        Payload(s)
+        Drum(s)
     }
 }
 
-impl PartialEq<&str> for Payload {
+impl PartialEq<&str> for Drum {
     fn eq(&self, other: &&str) -> bool {
         self.0 == *other
     }
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Entry(pub String);
-impl Deref for Entry {
+pub struct Draft(pub String);
+impl Deref for Draft {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
@@ -229,52 +229,51 @@ impl Deref for Entry {
     }
 }
 
-impl From<String> for Entry {
+impl From<String> for Draft {
     fn from(s: String) -> Self {
-        Entry(s)
+        Draft(s)
     }
 }
 
-impl PartialEq<&str> for Entry {
+impl PartialEq<&str> for Draft {
     fn eq(&self, other: &&str) -> bool {
         self.0 == *other
     }
 }
 
-/// 🔧 The FlowKnob — a shared atomic valve that controls payload size.
+/// 🔧 The FlowKnob — a shared atomic valve that controls drum size.
 ///
-/// The Governor writes it. The joiners read it. Nobody else touches it.
+/// The Governor writes it. The refiners read it. Nobody else touches it.
 /// Like the office thermostat, except this one actually works. 🌡️
 pub type FlowKnob = Arc<AtomicUsize>;
 
 pub enum GaugeReading {
-    DrainResult { payload_bytes: u64, latency_ms: u64 },
-    Error(),
+    DrainResult { drum_bytes: u64, latency_ms: u64 },
+    Error()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backends::file::FileSourceConfig;
-    use crate::backends::{CommonSinkConfig, CommonSourceConfig};
     use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
 
+
     /// 🧪 Full pipeline integration: InMemory→Passthrough→InMemory.
-    /// Four raw docs in (as one newline-delimited feed), one JSON array payload out.
+    /// Four raw docs in (as one newline-delimited barrel), one JSON array drum out.
     ///
-    /// 🧠 InMemory source returns one feed: "{"doc":1}\n{"doc":2}\n{"doc":3}\n{"doc":4}".
-    /// Passthrough returns the entire feed as-is.
-    /// JsonArrayManifold wraps it as [feed_content].
+    /// 🧠 InMemory source returns one barrel: "{"doc":1}\n{"doc":2}\n{"doc":3}\n{"doc":4}".
+    /// Passthrough returns the entire barrel as-is.
+    /// JsonArrayManifold wraps it as [barrel_content].
     ///
-    /// 🐄 Zero-copy verification: passthrough borrows from the buffered feed, no per-doc alloc.
+    /// 🐄 Zero-copy verification: passthrough borrows from the buffered barrel, no per-doc alloc.
     #[tokio::test]
     async fn the_one_where_four_docs_made_it_home_safely() -> Result<()> {
         let app_config = AppConfig {
             runtime: RuntimeConfig {
-                pumper_to_joiner_capacity: 10,
-                joiner_to_drainer_capacity: 10,
+                pumper_to_refiner_capacity: 10,
+                refiner_to_drainer_capacity: 10,
                 sink_parallelism: 1,
-                joiner_parallelism: 1,
+                refiner_count: 1,
             },
             source_config: SourceConfig::InMemory(()),
             sink_config: SinkConfig::InMemory(()),
@@ -286,57 +285,43 @@ mod tests {
         let sink_inner = InMemorySink::new().await?;
         let sink = SinkBackend::InMemory(sink_inner.clone());
 
-        // 🔄 InMemory→InMemory resolves to Passthrough caster
-        let caster =
-            PageToEntriesCaster::from_configs(&app_config.source_config, &app_config.sink_config);
+        // 🔄 InMemory→InMemory resolves to Passthrough tapper
+        let tapper = BarrelToDraftsTapper::from_configs(
+            &app_config.source_config,
+            &app_config.sink_config,
+        );
 
         // 🎼 InMemory sink → JsonArrayManifold: [item,item,...]
         let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
 
         // 📏 Max request size from sink config
-        let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
+        let max_drum_size_bytes = app_config.sink_config.max_drum_size_bytes();
 
         // 🔧 No regulator for tests — static flow knob at max 🎚️
-        let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_request_size_bytes));
+        let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_drum_size_bytes));
 
         let the_governor_config = GovernorConfig::default();
         let foreman = Foreman::new(app_config);
         foreman
-            .start_workers(
-                source,
-                vec![sink],
-                caster,
-                manifold,
-                the_test_flow_knob,
-                &the_governor_config,
-                max_request_size_bytes,
-                "test-pipeline".to_string(),
-                0,
-            )
+            .start_workers(source, vec![sink], tapper, manifold, the_test_flow_knob, &the_governor_config, max_drum_size_bytes, "test-pipeline".to_string(), 0)
             .await?;
 
-        // 📦 Joiner received 1 feed (4 docs newline-delimited), passthrough-cast and joined into JSON array.
-        // Joiner buffers raw feeds → manifold.join(buffer, caster) → payload on ch2 → Drainer relays to sink.
-        // 🧠 Passthrough treats entire feed as one item → payload = '[{"doc":1}\n{"doc":2}\n{"doc":3}\n{"doc":4}]'
-        // The feed content includes newlines because passthrough doesn't split — that's by design!
+        // 📦 Refiner received 1 barrel (4 docs newline-delimited), passthrough-tapped and joined into JSON array.
+        // Refiner accumulates raw barrels → manifold.join(plenum, tapper) → drum on ch2 → Drainer relays to sink.
+        // 🧠 Passthrough treats entire barrel as one item → drum = '[{"doc":1}\n{"doc":2}\n{"doc":3}\n{"doc":4}]'
+        // The barrel content includes newlines because passthrough doesn't split — that's by design!
         let received = sink_inner.received.lock().await;
-        assert_eq!(received.len(), 1, "Should have received exactly 1 payload");
+        assert_eq!(received.len(), 1, "Should have received exactly 1 drum");
 
-        let the_payload = &received[0];
-        // 📄 Passthrough returns the whole feed as one item, so JSON array wraps the entire feed
+        let the_drum = &received[0];
+        // 📄 Passthrough returns the whole barrel as one item, so JSON array wraps the entire barrel
         let expected = format!(
             "[{}]",
-            [
-                r#"{"doc":1}"#,
-                r#"{"doc":2}"#,
-                r#"{"doc":3}"#,
-                r#"{"doc":4}"#
-            ]
-            .join("\n")
+            [r#"{"doc":1}"#, r#"{"doc":2}"#, r#"{"doc":3}"#, r#"{"doc":4}"#].join("\n")
         );
         assert_eq!(
-            the_payload, &expected,
-            "InMemory sink should receive a JSON array wrapping the passthrough feed"
+            the_drum, &expected,
+            "InMemory sink should receive a JSON array wrapping the passthrough barrel"
         );
 
         Ok(())
@@ -350,28 +335,28 @@ mod tests {
     /// *[Between them, PitToBulk cracks its knuckles. "Let's dance."]*
     ///
     /// This test exercises the full ES→ES migration path:
-    /// - Source emits ES `_search` PIT response envelopes (2 pages, 3 hits total)
-    /// - PitToBulk caster extracts hits → `_bulk` NDJSON action+source pairs
-    /// - NdjsonManifold joins entries with `\n`
-    /// - InMemorySink captures the final `_bulk` payload for assertion
+    /// - Source emits ES `_search` PIT response envelopes (2 barrels, 3 hits total)
+    /// - PitToBulk tapper extracts hits → `_bulk` NDJSON action+source pairs
+    /// - NdjsonManifold joins drafts with `\n`
+    /// - InMemorySink captures the final `_bulk` drum for assertion
     ///
-    /// 🧠 The trick: InMemorySource holds ES-format pages, but config enums say
-    /// `Elasticsearch` so caster/manifold resolution follows the ES→ES code path.
-    /// No HTTP. No clusters. No 3am pages. Just pure pipeline verification. 🦆
+    /// 🧠 The trick: InMemorySource holds ES-format barrels, but config enums say
+    /// `Elasticsearch` so tapper/manifold resolution follows the ES→ES code path.
+    /// No HTTP. No clusters. No 3am barrels. Just pure pipeline verification. 🦆
     #[tokio::test]
     async fn the_one_where_elasticsearch_docs_survive_the_pit_to_bulk_gauntlet() -> Result<()> {
-        use crate::backends::elasticsearch::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
-        use crate::backends::{CommonSinkConfig, CommonSourceConfig};
+        use crate::backends::elasticsearch::{ElasticsearchSourceConfig, ElasticsearchSinkConfig};
+        use crate::backends::{CommonSourceConfig, CommonSinkConfig};
 
-        // 🔧 ES config structs — used ONLY for caster/manifold resolution, not actual connections.
+        // 🔧 ES config structs — used ONLY for tapper/manifold resolution, not actual connections.
         // These URLs are faker than a three-dollar bill. The pipeline doesn't care.
         // "In a world where configs lied... one test dared to trust the enum dispatch."
         let app_config = AppConfig {
             runtime: RuntimeConfig {
-                pumper_to_joiner_capacity: 10,
-                joiner_to_drainer_capacity: 10,
+                pumper_to_refiner_capacity: 10,
+                refiner_to_drainer_capacity: 10,
                 sink_parallelism: 1,
-                joiner_parallelism: 1,
+                refiner_count: 1,
             },
             source_config: SourceConfig::Elasticsearch(ElasticsearchSourceConfig {
                 url: "http://source-cluster-that-doesnt-exist:9200".to_string(),
@@ -393,33 +378,34 @@ mod tests {
             governor: Default::default(),
         };
 
-        // 📡 Page 1: Two hits from the "movies" index — one with routing, because spicy data is best data
-        let the_first_pit_response = Page(r#"{"hits":{"hits":[{"_index":"movies","_id":"neo_1","_source":{"title":"The Matrix","year":1999,"tagline":"Welcome to the real world"}},{"_index":"movies","_id":"inception_2","_routing":"scifi_shard","_source":{"title":"Inception","year":2010,"tagline":"Your mind is the scene of the crime"}}]}}"#.to_string());
+        // 📡 Barrel 1: Two hits from the "movies" index — one with routing, because spicy data is best data
+        let the_first_pit_response = Barrel(r#"{"hits":{"hits":[{"_index":"movies","_id":"neo_1","_source":{"title":"The Matrix","year":1999,"tagline":"Welcome to the real world"}},{"_index":"movies","_id":"inception_2","_routing":"scifi_shard","_source":{"title":"Inception","year":2010,"tagline":"Your mind is the scene of the crime"}}]}}"#.to_string());
 
-        // 📡 Page 2: One hit from a DIFFERENT index — tests cross-index preservation through the pipeline
+        // 📡 Barrel 2: One hit from a DIFFERENT index — tests cross-index preservation through the pipeline
         // Because real migrations don't always stay in one index. Life is messy. Data is messier.
-        let the_second_pit_response = Page(r#"{"hits":{"hits":[{"_index":"classics","_id":"casa_3","_source":{"title":"Casablanca","year":1942,"tagline":"Here is looking at you, kid"}}]}}"#.to_string());
+        let the_second_pit_response = Barrel(r#"{"hits":{"hits":[{"_index":"classics","_id":"casa_3","_source":{"title":"Casablanca","year":1942,"tagline":"Here is looking at you, kid"}}]}}"#.to_string());
 
-        // 🏗️ Wire the actual backends — InMemory with ES-format pages
-        let source = SourceBackend::InMemory(InMemorySource::with_pages(vec![
-            the_first_pit_response,
-            the_second_pit_response,
-        ]));
+        // 🏗️ Wire the actual backends — InMemory with ES-format barrels
+        let source = SourceBackend::InMemory(
+            InMemorySource::with_barrels(vec![the_first_pit_response, the_second_pit_response]),
+        );
         let sink_inner = InMemorySink::new().await?;
         let sink = SinkBackend::InMemory(sink_inner.clone());
 
-        // 🔄 ES→ES config resolution → PitToBulk caster (extracts hits from _search envelope)
-        let caster =
-            PageToEntriesCaster::from_configs(&app_config.source_config, &app_config.sink_config);
+        // 🔄 ES→ES config resolution → PitToBulk tapper (extracts hits from _search envelope)
+        let tapper = BarrelToDraftsTapper::from_configs(
+            &app_config.source_config,
+            &app_config.sink_config,
+        );
 
         // 🎼 ES sink config → NdjsonManifold (action\nsource\n per hit)
         let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
 
-        // 📏 Max request size from sink config — with default 64MB, all 3 hits fit in one payload
-        let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
+        // 📏 Max request size from sink config — with default 64MB, all 3 hits fit in one drum
+        let max_drum_size_bytes = app_config.sink_config.max_drum_size_bytes();
 
         // 🔧 Static flow knob — no regulator, full throttle, send it and pray 🙏
-        let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_request_size_bytes));
+        let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_drum_size_bytes));
 
         let the_governor_config = GovernorConfig::default();
         let foreman = Foreman::new(app_config);
@@ -427,17 +413,17 @@ mod tests {
             .start_workers(
                 source,
                 vec![sink],
-                caster,
+                tapper,
                 manifold,
                 the_test_flow_knob,
                 &the_governor_config,
-                max_request_size_bytes,
+                max_drum_size_bytes,
                 "es-to-es-pit-to-bulk-gauntlet".to_string(),
                 0,
             )
             .await?;
 
-        // 📦 Collect all payloads and concatenate — resilient to Joiner batching decisions
+        // 📦 Collect all drums and concatenate — resilient to Refiner batching decisions
         let received = sink_inner.received.lock().await;
         assert!(
             !received.is_empty(),
@@ -464,54 +450,32 @@ mod tests {
 
         // ✅ Every line must be valid JSON — corruption is not a feature, it's a felony
         for (i, line) in the_bulk_lines.iter().enumerate() {
-            let _parsed: serde_json::Value = serde_json::from_str(line).map_err(|e| {
-                anyhow::anyhow!("💀 Line {i} is not valid JSON: '{line}' — error: {e}")
-            })?;
+            let _parsed: serde_json::Value = serde_json::from_str(line)
+                .map_err(|e| anyhow::anyhow!("💀 Line {i} is not valid JSON: '{line}' — error: {e}"))?;
         }
 
         // 🎬 Hit 1: The Matrix — action line + source doc
         let the_matrix_action: serde_json::Value = serde_json::from_str(the_bulk_lines[0])?;
-        assert_eq!(
-            the_matrix_action["index"]["_index"], "movies",
-            "💀 Hit 1 _index mismatch"
-        );
-        assert_eq!(
-            the_matrix_action["index"]["_id"], "neo_1",
-            "💀 Hit 1 _id mismatch"
-        );
+        assert_eq!(the_matrix_action["index"]["_index"], "movies", "💀 Hit 1 _index mismatch");
+        assert_eq!(the_matrix_action["index"]["_id"], "neo_1", "💀 Hit 1 _id mismatch");
         assert!(
             the_matrix_action["index"].get("_routing").is_none(),
             "💀 Hit 1 should NOT have _routing — it wasn't in the source"
         );
         let the_matrix_doc: serde_json::Value = serde_json::from_str(the_bulk_lines[1])?;
-        assert_eq!(
-            the_matrix_doc["title"], "The Matrix",
-            "💀 Hit 1 source doc title mismatch"
-        );
-        assert_eq!(
-            the_matrix_doc["year"], 1999,
-            "💀 Hit 1 source doc year mismatch"
-        );
+        assert_eq!(the_matrix_doc["title"], "The Matrix", "💀 Hit 1 source doc title mismatch");
+        assert_eq!(the_matrix_doc["year"], 1999, "💀 Hit 1 source doc year mismatch");
 
         // 🎬 Hit 2: Inception — with _routing, the spicy metadata
         let the_inception_action: serde_json::Value = serde_json::from_str(the_bulk_lines[2])?;
-        assert_eq!(
-            the_inception_action["index"]["_index"], "movies",
-            "💀 Hit 2 _index mismatch"
-        );
-        assert_eq!(
-            the_inception_action["index"]["_id"], "inception_2",
-            "💀 Hit 2 _id mismatch"
-        );
+        assert_eq!(the_inception_action["index"]["_index"], "movies", "💀 Hit 2 _index mismatch");
+        assert_eq!(the_inception_action["index"]["_id"], "inception_2", "💀 Hit 2 _id mismatch");
         assert_eq!(
             the_inception_action["index"]["_routing"], "scifi_shard",
             "💀 Hit 2 _routing mismatch — the routing survived PitToBulk but died in the manifold? Investigate."
         );
         let the_inception_doc: serde_json::Value = serde_json::from_str(the_bulk_lines[3])?;
-        assert_eq!(
-            the_inception_doc["title"], "Inception",
-            "💀 Hit 2 source doc title mismatch"
-        );
+        assert_eq!(the_inception_doc["title"], "Inception", "💀 Hit 2 source doc title mismatch");
 
         // 🎬 Hit 3: Casablanca — from a DIFFERENT index, proving cross-index migration works
         let the_casablanca_action: serde_json::Value = serde_json::from_str(the_bulk_lines[4])?;
@@ -519,21 +483,12 @@ mod tests {
             the_casablanca_action["index"]["_index"], "classics",
             "💀 Hit 3 _index should be 'classics' — cross-index preservation failed"
         );
-        assert_eq!(
-            the_casablanca_action["index"]["_id"], "casa_3",
-            "💀 Hit 3 _id mismatch"
-        );
+        assert_eq!(the_casablanca_action["index"]["_id"], "casa_3", "💀 Hit 3 _id mismatch");
         let the_casablanca_doc: serde_json::Value = serde_json::from_str(the_bulk_lines[5])?;
-        assert_eq!(
-            the_casablanca_doc["title"], "Casablanca",
-            "💀 Hit 3 source doc title mismatch"
-        );
-        assert_eq!(
-            the_casablanca_doc["year"], 1942,
-            "💀 Hit 3 source doc year mismatch"
-        );
+        assert_eq!(the_casablanca_doc["title"], "Casablanca", "💀 Hit 3 source doc title mismatch");
+        assert_eq!(the_casablanca_doc["year"], 1942, "💀 Hit 3 source doc year mismatch");
 
-        // 🎯 Order preservation: Matrix → Inception → Casablanca (page 1 before page 2)
+        // 🎯 Order preservation: Matrix → Inception → Casablanca (barrel 1 before barrel 2)
         // If this fails, either the pipeline is reordering or we're in a parallel universe
         // where Casablanca came before The Matrix. Both are concerning.
         // 🦆 Collect owned Strings because the parsed Values are temporaries that drop after each closure call

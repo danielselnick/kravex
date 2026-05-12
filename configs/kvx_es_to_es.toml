@@ -1,0 +1,17 @@
+# kvx_es_to_es.toml — Elasticsearch-to-Elasticsearch migration.
+# Also works for Elasticsearch → OpenSearch (same wire protocol).
+# "In a world where indices must move... one config dared to copy them."
+# 🦆
+
+[runtime]
+pumper_to_refiner_capacity = 4
+sink_parallelism = 4
+
+[source_config.Elasticsearch]
+url = "http://localhost:9200"
+index = "employees"
+
+[sink_config.Elasticsearch]
+url = "http://localhost:9201"
+index = "employees"
+max_drum_size_bytes = 4194304

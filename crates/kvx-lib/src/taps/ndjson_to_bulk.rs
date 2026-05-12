@@ -3,32 +3,32 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
-// 🧠 The lines of NDJSON are raw json docs — they have no bulk action metadata.
-// 📡 This caster adds the ES bulk index action line before each doc.
-use crate::Entry;
-use crate::Page;
-use crate::casts::Caster;
+//! 🧠 The lines of NDJSON are raw json docs — they have no bulk action metadata.
+//! 📡 This tapper adds the ES bulk index action line before each doc.
 use anyhow::Result;
+use crate::Draft;
+use crate::Barrel;
+use crate::taps::Tapper;
 const THE_BULK_ACTION_LINE: &str = "{\"index\":{}}";
 
-/// 📡 Casts raw NDJSON docs into ES bulk format (action line + source doc).
+/// 📡 Taps raw NDJSON docs into ES bulk format (action line + source doc).
 /// Like a bouncer at a club — "you can't come in without your action line, buddy." 🦆
 #[derive(Debug, Clone, Copy)]
 pub struct NdJsonToBulk {}
 
-impl Caster for NdJsonToBulk {
+impl Tapper for NdJsonToBulk {
     #[inline]
-    fn cast(&self, page: Page) -> Result<Vec<Entry>> {
-        // 📄 Split feed by newlines, cast each non-empty line into bulk format.
+    fn tap(&self, barrel: Barrel) -> Result<Vec<Draft>> {
+        // 📄 Split barrel by newlines, tap each non-empty line into bulk format.
         // 🧠 Each line becomes: action_line\n{json_document}
-        // -- "He who casts without an action line, gets a 400 from Elasticsearch." 💀
+        // -- "He who taps without an action line, gets a 400 from Elasticsearch." 💀
         // -- 🦆 bulk action line generation: where JSON meets its destiny
         let mut result = Vec::new();
-        for line in page.split('\n') {
+        for line in barrel.split('\n') {
             if !line.is_empty() {
-                let entry = Entry(format!("{}\n{}\n", THE_BULK_ACTION_LINE, line));
-                // Note that caster only returns a single valid entry
-                result.push(entry);
+                let draft = Draft(format!("{}\n{}\n", THE_BULK_ACTION_LINE, line));
+                // Note that tapper only returns a single valid draft
+                result.push(draft);
             }
         }
         Ok(result)
@@ -42,21 +42,21 @@ mod tests {
     // -- 🧪 The test suite that finally validates the bulk body format.
     // -- The singularity will happen before we get 100% coverage, but we try anyway. 🦆
 
-    /// 🔧 Reassembles Vec<Entry> into a single bulk body string for line-based assertions.
-    fn entries_to_bulk_body(entries: &[Entry]) -> String {
-        entries.iter().map(|e| e.0.as_str()).collect()
+    /// 🔧 Reassembles Vec<Draft> into a single bulk body string for line-based assertions.
+    fn drafts_to_bulk_body(drafts: &[Draft]) -> String {
+        drafts.iter().map(|e| e.0.as_str()).collect()
     }
 
     /// 🧪 One doc in, one action+doc pair out. The simplest heist in town.
     #[test]
     fn the_one_where_a_single_doc_becomes_a_valid_bulk_pair() -> Result<()> {
         // 🔧 Assemble — a lonely JSON doc, seeking its action line soulmate
-        let caster = NdJsonToBulk {};
+        let tapper = NdJsonToBulk {};
         let the_lone_doc = r#"{"ObjectID":42,"Name":"The answer to everything"}"#;
 
-        // 🚀 Act — cast it into the bulk dimension
-        let entries = caster.cast(Page(the_lone_doc.to_string()))?;
-        let the_bulk_body = entries_to_bulk_body(&entries);
+        // 🚀 Act — tap it into the bulk dimension
+        let drafts = tapper.tap(Barrel(the_lone_doc.to_string()))?;
+        let the_bulk_body = drafts_to_bulk_body(&drafts);
 
         // 🎯 Assert — must be exactly: action_line\ndoc\n
         let expected = format!("{}\n{}\n", THE_BULK_ACTION_LINE, the_lone_doc);
@@ -67,10 +67,7 @@ mod tests {
 
         // ✅ Verify line count: action line + doc line = 2 lines
         let line_count = the_bulk_body.lines().count();
-        assert_eq!(
-            line_count, 2,
-            "💀 Expected 2 lines (action + doc), got {line_count}"
-        );
+        assert_eq!(line_count, 2, "💀 Expected 2 lines (action + doc), got {line_count}");
 
         Ok(())
     }
@@ -78,32 +75,26 @@ mod tests {
     /// 🧪 Multiple docs — each gets its own action line escort. Like a VIP list.
     #[test]
     fn the_one_where_multiple_docs_each_get_their_own_action_line() -> Result<()> {
-        let caster = NdJsonToBulk {};
+        let tapper = NdJsonToBulk {};
         // 📄 Three docs walk into a bulk endpoint...
         let doc_a = r#"{"id":1,"name":"Alpha"}"#;
         let doc_b = r#"{"id":2,"name":"Bravo"}"#;
         let doc_c = r#"{"id":3,"name":"Charlie"}"#;
-        let the_ndjson_feed = format!("{doc_a}\n{doc_b}\n{doc_c}");
+        let the_ndjson_barrel = format!("{doc_a}\n{doc_b}\n{doc_c}");
 
-        let entries = caster.cast(Page(the_ndjson_feed))?;
-        let the_bulk_body = entries_to_bulk_body(&entries);
+        let drafts = tapper.tap(Barrel(the_ndjson_barrel))?;
+        let the_bulk_body = drafts_to_bulk_body(&drafts);
 
         // 🎯 Should produce 3 action+doc pairs = 6 lines
         let lines: Vec<&str> = the_bulk_body.lines().collect();
-        assert_eq!(
-            lines.len(),
-            6,
-            "💀 Expected 6 lines for 3 docs, got {}",
-            lines.len()
-        );
+        assert_eq!(lines.len(), 6, "💀 Expected 6 lines for 3 docs, got {}", lines.len());
 
         // ✅ Verify the interleaving pattern: action, doc, action, doc, action, doc
         let the_action_line = r#"{"index":{}}"#;
         for i in (0..lines.len()).step_by(2) {
             assert_eq!(
                 lines[i], the_action_line,
-                "💀 Line {i} should be the action line, got: {}",
-                lines[i]
+                "💀 Line {i} should be the action line, got: {}", lines[i]
             );
         }
         assert_eq!(lines[1], doc_a, "💀 Line 1 should be doc_a");
@@ -116,16 +107,15 @@ mod tests {
     /// 🧪 Empty input — the void returns void. Zen mode.
     #[test]
     fn the_one_where_emptiness_begets_emptiness() -> Result<()> {
-        let caster = NdJsonToBulk {};
+        let tapper = NdJsonToBulk {};
         let the_void = "";
 
-        let entries = caster.cast(Page(the_void.to_string()))?;
+        let drafts = tapper.tap(Barrel(the_void.to_string()))?;
 
         // 🎯 Empty in, empty out — no phantom action lines
         assert!(
-            entries.is_empty(),
-            "💀 Empty input should produce empty output, but got {} entries",
-            entries.len()
+            drafts.is_empty(),
+            "💀 Empty input should produce empty output, but got {} drafts", drafts.len()
         );
 
         Ok(())
@@ -134,45 +124,41 @@ mod tests {
     /// 🧪 Trailing newline — the sneaky empty string at the end shouldn't spawn a ghost action line.
     #[test]
     fn the_one_where_trailing_newlines_dont_spawn_ghost_actions() -> Result<()> {
-        let caster = NdJsonToBulk {};
+        let tapper = NdJsonToBulk {};
         let doc = r#"{"id":1,"confession":"I added a trailing newline on purpose"}"#;
         // 📄 Note the trailing \n — split will produce an empty last element
-        let the_feed_with_trailing_newline = format!("{doc}\n");
+        let the_barrel_with_trailing_newline = format!("{doc}\n");
 
-        let entries = caster.cast(Page(the_feed_with_trailing_newline))?;
-        let the_bulk_body = entries_to_bulk_body(&entries);
+        let drafts = tapper.tap(Barrel(the_barrel_with_trailing_newline))?;
+        let the_bulk_body = drafts_to_bulk_body(&drafts);
 
         // 🎯 Should still be exactly 1 action+doc pair, no ghost at the end
         let lines: Vec<&str> = the_bulk_body.lines().collect();
         assert_eq!(
-            lines.len(),
-            2,
-            "💀 Trailing newline created ghost lines. Expected 2, got {}",
-            lines.len()
+            lines.len(), 2,
+            "💀 Trailing newline created ghost lines. Expected 2, got {}", lines.len()
         );
 
         Ok(())
     }
 
-    /// 🧪 Blank lines scattered through the feed — the caster ignores them like I ignore my IDE warnings.
+    /// 🧪 Blank lines scattered through the barrel — the tapper ignores them like I ignore my IDE warnings.
     #[test]
     fn the_one_where_blank_lines_are_ghosted_harder_than_my_last_tinder_match() -> Result<()> {
-        let caster = NdJsonToBulk {};
+        let tapper = NdJsonToBulk {};
         let doc_a = r#"{"id":1}"#;
         let doc_b = r#"{"id":2}"#;
         // 📄 Feed with empty lines everywhere — chaos mode
-        let the_chaotic_feed = format!("\n\n{doc_a}\n\n\n{doc_b}\n\n");
+        let the_chaotic_barrel = format!("\n\n{doc_a}\n\n\n{doc_b}\n\n");
 
-        let entries = caster.cast(Page(the_chaotic_feed))?;
-        let the_bulk_body = entries_to_bulk_body(&entries);
+        let drafts = tapper.tap(Barrel(the_chaotic_barrel))?;
+        let the_bulk_body = drafts_to_bulk_body(&drafts);
 
         // 🎯 Only 2 real docs = 4 lines total (2 action + 2 doc)
         let lines: Vec<&str> = the_bulk_body.lines().collect();
         assert_eq!(
-            lines.len(),
-            4,
-            "💀 Blank lines leaked through! Expected 4 lines, got {}",
-            lines.len()
+            lines.len(), 4,
+            "💀 Blank lines leaked through! Expected 4 lines, got {}", lines.len()
         );
 
         Ok(())
@@ -181,17 +167,17 @@ mod tests {
     /// 🧪 The ultimate validation — output is a valid ES _bulk body where every doc line is parseable JSON.
     #[test]
     fn the_one_where_the_output_is_actually_valid_bulk_api_format() -> Result<()> {
-        let caster = NdJsonToBulk {};
+        let tapper = NdJsonToBulk {};
         // 📄 Real-ish documents, like the ones that haunt my dreams at 3am
-        let docs = vec![
+        let docs = [
             r#"{"ObjectID":99999,"FormattedID":"US001","Name":"The hero's journey"}"#,
             r#"{"ObjectID":88888,"FormattedID":"DE001","Name":"The bug that got away"}"#,
             r#"{"ObjectID":77777,"FormattedID":"TA001","Name":"The task that never ends"}"#,
         ];
-        let the_feed = docs.join("\n");
+        let the_barrel = docs.join("\n");
 
-        let entries = caster.cast(Page(the_feed))?;
-        let the_bulk_body = entries_to_bulk_body(&entries);
+        let drafts = tapper.tap(Barrel(the_barrel))?;
+        let the_bulk_body = drafts_to_bulk_body(&drafts);
 
         // 🎯 Parse every line as JSON — both action lines and doc lines must be valid
         let lines: Vec<&str> = the_bulk_body.lines().collect();

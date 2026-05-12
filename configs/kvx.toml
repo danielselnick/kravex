@@ -4,19 +4,17 @@
 # 🦆
 
 [runtime]
-pumper_to_joiner_capacity = 8
+pumper_to_refiner_capacity = 8
 sink_parallelism = 8
-
-[source_config]
-max_batch_size_bytes = 131072
-max_batch_size_docs = 10000
 
 [source_config.File]
 file_name = "input.json"
 
-[sink_config]
-max_request_size_bytes = 131072
+[source_config.File.common_config]
+max_batch_size_bytes = 131072
+max_batch_size_docs = 10000
 
 [sink_config.Elasticsearch]
+max_drum_size_bytes = 131072
 url = "http://localhost:9200"
 index = "test-123"

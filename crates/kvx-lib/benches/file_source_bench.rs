@@ -30,18 +30,18 @@ const NUM_DOCS: usize = 100_000;
 /// 📁 Generates a temp NDJSON file with NUM_DOCS lines of fake JSON.
 /// Returns (temp_file, file_size_bytes, doc_count).
 ///
-/// Each doc looks like: `{"id":42,"name":"benchmark_doc_42","payload":"aaaa..."}` (~100 bytes)
+/// Each doc looks like: `{"id":42,"name":"benchmark_doc_42","drum":"aaaa..."}` (~100 bytes)
 ///
 /// "I generate test data, therefore I am." — René Descartes, probably 🦆
 fn generate_test_file() -> (NamedTempFile, u64, usize) {
     // -- 📝 pre-compute all docs into a single buffer to avoid slow per-line writes
     let mut buf = Vec::with_capacity(NUM_DOCS * 110);
     for i in 0..NUM_DOCS {
-        // -- 🧱 pad each doc to ~100 bytes with a payload field
+        // -- 🧱 pad each doc to ~100 bytes with a drum field
         // -- because real NDJSON docs aren't just {"id":1}
         let _ = writeln!(
             buf,
-            r#"{{"id":{i},"name":"benchmark_doc_{i}","payload":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#
+            r#"{{"id":{i},"name":"benchmark_doc_{i}","drum":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#
         );
     }
 
@@ -79,17 +79,17 @@ fn bench_buffered_chunk_reading(c: &mut Criterion) {
                     let config = FileSourceConfig {
                         file_name: path.clone(),
                         common_config: CommonSourceConfig {
-                            max_batch_size_docs: 10_000,
-                            max_batch_size_bytes: 10 * 1024 * 1024,
+                            max_barrel_size_docs: 10_000,
+                            max_barrel_size_bytes: 10 * 1024 * 1024,
                         },
                     };
                     let mut source = FileSource::new(config).await.unwrap();
-                    // -- 🔄 drain every page until EOF. This is the full pipeline.
-                    let mut pages = 0u64;
-                    while let Some(_feed) = source.pump().await.unwrap() {
-                        pages += 1;
+                    // -- 🔄 drain every barrel until EOF. This is the full pipeline.
+                    let mut barrels = 0u64;
+                    while let Some(_barrel) = source.pump().await.unwrap() {
+                        barrels += 1;
                     }
-                    criterion::black_box(pages)
+                    criterion::black_box(barrels)
                 });
             },
         );
@@ -111,15 +111,15 @@ fn bench_buffered_chunk_reading(c: &mut Criterion) {
                     let config = FileSourceConfig {
                         file_name: path.clone(),
                         common_config: CommonSourceConfig {
-                            max_batch_size_docs: 10_000,
-                            max_batch_size_bytes: 10 * 1024 * 1024,
+                            max_barrel_size_docs: 10_000,
+                            max_barrel_size_bytes: 10 * 1024 * 1024,
                         },
                     };
                     let mut source = FileSource::new(config).await.unwrap();
                     let mut total_docs = 0usize;
-                    while let Some(feed) = source.pump().await.unwrap() {
-                        // -- 🎯 count docs by counting newlines + 1 (feed has no trailing \n)
-                        total_docs += feed.as_str().matches('\n').count() + 1;
+                    while let Some(barrel) = source.pump().await.unwrap() {
+                        // -- 🎯 count docs by counting newlines + 1 (barrel has no trailing \n)
+                        total_docs += barrel.as_str().matches('\n').count() + 1;
                     }
                     criterion::black_box(total_docs)
                 });

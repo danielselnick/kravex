@@ -6,14 +6,14 @@
 #
 # 📐 TOML NESTING RULES (tribal knowledge, commit to memory):
 #   Source common_config → NOT flattened → needs [source_config.*.common_config] sub-table
-#   Sink   common_config → IS  flattened → max_request_size_bytes at same level as url/file_name
+#   Sink   common_config → IS  flattened → max_drum_size_bytes at same level as url/file_name
 #
 # 📐 DEFAULT BEHAVIOR (the dual-default trap):
 #   Source common_config:
 #     Section ABSENT  → Default::default() kicks in: 1,000 docs / 1 MiB
 #     Section PRESENT → serde field defaults kick in: 10,000 docs / 10 MiB
 #     (yes, these differ. yes, it's intentional. yes, we're committed to both.)
-#   Sink max_request_size_bytes:
+#   Sink max_drum_size_bytes:
 #     Field ABSENT → serde field default: 10 MiB
 #     (Default::default() = 64 MiB is only used programmatically, e.g. InMemory)
 
@@ -22,21 +22,15 @@
 # ============================================================
 # Defaults are CPU-aware. Example values below assume 8-core machine.
 # Formulas:
-#   joiner_parallelism         = num_cpus - 1                  (7 on 8-core)
-#   pumper_to_joiner_capacity  = joiner_parallelism × 4        (28)
-#   joiner_to_drainer_capacity = joiner_parallelism × 4        (28)
-#   sink_parallelism           = joiner_parallelism × 12       (84)
-#
-# Aliases accepted:
-#   channel_size / queue_capacity  → pumper_to_joiner_capacity
-#   payload_channel_capacity       → joiner_to_drainer_capacity
-#   num_sink_workers               → sink_parallelism
-#   num_joiner_workers             → joiner_parallelism
+#   refiner_count               = num_cpus - 1                  (7 on 8-core)
+#   pumper_to_refiner_capacity  = refiner_count × 4        (28)
+#   refiner_to_drainer_capacity = refiner_count × 4        (28)
+#   sink_parallelism           = refiner_count × 12       (84)
 
  [runtime]
- joiner_parallelism = 4
- pumper_to_joiner_capacity = 2
- joiner_to_drainer_capacity = 2
+ refiner_count = 4
+ pumper_to_refiner_capacity = 2
+ refiner_to_drainer_capacity = 2
  sink_parallelism = 16
 
 # ============================================================
@@ -57,22 +51,21 @@ max_batch_size_docs = 1000000      # 1M docs — benchmark override
 # ============================================================
 # 📡 Sink — Elasticsearch (active)
 # ============================================================
-# Sink common_config is FLATTENED — max_request_size_bytes lives at this level.
+# Sink common_config is FLATTENED — max_drum_size_bytes lives at this level.
 [sink_config.Elasticsearch]
 url = "http://localhost:9200"
 index = "test-123"                      # Optional — each doc can carry its own _index
 # username = "elastic"                  # 🔒 Basic auth username
 # password = "changeme"                # 🔒 Basic auth password
 # api_key = "base64-encoded-api-key"   # 🔒 API key auth (preferred over basic)
-max_request_size_bytes = 1000000        # 4 MiB — benchmark override (serde default: 10,485,760 / 10 MiB)
+max_drum_size_bytes = 1000000        # 4 MiB — benchmark override (serde default: 10,485,760 / 10 MiB)
 
 # ============================================================
 # 🎚️  Governor — adaptive throttling (optional)
 # ============================================================
-# Absent → pipeline runs at fixed max_request_size_bytes. No regulation. No drama.
-# Present → spawns governor, dynamically adjusts payload size
-# based on drain feedback (latency, throughput).
-# Legacy `[flow_master.*]` sections are still accepted for compatibility.
+# Absent → pipeline runs at fixed max_drum_size_bytes. No regulation. No drama.
+# Present → spawns governor, dynamically adjusts drum size
+# based on drain barrelback (latency, throughput).
 #[governor.Latency]
 # set_point_latency_ms = 200            # 🎯 Target drain latency in ms
 # min_request_size_bytes = 131072       # 📏 PID floor: 128 KiB
@@ -107,10 +100,10 @@ output_bytes = 10000000
 # ============================================================
 # 📂 Sink — File (commented-out reference)
 # ============================================================
-# Sink common_config is FLATTENED — max_request_size_bytes at same level as file_name.
+# Sink common_config is FLATTENED — max_drum_size_bytes at same level as file_name.
 # [sink_config.File]
 # file_name = "output.json"
-# max_request_size_bytes = 10485760     # serde default: 10 MiB
+# max_drum_size_bytes = 10485760     # serde default: 10 MiB
 
 # ============================================================
 # 🧪 InMemory — unit variants, test-only (commented-out reference)

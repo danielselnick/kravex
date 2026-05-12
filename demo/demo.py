@@ -48,6 +48,9 @@ DEMO_CONTAINER_NAMES = {"kravex-demo-es", "kravex-demo-os"}
 POLL_INTERVAL_SECS = 5
 MAX_WAIT_SECS = 1800  # 30 minutes — noaa is 33.6M docs, give it time
 
+# Content sampling
+CONTENT_SAMPLE_SIZE = 20
+
 # Abbreviated mode
 ABBREVIATED_FRACTION = 0.25
 
@@ -652,10 +655,22 @@ def poll_until_doc_count(
             missing = expected_count - current_count
             elapsed = time.time() - start
             print(
-                f"\n  ⚠️  {step_name} stalled: {current_count:,} / {expected_count:,} docs "
-                f"({missing:,} missing) — no change for {stall_polls * POLL_INTERVAL_SECS}s. "
-                f"Pipeline may have finished with rejected documents."
+                "\n" + "─" * 60
             )
+            print(
+                f"  ⚠️  {step_name} STALLED"
+            )
+            print(
+                f"     {current_count:,} / {expected_count:,} docs — "
+                f"({missing:,} missing)"
+            )
+            print(
+                f"     No change for {stall_polls * POLL_INTERVAL_SECS}s. "
+            )
+            print(
+                "     Pipeline may have finished or failed. Proceeding with partial count."
+            )
+            print("─" * 60)
             return current_count
 
         time.sleep(POLL_INTERVAL_SECS)
@@ -674,35 +689,151 @@ def poll_until_doc_count(
 # ============================================================================
 
 
+def validate_content(
+    es_url: str,
+    os_url: str,
+    index: str,
+    sample_size: int,
+) -> bool:
+    """
+    Sample random docs from ES, fetch by _id from OS, compare _source fields.
+    Returns True if all sampled docs match, False otherwise.
+    """
+    print(f"\n  🔬 Sampling {sample_size} docs from {es_url}/{index} for content validation...")
+
+    try:
+        resp = requests.get(
+            f"{es_url}/{index}/_search",
+            params={"size": sample_size, "_source": "true"},
+            timeout=30,
+        )
+        if not resp.ok:
+            print(f"  ⚠️  Could not sample from ES: {resp.status_code}")
+            return True  # skip, don't fail
+        es_hits = resp.json().get("hits", {}).get("hits", [])
+    except requests.RequestException as e:
+        print(f"  ⚠️  ES content sampling failed: {e}")
+        return True
+
+    if not es_hits:
+        print("  ⚠️  No docs returned from ES for sampling — skipping content validation")
+        return True
+
+    mismatches = 0
+    checked = 0
+
+    for hit in es_hits:
+        doc_id = hit.get("_id")
+        es_source = hit.get("_source", {})
+        if not doc_id:
+            continue
+
+        # Fetch same doc from OS by _id
+        try:
+            os_resp = requests.get(
+                f"{os_url}/{index}/_doc/{doc_id}",
+                timeout=15,
+            )
+            if not os_resp.ok:
+                print(f"  ⚠️  Doc {doc_id} not found in OS (HTTP {os_resp.status_code})")
+                mismatches += 1
+                continue
+
+            os_doc = os_resp.json()
+            os_source = os_doc.get("_source", {})
+            checked += 1
+
+            # Compare _source fields — if both are empty that's fine, but
+            # if ES has fields that OS doesn't, that's a problem.
+            if es_source != os_source:
+                # Find the specific fields that differ
+                es_keys = set(es_source.keys())
+                os_keys = set(os_source.keys())
+                missing_in_os = es_keys - os_keys
+                extra_in_os = os_keys - es_keys
+                common = es_keys & os_keys
+                differing_values = {
+                    k: (es_source[k], os_source[k])
+                    for k in common
+                    if es_source[k] != os_source[k]
+                }
+
+                print(f"  ❌ Doc {doc_id}: _source mismatch")
+                if missing_in_os:
+                    print(f"     Fields missing in OS: {missing_in_os}")
+                if extra_in_os:
+                    print(f"     Extra fields in OS: {extra_in_os}")
+                if differing_values:
+                    for k, (ev, ov) in differing_values.items():
+                        print(f"     Field '{k}': ES={ev}  OS={ov}")
+                mismatches += 1
+
+        except requests.RequestException as e:
+            print(f"  ⚠️  Could not fetch doc {doc_id} from OS: {e}")
+            mismatches += 1
+
+    if mismatches == 0:
+        print(f"  ✅ Content validation passed: {checked}/{checked} docs match exactly \n")
+        return True
+    else:
+        print(f"  ❌ Content validation: {mismatches}/{checked + mismatches} docs mismatched or missing\n")
+        return False
+
+
 def print_summary(
     results: list[StepResult],
     dataset_name: str,
     es_count: int,
     os_count: int,
+    expected_docs: int,
 ) -> None:
-    """Pretty-print the timing summary table."""
+    """Pretty-print the timing summary table with validation against expected."""
     print("\n")
-    print("┌──────────────────────────────┬────────────┬──────────────┬─────────┐")
-    print("│ Step                         │   Duration │    Doc Count │ Status  │")
-    print("├──────────────────────────────┼────────────┼──────────────┼─────────┤")
+    print("┌──────────────────────────────┬────────────┬──────────────┬──────────────┐")
+    print("│ Step                         │   Duration │    Doc Count │  vs Expected │")
+    print("├──────────────────────────────┼────────────┼──────────────┼──────────────┤")
     for r in results:
         status = "  ✅" if r.success else "  ❌"
         duration = format_duration(r.duration_secs)
+        if r.doc_count >= expected_docs:
+            vs_expected = "✅ 100%"
+        else:
+            pct = (r.doc_count / expected_docs * 100) if expected_docs > 0 else 0
+            vs_expected = f"❌ {pct:.1f}%"
         print(
-            f"│ {r.name:<28} │ {duration:>10} │ {r.doc_count:>12,} │ {status:<7} │"
+            f"│ {r.name:<28} │ {duration:>10} │ {r.doc_count:>12,} │ {vs_expected:>12} │"
         )
-    print("├──────────────────────────────┼────────────┼──────────────┼─────────┤")
+    print("├──────────────────────────────┼────────────┼──────────────┼──────────────┤")
     total_secs = sum(r.duration_secs for r in results)
     match_str = "  ✅" if es_count == os_count else "  ❌"
     print(
-        f"│ {'Total':28} │ {format_duration(total_secs):>10} │ {'':>12} │ {match_str:<7} │"
+        f"│ {'Total':28} │ {format_duration(total_secs):>10} │ {'':>12} │ {match_str:<12} │"
     )
-    print("└──────────────────────────────┴────────────┴──────────────┴─────────┘")
-    print(f"\n  🎯 Validation: ES={es_count:,}  OS={os_count:,}  ", end="")
-    if es_count == os_count:
-        print("Match ✅")
+    print("└──────────────────────────────┴────────────┴──────────────┴──────────────┘")
+
+    print(f"\n  🎯 Expected: {expected_docs:,} docs")
+    print(f"     ES count: {es_count:,}  ", end="")
+    if es_count >= expected_docs:
+        print("✅", end="")
     else:
-        print(f"Delta={abs(es_count - os_count):,} ❌")
+        print("❌", end="")
+    print(f"  OS count: {os_count:,}  ", end="")
+    if os_count >= expected_docs:
+        print("✅", end="")
+    else:
+        print("❌", end="")
+    print()
+
+    both_full = es_count >= expected_docs and os_count >= expected_docs
+    count_match = es_count == os_count
+
+    if both_full and count_match:
+        print("  🎉 Full validation PASSED ✅ — all docs present and accounted for")
+    elif count_match and not both_full:
+        print(f"  ⚠️  Counts match ({es_count:,}) but both are below expected ({expected_docs:,})")
+        print(f"  ❌ Partial migration detected — some docs did not make it through")
+    else:
+        print(f"  ❌ Count mismatch: ES={es_count:,} vs OS={os_count:,} (delta={abs(es_count - os_count):,})")
 
 
 def format_duration(secs: float) -> str:
@@ -826,6 +957,23 @@ def main() -> None:
     step1.finish(count1)
     results.append(step1)
 
+    # ── Validate Leg 1 result ─────────────────────────────────────
+    if count1 < expected_docs:
+        print()
+        print("─" * 60)
+        print(f"  ⚠️  Leg 1 incomplete: {count1:,} / {expected_docs:,} docs")
+        missing = expected_docs - count1
+        if count1 == 0:
+            print("  💀 No documents were indexed. This usually means kvx-cli failed.")
+            print("     Check the terminal window where file_to_esdb.sh ran.")
+            bail("Cannot proceed — Leg 1 produced no data.")
+        else:
+            print(f"  ⚠️  {missing:,} docs missing — pipeline stalled or some docs rejected.")
+            answer = input("  Proceed to Leg 2 anyway? [y/N]: ").strip().lower()
+            if answer not in ("y", "yes"):
+                bail("Demo aborted — Leg 1 did not complete.")
+        print("─" * 60)
+
     # ── Leg 2: Elasticsearch → OpenSearch ───────────────────────
     print("\n" + "─" * 60)
     print(f"  📡 Leg 2: Elasticsearch → OpenSearch ({dataset_name})")
@@ -852,10 +1000,28 @@ def main() -> None:
     step2.finish(count2)
     results.append(step2)
 
-    # ── Validation & Summary ────────────────────────────────────
+    # ── Validate Leg 2 result ─────────────────────────────────────
+    if count2 < expected_docs:
+        print()
+        print("─" * 60)
+        print(f"  ⚠️  Leg 2 incomplete: {count2:,} / {expected_docs:,} docs")
+        missing = expected_docs - count2
+        print(f"     {missing:,} docs missing from OpenSearch. Pipeline may have stalled.")
+        if count2 == 0:
+            print("  💀 No documents were migrated to OpenSearch. Check the esdb_to_osdb terminal.")
+        print("─" * 60)
+
+    # ── Final Counts ────────────────────────────────────────────
     es_count = get_doc_count(ES_URL, index_name)
     os_count = get_doc_count(OS_URL, index_name)
-    print_summary(results, dataset_name, es_count, os_count)
+
+    # ── Content Validation ──────────────────────────────────────
+    content_ok = True
+    if es_count > 0 and os_count > 0:
+        content_ok = validate_content(ES_URL, OS_URL, index_name, CONTENT_SAMPLE_SIZE)
+
+    # ── Summary ─────────────────────────────────────────────────
+    print_summary(results, dataset_name, es_count, os_count, expected_docs)
 
     # ── Cleanup ─────────────────────────────────────────────────
     print()
