@@ -40,11 +40,9 @@ use serde::Deserialize;
 ///
 /// 🧠 Knowledge graph:
 /// - Embedded in `ElasticsearchSourceConfig`, `FileSourceConfig` (and future source configs)
-/// - `max_batch_size_docs`: doc-count ceiling per barrel (ES scroll size, etc.)
-/// - `max_batch_size_bytes`: byte-size ceiling per barrel (avoid sending 1GB barrels)
-/// - The DEFAULT impl gives conservative values (1000 docs / 1MB)
-///   while the serde defaults give more generous values (10k docs / 10MB)
-///   because apparently we have two opinions and we're committed to both 🦆
+/// - `max_barrel_size_docs`: doc-count ceiling per barrel (ES scroll size, etc.)
+/// - `max_barrel_size_bytes`: byte-size ceiling per barrel (avoid sending 1GB barrels)
+/// - Both serde defaults and the `Default` trait use 1000 docs / 1MB — conservative and safe.
 ///
 /// No cap: these defaults were chosen empirically by staring at them until they felt right.
 #[derive(Debug, Deserialize, Clone)]
@@ -57,26 +55,21 @@ pub struct CommonSourceConfig {
     pub max_barrel_size_bytes: usize,
 }
 
-// 📦 10,000 docs per batch — a nice round number that will age like milk
-// the moment someone indexes a 50MB PDF and wonders why things are slow.
+// 📦 1,000 docs per batch — conservative and safe.
 fn default_max_barrel_size_docs() -> usize {
-    10000
+    1000
 }
 
-// 📦 10MB — chosen because 10 is a great number and MB is a great unit.
-// This is load-tested in the same way I've "tested" my microwave: empirically, at 3am, with regret.
-// 10 * 1024 * 1024 = 10485760. Yes I know. Yes the comment on the line is doing the math. You're welcome.
+// 📦 1 MB — conservative and safe.
 fn default_max_barrel_size_bytes() -> usize {
-    10485760
-} // -- 10MB — if your documents are bigger, we need to talk
+    1024 * 1024
+}
 
 impl Default for CommonSourceConfig {
     fn default() -> Self {
         Self {
-            // 🎯 1000 docs / 1MB per batch — sensible defaults chosen by someone who definitely
-            // did NOT just pick round numbers and call it "empirically validated"
-            max_barrel_size_docs: 1000,
-            max_barrel_size_bytes: 1024 * 1024,
+            max_barrel_size_docs: default_max_barrel_size_docs(),
+            max_barrel_size_bytes: default_max_barrel_size_bytes(),
         }
     }
 }
@@ -94,13 +87,9 @@ impl Default for CommonSourceConfig {
 /// 🧠 Knowledge graph:
 /// - Embedded in `ElasticsearchSinkConfig`, `FileSinkConfig` (and future sink configs)
 /// - `max_drum_size_bytes`: flush threshold for the Refiner plenum
-/// - Default is 64MB — generous, because we trust the sink to handle it
-///   (and because the Elasticsearch docs said "up to 100MB" and we wanted wiggle room) 🔧
-/// - Serde default fn gives 10MB (the "I'm being careful" default)
-/// - The `Default` impl gives 64MB (the "I'm feeling confident today" default)
-/// - These being different is a known quirk. It's not a bug. It's a vibe. 🦆
+/// - Default is 64MB — generous but safe for ES `_bulk` APIs.
 ///
-/// Knock knock. Who's there? Race condition. Race condition wh— Who's there?
+/// Knock knock. Who's there? 64 meg. 64 meg who? 64 megabytes per batch.
 #[derive(Debug, Deserialize, Clone)]
 pub struct CommonSinkConfig {
     /// 🚰 Max drum bytes per sink request — the flush trigger
@@ -108,18 +97,15 @@ pub struct CommonSinkConfig {
     pub max_drum_size_bytes: usize,
 }
 
-// 🚰 10MB sink request size — the same limit as your email attachment policy,
-// your Slack upload quota, and your therapist's patience. Coincidence? Absolutely yes.
+// 🚰 64MB sink request size — generous but safe for ES `_bulk` API limits.
 fn default_max_drum_size_bytes() -> usize {
-    10485760
-} // -- 10MB — Elasticsearch's feelings
+    64 * 1024 * 1024
+}
 
 impl Default for CommonSinkConfig {
     fn default() -> Self {
         CommonSinkConfig {
-            // 🚰 64MB default request size because we dream big
-            // (and because the Elasticsearch docs said "up to 100MB" and we wanted buffer)
-            max_drum_size_bytes: 64 * 1024 * 1024,
+            max_drum_size_bytes: default_max_drum_size_bytes(),
         }
     }
 }
