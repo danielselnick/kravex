@@ -16,8 +16,8 @@ url = "http://localhost:19200"
 index = "geonames"
 
 [source_config.Elasticsearch.common_config]
-max_batch_size_bytes = 8000000
-max_batch_size_docs = 10000
+max_barrel_size_bytes = 8000000
+max_barrel_size_docs = 10000
 
 [sink_config.Elasticsearch]
 url = "http://localhost:19201"
