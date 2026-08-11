@@ -81,12 +81,12 @@ impl Default for CommonSourceConfig {
 /// 🚰 Shared configuration embedded by every sink backend config.
 ///
 /// Controls the maximum request drum size when sending data to the sink.
-/// The `Refiner` uses this to decide when to flush the plenum —
+/// The `Refiner` uses this to decide when to flush the accumulator —
 /// accumulate Drafts until approaching this limit, then join → send. 💡
 ///
 /// 🧠 Knowledge graph:
 /// - Embedded in `ElasticsearchSinkConfig`, `FileSinkConfig` (and future sink configs)
-/// - `max_drum_size_bytes`: flush threshold for the Refiner plenum
+/// - `max_drum_size_bytes`: flush threshold for the Refiner accumulator
 /// - Default is 64MB — generous but safe for ES `_bulk` APIs.
 ///
 /// Knock knock. Who's there? 64 meg. 64 meg who? 64 megabytes per batch.
@@ -140,7 +140,7 @@ pub enum SourceConfig {
 /// The InMemory(()) variant holds `()` which is the Rust way of saying "we have nothing to say here."
 ///
 /// 🧠 Knowledge graph: resolved at startup into a `SinkBackend` by `lib.rs`. The Drainer
-/// reads `max_drum_size_bytes()` to know when to flush its plenum. 🚰
+/// reads `max_drum_size_bytes()` to know when to flush its accumulator. 🚰
 #[derive(Debug, Deserialize, Clone)]
 pub enum SinkConfig {
     /// 📡 Write to an Elasticsearch index via bulk API
@@ -158,8 +158,8 @@ impl SinkConfig {
     /// InMemory has no config struct, so it gets the `CommonSinkConfig::default()` value.
     /// "He who queries the config, avoids the match in the hot path." — Ancient proverb 📜
     ///
-    /// 🧠 Knowledge graph: Refiner uses this to know when to flush its drafts plenum.
-    /// The plenum accumulates Drafts until their total byte size approaches this limit,
+    /// 🧠 Knowledge graph: Refiner uses this to know when to flush its drafts accumulator.
+    /// The accumulator accumulates Drafts until their total byte size approaches this limit,
     /// then the Manifold casts+joins them into a single drum for the sink.
     pub fn max_drum_size_bytes(&self) -> usize {
         match self {

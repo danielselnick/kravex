@@ -18,7 +18,7 @@
 //! 🧠 Knowledge graph:
 //! - Receives raw barrel Strings from ch1 via `recv_blocking()`
 //! - Accumulates drafts by byte size until approaching max_drum_size_bytes
-//! - Flushes via `manifold.join(&plenum, &tapper)` — tap each barrel + assemble wire format
+//! - Flushes via `manifold.join(&accumulator, &tapper)` — tap each barrel + assemble wire format
 //! - Sends assembled drum String to ch2 via `send_blocking()`
 //! - Does NOT implement the `Worker` trait (which returns tokio::task::JoinHandle)
 //!   because refiners live on std::thread, not tokio's async runtime
@@ -40,15 +40,15 @@ use tracing::debug;
 use std::collections::VecDeque;
 
 
-/// 🧮 Epsilon plenum — headroom so tapping overhead doesn't push us over the limit.
+/// 🧮 Epsilon accumulator — headroom so tapping overhead doesn't push us over the limit.
 /// 64 KiB of breathing room because drums expand during serialization
 /// (ES bulk adds action lines, etc.) and we'd rather flush one barrel early
 /// than trigger a 💀 413 Request Entity Too Large from the sink.
 ///
 /// 🧠 Tribal knowledge: this constant migrated here from drainer.rs when the pipeline
-/// was split into refiner (CPU) and drainer (I/O). The plenum logic now lives where the
+/// was split into refiner (CPU) and drainer (I/O). The accumulator logic now lives where the
 /// CPU work happens, which is here. The drainer is now a thin I/O relay. 🚛
-const PLENUM_EPSILON_BYTES: usize = 64 * 1024;
+const ACCUMULATOR_EPSILON_BYTES: usize = 64 * 1024;
 
 /// 🧵 The Refiner: CPU-bound worker that taps raw barrels and joins drafts into drums.
 ///
@@ -58,9 +58,9 @@ const PLENUM_EPSILON_BYTES: usize = 64 * 1024;
 /// 📜 Lifecycle:
 /// 1. **Recv**: blocking read from ch1 (raw barrel String from pumper)
 /// 2. **Accumulate**: collect drafts until byte size threshold approached
-/// 3. **Flush**: `manifold.join(&plenum, &tapper)` → assembled drum String
+/// 3. **Flush**: `manifold.join(&accumulator, &tapper)` → assembled drum String
 /// 4. **Send**: blocking write to ch2 (drum String to drainer)
-/// 5. **Repeat** until ch1 closes, then flush remaining plenum, drop tx (signals ch2) 🦆
+/// 5. **Repeat** until ch1 closes, then flush remaining accumulator, drop tx (signals ch2) 🦆
 #[derive(Debug)]
 pub struct Refiner {
     /// 📥 ch1 receiver — raw barrels from the pumper, delivered fresh like morning newspapers
@@ -80,10 +80,10 @@ pub struct Refiner {
     /// When no regulator is active, it stays at the initial max_drum_size_bytes forever.
     /// Like a volume knob that someone else might be turning while you're listening. 🎚️
     the_throttle_knob: FlowKnob,
-    /// 📥 Plenum — accumulates Drafts between Tapper and Manifold,
+    /// 📥 accumulator — accumulates Drafts between Tapper and Manifold,
     /// normalises batch size variance before serialization.
-    plenum: VecDeque<Draft>,
-    /// 📏 Running byte count of the current plenum contents.
+    accumulator: VecDeque<Draft>,
+    /// 📏 Running byte count of the current accumulator contents.
     the_running_byte_tab: usize,
 }
 
@@ -105,7 +105,7 @@ impl Refiner {
             tapper,
             manifold,
             the_throttle_knob,
-            plenum: VecDeque::new(),
+            accumulator: VecDeque::new(),
             the_running_byte_tab: 0,
         }
     }
@@ -121,29 +121,29 @@ impl Refiner {
     /// accumulated drafts and drops tx (which helps close ch2 when all refiners finish).
     pub fn start(mut self) -> std::thread::JoinHandle<Result<()>> {
         std::thread::spawn(move || {
-            debug!("🧵 Refiner thread started — recv_blocking → plenum → join → send_blocking");
+            debug!("🧵 Refiner thread started — recv_blocking → accumulator → join → send_blocking");
 
             loop {
                 match self.rx.recv_blocking() {
                     Ok(barrel) => {
-                        // 📜 Barrel arrives → taps into drafts → plenum → flush when full
+                        // 📜 Barrel arrives → taps into drafts → accumulator → flush when full
                         let drafts = self.tapper.tap(barrel).context("💀 Tapper failed — the data fought back")?;
                         for draft in drafts {
                             self.the_running_byte_tab += draft.len();
-                            self.plenum.push_back(draft);
+                            self.accumulator.push_back(draft);
 
-                            let the_ceiling = self.the_throttle_knob.load(Ordering::Relaxed).saturating_sub(PLENUM_EPSILON_BYTES);
+                            let the_ceiling = self.the_throttle_knob.load(Ordering::Relaxed).saturating_sub(ACCUMULATOR_EPSILON_BYTES);
                             if self.the_running_byte_tab > the_ceiling {
-                                let the_drum = self.manifold.join(&mut self.plenum)?;
+                                let the_drum = self.manifold.join(&mut self.accumulator)?;
                                 self.tx.send_blocking(the_drum).context("💀 ch2 closed — the drainers left without saying goodbye")?;
                                 self.the_running_byte_tab = 0;
                             }
                         }
                     }
                     Err(_) => {
-                        // 🏁 Channel closed — flush whatever's left in the plenum
-                        if !self.plenum.is_empty() {
-                            let the_drum = self.manifold.join(&mut self.plenum)?;
+                        // 🏁 Channel closed — flush whatever's left in the accumulator
+                        if !self.accumulator.is_empty() {
+                            let the_drum = self.manifold.join(&mut self.accumulator)?;
                             self.tx.send_blocking(the_drum).context("💀 ch2 closed during final flush — so close, yet so far")?;
                         }
                         // tx drops here naturally — when all refiners drop their tx,
@@ -241,16 +241,16 @@ mod tests {
         the_refiner_thread.join().unwrap().unwrap();
     }
 
-    /// 🧪 The one where the plenum flushes early because it hit the byte threshold.
+    /// 🧪 The one where the accumulator flushes early because it hit the byte threshold.
     /// Like a toilet with a sensitive flush sensor. Crude but accurate. 🚽🦆
     #[test]
-    fn the_one_where_plenum_flushes_before_channel_closes() {
+    fn the_one_where_accumulator_flushes_before_channel_closes() {
         let (tx1, rx1) = async_channel::bounded::<Barrel>(10);
         let (tx2, rx2) = async_channel::bounded::<Drum>(10);
 
         // 📏 Set max_drum_size_bytes so small that even one barrel triggers a flush
-        // PLENUM_EPSILON_BYTES is 64 KiB, so anything above that + barrel size triggers
-        let comically_small_max = PLENUM_EPSILON_BYTES + 5;
+        // accumulatorEPSILON_BYTES is 64 KiB, so anything above that + barrel size triggers
+        let comically_small_max = accumulator_EPSILON_BYTES + 5;
 
         let refiner = Refiner::new(
             rx1,
@@ -332,7 +332,7 @@ mod tests {
         tx1.send_blocking(Barrel(r#"{"doc":"before"}"#.to_string())).unwrap();
 
         // 🔧 Now crank the knob down so small that the NEXT barrel triggers a flush
-        the_knob_clone.store(PLENUM_EPSILON_BYTES + 5, Ordering::Relaxed);
+        the_knob_clone.store(accumulator_EPSILON_BYTES + 5, Ordering::Relaxed);
 
         // 📤 Send second barrel — should trigger flush due to lowered knob
         tx1.send_blocking(Barrel(r#"{"doc":"after"}"#.to_string())).unwrap();

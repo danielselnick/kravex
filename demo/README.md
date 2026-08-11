@@ -59,6 +59,25 @@ The orchestrator will:
 
 The orchestrator polls the destination index and detects completion automatically.
 
+## CI / Smoke Testing
+
+Run a fully non-interactive smoke test suitable for CI pipelines:
+
+```bash
+uv run --project demo demo/demo.py --smoke
+```
+
+In smoke mode the orchestrator:
+- Defaults to **25% geonames** (fastest dataset)
+- Auto-builds `kvx-cli` if the binary is missing
+- Runs `kvx-cli` directly as a headless subprocess with **stdout captured but not forwarded**
+- Blocks until each leg completes instead of prompting for Enter
+- Automatically resolves port conflicts by stopping conflicting containers
+- Tears down containers automatically after completion
+- Exits with code **0** on success, **1** on failure
+
+This mode requires no user interaction and is designed for automated testing in CI/CD runtimes.
+
 ## Datasets
 
 | Dataset | Docs | Size (decompressed) | Source |

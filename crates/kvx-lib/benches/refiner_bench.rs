@@ -10,7 +10,7 @@
 //! Nobody *asked*. Until now.
 //!
 //! This benchmark answers the question: "How many MB/s and docs/s can a single
-//! Refiner thread push through ch1 → plenum → manifold.join → ch2?"
+//! Refiner thread push through ch1 → accumulator → manifold.join → ch2?"
 //!
 //! Auto-discovers all `ManifoldBackend` variants via `all_variants()` — add a new
 //! manifold and it gets benched for free. Like a gym membership you actually use.

@@ -3,19 +3,25 @@
 Kravex End-to-End Demo — Orchestrator
 ======================================
 Manages infrastructure and polls for kravex completion.
-The actual kravex execution lives in standalone shell scripts:
+
+Interactive mode launches kvx-cli via standalone shell scripts:
   - file_to_esdb.sh  (Leg 1: dataset.json → Elasticsearch)
   - esdb_to_osdb.sh  (Leg 2: Elasticsearch → OpenSearch)
+
+Smoke mode (--smoke) runs kvx-cli headlessly as a captured subprocess
+with no user interaction — ideal for CI/CD pipelines.
 
 Supports multiple datasets: geonames (11.4M), noaa (33.6M), pmc (574K).
 
 Usage: ./demo/demo.sh
    or: uv run --project demo demo/demo.py
+   or: uv run --project demo demo/demo.py --smoke
 """
 
 from __future__ import annotations
 
 import json
+import argparse
 import signal
 import socket
 import subprocess
@@ -196,8 +202,11 @@ class StepResult:
 # ============================================================================
 
 
-def select_demo_mode() -> bool:
+def select_demo_mode(smoke: bool = False) -> bool:
     """Ask user whether to run abbreviated (25%) or full dataset. Returns True for abbreviated."""
+    if smoke:
+        print("\n📦 Demo size: smoke mode — using 25% abbreviated dataset")
+        return True
     print("\n📦 Demo size:")
     print("  [1] Quick demo — 25% of dataset (default)")
     print("  [2] Full dataset — 100%")
@@ -238,8 +247,11 @@ def create_subset_file(dataset_name: str) -> Path:
     return subset_path
 
 
-def select_dataset(abbreviated: bool) -> str:
+def select_dataset(abbreviated: bool, smoke: bool = False) -> str:
     """Auto-detect available datasets, prompt user to choose one."""
+    if smoke:
+        print("\n📂 Dataset: smoke mode — using geonames (fastest)")
+        return "geonames"
     print("\n📂 Available datasets:")
     entries = []
     for i, (name, info) in enumerate(DATASETS.items(), 1):
@@ -378,7 +390,7 @@ def is_demo_stack_running() -> bool:
     return DEMO_CONTAINER_NAMES.issubset(running)
 
 
-def check_port_conflicts() -> None:
+def check_port_conflicts(smoke: bool = False) -> None:
     """Check demo ports for conflicts — Docker containers and raw sockets."""
     conflicts: list[str] = []
 
@@ -422,6 +434,47 @@ def check_port_conflicts() -> None:
     print("  ⚠️  Port conflicts detected:")
     for c in conflicts:
         print(c)
+
+    if smoke:
+        # In smoke mode: aggressively stop conflicting containers and bail on raw sockets
+        print("  🧪 Smoke mode — stopping conflicting containers automatically...")
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{json .}}"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().splitlines():
+                if not line:
+                    continue
+                try:
+                    container = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ports_str = container.get("Ports", "")
+                container_id = container.get("ID", "")
+                name = container.get("Names", "unknown")
+                for port in DEMO_PORTS:
+                    if f":{port}->" in ports_str and container_id:
+                        print(f"  🛑 Stopping container '{name}'...")
+                        subprocess.run(
+                            ["docker", "stop", container_id],
+                            capture_output=True,
+                            timeout=15,
+                        )
+                        break
+        time.sleep(2)
+        for port, service in DEMO_PORTS.items():
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(1)
+                if sock.connect_ex(("localhost", port)) == 0:
+                    bail(
+                        f"Port {port} ({service}) is still in use after stopping containers.\n"
+                        f"  A non-Docker process may be bound to it. Check with:\n"
+                        f"    lsof -i :{port}"
+                    )
+        print("  ✅ Conflicts resolved automatically")
+        return
 
     print("\n  What would you like to do?")
     print("  [1] Leave them running and continue anyway (default)")
@@ -876,6 +929,89 @@ def register_cleanup_handler() -> None:
 
 
 # ============================================================================
+#  kvx-cli Binary Discovery / Build
+# ============================================================================
+
+
+def find_kvx_cli_binary() -> Path | None:
+    """Locate the kvx-cli binary, preferring release over debug."""
+    for rel in ("release", "debug"):
+        candidate = PROJECT_ROOT / "target" / rel / "kvx-cli"
+        if candidate.exists() and candidate.stat().st_mode & 0o111:
+            return candidate
+    return None
+
+
+def build_kvx_cli() -> Path:
+    """Build kvx-cli via cargo and return the binary path."""
+    release_binary = PROJECT_ROOT / "target" / "release" / "kvx-cli"
+    print("  🔧 Building kvx-cli (release)...")
+    result = subprocess.run(
+        ["cargo", "build", "--release", "-p", "kvx-cli"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(result.stdout, file=sys.stderr)
+        print(result.stderr, file=sys.stderr)
+        bail("cargo build --release -p kvx-cli failed")
+    if not release_binary.exists():
+        bail("Build succeeded but kvx-cli binary not found in target/release/")
+    print("  ✅ kvx-cli built successfully")
+    return release_binary
+
+
+def run_kvx_leg(
+    *,
+    leg_name: str,
+    binary: Path,
+    config: Path,
+    smoke: bool,
+) -> bool:
+    """
+    Run a kvx-cli leg.  In interactive mode we launch a terminal and prompt
+    the user.  In smoke mode we run the binary ourselves, capture stdout,
+    and block until it exits.
+    """
+    if not smoke:
+        launched = launch_in_terminal(
+            script=str(binary),
+            args=[str(config)],
+            cwd=PROJECT_ROOT,
+        )
+        if launched:
+            print("  ✅ Launched kvx-cli in new terminal window")
+            input("\n  Press Enter when the script has finished...")
+        else:
+            print("\n  👉 Run this in another terminal:")
+            print(f"     {binary} {config}")
+            input("\n  Press Enter when you've started the script...")
+        return True
+
+    # Smoke path — headless, captured, blocking
+    cmd = [str(binary), str(config)]
+    print(f"  🧪 Running kvx-cli headless: {' '.join(cmd)}")
+    result = subprocess.run(
+        cmd,
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"  💀 {leg_name} exited with code {result.returncode}")
+        if result.stdout:
+            print("  ---- stdout ----")
+            print(result.stdout)
+        if result.stderr:
+            print("  ---- stderr ----")
+            print(result.stderr)
+        return False
+    print(f"  ✅ {leg_name} completed successfully")
+    return True
+
+
+# ============================================================================
 #  Utilities
 # ============================================================================
 
@@ -892,22 +1028,33 @@ def bail(msg: str) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Kravex End-to-End Demo")
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Run a non-interactive smoke test (CI mode). Uses 25%% geonames dataset.",
+    )
+    args = parser.parse_args()
+    smoke = args.smoke
+
     print("=" * 60)
     print("  🚀 Kravex End-to-End Demo")
+    if smoke:
+        print("  MODE: 🧪 SMOKE TEST (non-interactive)")
     print("  Pipeline: dataset.json → Elasticsearch → OpenSearch")
     print("=" * 60)
 
-    register_cleanup_handler()
+    if not smoke:
+        register_cleanup_handler()
     results: list[StepResult] = []
 
     # ── Mode & Dataset Selection ───────────────────────────────
-    abbreviated = select_demo_mode()
-    dataset_name = select_dataset(abbreviated)
+    abbreviated = select_demo_mode(smoke=smoke)
+    dataset_name = select_dataset(abbreviated, smoke=smoke)
     dataset_info = DATASETS[dataset_name]
     full_docs = dataset_info["expected_docs"]
     expected_docs = int(full_docs * ABBREVIATED_FRACTION) if abbreviated else full_docs
     index_name = dataset_name
-    # For leg scripts: abbreviated uses geonames_25pct config, full uses geonames
     leg1_dataset_arg = f"{dataset_name}_25pct" if abbreviated else dataset_name
 
     mode_label = "25%" if abbreviated else "100%"
@@ -920,12 +1067,24 @@ def main() -> None:
         create_subset_file(dataset_name)
     check_docker_available()
 
+    # ── Binary discovery / build ────────────────────────────────
+    binary = find_kvx_cli_binary()
+    if binary is None:
+        if smoke:
+            binary = build_kvx_cli()
+        else:
+            bail(
+                "kvx-cli binary not found.\n"
+                "   Build it first: cargo build --release -p kvx-cli"
+            )
+    print(f"  ✅ Binary: {binary}")
+
     # ── Infrastructure ──────────────────────────────────────────
     if is_demo_stack_running():
         print("\n✅ Demo stack already running — skipping container startup")
     else:
         print("\n🔌 Checking port availability:")
-        check_port_conflicts()
+        check_port_conflicts(smoke=smoke)
         start_demo_containers()
         print("\n⏳ Waiting for clusters to be ready:")
         wait_for_cluster(ES_URL, "Elasticsearch", timeout=240)
@@ -939,18 +1098,20 @@ def main() -> None:
     delete_index_if_exists(ES_URL, index_name)
     create_index(ES_URL, index_name, dataset_name)
 
-    launched = launch_in_terminal(
-        script="./demo/file_to_esdb.sh",
-        args=[leg1_dataset_arg],
-        cwd=PROJECT_ROOT,
+    leg1_config = DEMO_DIR / f"demo_file_to_esdb_{leg1_dataset_arg}.toml"
+    if not leg1_config.exists():
+        bail(f"Leg 1 config not found: {leg1_config}")
+
+    ok = run_kvx_leg(
+        leg_name="Leg 1: File → Elasticsearch",
+        binary=binary,
+        config=leg1_config,
+        smoke=smoke,
     )
-    if launched:
-        print(f"  ✅ Launched ./demo/file_to_esdb.sh {leg1_dataset_arg} in new terminal window")
-        input("\n  Press Enter when the script has finished...")
-    else:
-        print("\n  👉 Run this in another terminal:")
-        print(f"     ./demo/file_to_esdb.sh {leg1_dataset_arg}")
-        input("\n  Press Enter when you've started the script...")
+    if not ok:
+        if smoke:
+            print("  🛑 Smoke test FAILED at Leg 1")
+        bail("Leg 1 (File → Elasticsearch) failed.")
 
     step1 = StepResult(name="File → Elasticsearch")
     count1 = poll_until_doc_count(ES_URL, index_name, expected_docs, MAX_WAIT_SECS, "File → ES")
@@ -969,9 +1130,12 @@ def main() -> None:
             bail("Cannot proceed — Leg 1 produced no data.")
         else:
             print(f"  ⚠️  {missing:,} docs missing — pipeline stalled or some docs rejected.")
-            answer = input("  Proceed to Leg 2 anyway? [y/N]: ").strip().lower()
-            if answer not in ("y", "yes"):
-                bail("Demo aborted — Leg 1 did not complete.")
+            if not smoke:
+                answer = input("  Proceed to Leg 2 anyway? [y/N]: ").strip().lower()
+                if answer not in ("y", "yes"):
+                    bail("Demo aborted — Leg 1 did not complete.")
+            else:
+                print("  🧪 Smoke mode — proceeding to Leg 2 anyway...")
         print("─" * 60)
 
     # ── Leg 2: Elasticsearch → OpenSearch ───────────────────────
@@ -982,18 +1146,20 @@ def main() -> None:
     delete_index_if_exists(OS_URL, index_name)
     create_index(OS_URL, index_name, dataset_name)
 
-    launched = launch_in_terminal(
-        script="./demo/esdb_to_osdb.sh",
-        args=[dataset_name],
-        cwd=PROJECT_ROOT,
+    leg2_config = DEMO_DIR / f"demo_esdb_to_osdb_{dataset_name}.toml"
+    if not leg2_config.exists():
+        bail(f"Leg 2 config not found: {leg2_config}")
+
+    ok = run_kvx_leg(
+        leg_name="Leg 2: Elasticsearch → OpenSearch",
+        binary=binary,
+        config=leg2_config,
+        smoke=smoke,
     )
-    if launched:
-        print(f"  ✅ Launched ./demo/esdb_to_osdb.sh {dataset_name} in new terminal window")
-        input("\n  Press Enter when the script has finished...")
-    else:
-        print("\n  👉 Run this in another terminal:")
-        print(f"     ./demo/esdb_to_osdb.sh {dataset_name}")
-        input("\n  Press Enter when you've started the script...")
+    if not ok:
+        if smoke:
+            print("  🛑 Smoke test FAILED at Leg 2")
+        bail("Leg 2 (Elasticsearch → OpenSearch) failed.")
 
     step2 = StepResult(name="Elasticsearch → OpenSearch")
     count2 = poll_until_doc_count(OS_URL, index_name, expected_docs, MAX_WAIT_SECS, "ES → OS")
@@ -1024,17 +1190,33 @@ def main() -> None:
     print_summary(results, dataset_name, es_count, os_count, expected_docs)
 
     # ── Cleanup ─────────────────────────────────────────────────
-    print()
-    answer = input("  🗑️  Tear down demo containers? [Y/n]: ").strip().lower()
-    if answer in ("", "y", "yes"):
-        print("  🛑 Stopping containers...")
+    if smoke:
+        print("\n  🧪 Smoke mode — tearing down containers automatically...")
         stop_demo_containers()
         print("  ✅ Containers removed.")
     else:
-        print(
-            "  ℹ️  Containers left running. Stop with:\n"
-            "     docker compose -f demo/docker-compose-demo.yml down -v"
-        )
+        print()
+        answer = input("  🗑️  Tear down demo containers? [Y/n]: ").strip().lower()
+        if answer in ("", "y", "yes"):
+            print("  🛑 Stopping containers...")
+            stop_demo_containers()
+            print("  ✅ Containers removed.")
+        else:
+            print(
+                "  ℹ️  Containers left running. Stop with:\n"
+                "     docker compose -f demo/docker-compose-demo.yml down -v"
+            )
+
+    # Exit code for smoke mode
+    if smoke:
+        both_full = es_count >= expected_docs and os_count >= expected_docs
+        count_match = es_count == os_count
+        if both_full and count_match and content_ok:
+            print("\n  🎉 Smoke test PASSED ✅\n")
+            sys.exit(0)
+        else:
+            print("\n  💀 Smoke test FAILED\n")
+            sys.exit(1)
 
     print("\n  🎬 Demo complete. That's a wrap.\n")
 

@@ -307,7 +307,7 @@ mod tests {
             .await?;
 
         // 📦 Refiner received 1 barrel (4 docs newline-delimited), passthrough-tapped and joined into JSON array.
-        // Refiner accumulates raw barrels → manifold.join(plenum, tapper) → drum on ch2 → Drainer relays to sink.
+        // Refiner accumulates raw barrels → manifold.join(accumulator, tapper) → drum on ch2 → Drainer relays to sink.
         // 🧠 Passthrough treats entire barrel as one item → drum = '[{"doc":1}\n{"doc":2}\n{"doc":3}\n{"doc":4}]'
         // The barrel content includes newlines because passthrough doesn't split — that's by design!
         let received = sink_inner.received.lock().await;

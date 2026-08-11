@@ -68,7 +68,7 @@ struct BulkItemError {
 /// 📡 The sink side of the Elasticsearch backend — pure I/O, zero buffering.
 ///
 /// `ElasticsearchSink` accepts a fully rendered NDJSON drum string and POSTs it
-/// to the `_bulk` API. That's it. No internal plenum. No tap logic.
+/// to the `_bulk` API. That's it. No internal accumulator. No tap logic.
 /// The Drainer upstream handles tap + binary collect + size management.
 ///
 /// 🧠 Knowledge graph: Sinks are I/O-only abstractions now. This one does HTTP POST.

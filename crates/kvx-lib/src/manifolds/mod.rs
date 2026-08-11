@@ -3,7 +3,7 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file and at www.mariadb.com/bsl11.
 // ai
-//! 🎬 *[the plenum is full. the tapper awaits. the sink hungers.]*
+//! 🎬 *[the accumulator is full. the tapper awaits. the sink hungers.]*
 //! *[somewhere in the heap, a String moos softly.]*
 //! *["Join me," whispers the drum. "Make me whole."]*
 //!
@@ -21,7 +21,7 @@
 //!
 //! ```text
 //! Refiner pipeline:
-//!   ch1(Feed) → plenum Vec<Draft> → manifold.join(&plenum, &tapper) → ch2(Drum) → Drainer → sink.drain()
+//!   ch1(Feed) → accumulator Vec<Draft> → manifold.join(&accumulator, &tapper) → ch2(Drum) → Drainer → sink.drain()
 //! ```
 //!
 //! 🦆 (the duck joins... symphonies? drums? both? the duck has no comment.)
@@ -46,7 +46,7 @@ pub use ndjson::NdjsonManifold;
 
 /// 🎼 Joins raw barrels into a final wire-format drum via the tapper.
 ///
-/// The Manifold receives a plenum of accumulated drafts and a tapper reference.
+/// The Manifold receives a accumulator of accumulated drafts and a tapper reference.
 /// For each draft, it joins them into the sink's expected format.
 ///
 /// 🧠 Knowledge graph: this trait mirrors the `Tapper` and `Source`/`Sink` pattern —
