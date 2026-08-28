@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "E0kEg/RNB2M=",
+  "success": true,
+  "projectFilePath": "/Users/daniel/src/kravex/web/app/app.csproj",
+  "expectedPackageFiles": [
+    "/Users/daniel/.nuget/packages/microsoft.aspnetcore.app.internal.assets/10.0.11/microsoft.aspnetcore.app.internal.assets.10.0.11.nupkg.sha512"
+  ],
+  "logs": []
+}
