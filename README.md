@@ -2,78 +2,132 @@
 
 Search migrations for teams with better things to do.
 
-Kravex is an open-source migration engine for Elasticsearch (5–8) and OpenSearch (1–3). Any version, any direction. Managed services, self-hosted, on-prem — if it speaks the ES bulk API, Kravex can move it. OpenSearch clusters work through the Elasticsearch backend since both share the same wire protocol.
+Kravex is a Rust workspace for moving data through search stacks with a single, config-driven engine. The current codebase is centered on a library crate (`crates/kvx-lib`) and a CLI (`crates/kvx-cli`), with a demo harness under `demo/` for end-to-end validation.
 
 ## What it does
 
-- Migrates index data between Elasticsearch and OpenSearch clusters (same backend handles both)
-- Adaptive throttling — automatically backs off on 429s and ramps back up
-- Smart cutovers — retry, validation, recovery, pause, and resume
-- Zero tuning required — no knobs, no guesswork
+- Migrates data between Elasticsearch and OpenSearch using the same bulk/API conventions
+- Supports file-backed and in-memory backends for testing and local workflows
+- Uses adaptive throttling and flow-control logic to back off on 429s and recover smoothly
+- Runs from a TOML config file and supports environment overrides via `KVX_*` variables
+- Includes a demo pipeline that provisions local Docker services and exercises end-to-end migration
+
+## Current repository layout
+
+```text
+kravex/
+├── README.md
+├── LICENSE
+├── Cargo.toml
+├── docker-compose.yml            # local ES + OpenSearch dev setup
+├── configs/                      # example TOML configs
+├── crates/
+│   ├── kvx-cli/                  # CLI entrypoint
+│   └── kvx-lib/                  # migration engine
+├── demo/                         # full pipeline demo, dataset downloads, smoke tests
+├── ee/                           # enterprise-only features, separate license
+├── sample_data/                  # repo-local fixtures and dataset material
+├── .github/                      # CI workflow metadata
+├── .idea/ .obsidian/ .zed/        # editor-local workspace state
+└── architecture.drawio.png       # architecture diagram
+```
+
+This repository does not contain a top-level `benchmark/` directory or a checked-in `input.json` file. The demo and sample data live under `demo/` and `sample_data/`.
 
 ## Demo
 
-Run the full end-to-end pipeline (File → Elasticsearch → OpenSearch) with a single command:
+Run the end-to-end helper for a File → Elasticsearch → OpenSearch workflow:
 
 ```bash
 ./demo/demo.sh
 ```
 
-Requires Docker Desktop and [uv](https://docs.astral.sh/uv/). Spins up isolated ES + OpenSearch containers, ingests the geonames dataset (11.4M docs), migrates it across clusters, and reports timing metrics. See [demo/README.md](demo/README.md) for details.
+This uses Docker, builds the CLI if needed, downloads demo datasets when missing, creates local clusters, and validates the migration path.
+
+Requirements:
+
+- Rust toolchain
+- Docker Desktop / Docker Engine + Docker Compose
+- `uv` for the Python-based demo orchestration
 
 ## Quickstart
 
 ### Prerequisites
 
-- [Rust toolchain](https://rustup.rs/) (edition 2024)
-- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+- Rust toolchain (edition 2024)
+- Docker and Docker Compose
+- Optional: `uv` for the demo workflow
 
-### 1. Start an Elasticsearch cluster
-
-```bash
-docker compose --profile bench up -d es8
-```
-
-Wait for it to be healthy:
+### 1. Start the local search services
 
 ```bash
-docker compose ps
+docker compose up -d es8 opensearch
 ```
 
-### 2. Seed some test data
+This repo's `docker-compose.yml` defines the development stack used by the default local setup:
 
-Load documents into Elasticsearch:
+- Elasticsearch 8.15.0 on `http://localhost:9200`
+- OpenSearch 2.19.0 on `http://localhost:9201`
+
+### 2. Pick a configuration
+
+The repo includes example configs under `configs/`:
 
 ```bash
-curl -s -H "Content-Type: application/json" \
-  -XPOST "http://localhost:9200/employees/_bulk?pretty" --data-binary @input.json
+ls configs
 ```
 
-Verify:
+Examples:
+
+- `configs/kvx_file.toml` — file-based migration example
+- `configs/kvx_es_to_es.toml` — Elasticsearch-to-Elasticsearch (or ES → OpenSearch) example
+
+### 3. Run the CLI
 
 ```bash
-curl -s "http://localhost:9200/employees/_count" | jq .count
+cargo run -p kvx-cli -- configs/kvx_es_to_es.toml
 ```
 
-### 3. Configure the migration
+If you want to run without a config file, the CLI also defaults to `kvx.toml` in the current directory when present.
 
-Create a config file (or use an existing one from `configs/`):
+## Architecture
+
+Kravex models the migration pipeline as a plumbing system:
+
+```text
+Pumper (async) → ch1 → Refiner pool (std::thread) → ch2 → Drainer pool (async) → Sink
+                           ↑                                      |
+                       FlowKnob ← Governor ← Regulator ← ch3
+```
+
+The engine separates:
+
+- Source backends: emit data from Elasticsearch, files, or in-memory fixtures
+- Taps: transform raw records into sink-ready payloads
+- Manifolds: group and buffer transformed payloads into drums
+- Refiners: CPU-bound assembly work
+- Drainers: async sink workers with retry/backoff behavior
+- Governor and regulators: adapt throughput and batching under load
+
+## Supported backends
+
+| Backend | Source | Sink | Notes |
+| --- | --- | --- | --- |
+| Elasticsearch | Yes | Yes | Direct bulk API compatibility |
+| OpenSearch | Yes | Yes | Same protocol family as Elasticsearch |
+| File (JSON/NDJSON) | Yes | Yes | Useful for local testing and batch workflows |
+| InMemory | Yes | Yes | Primarily for tests and internal fixtures |
+
+## Configuration
+
+All runtime behavior is driven by a TOML config and merged with environment variables using the `KVX_` prefix.
+
+Example:
 
 ```toml
-# kvx.toml — File to Elasticsearch
-
-[source_config.File]
-file_name = "input.json"
-
-[sink_config.Elasticsearch]
-url = "http://localhost:9200"
-index = "employees"
-```
-
-For an **Elasticsearch-to-Elasticsearch** migration (or ES-to-OpenSearch — same config, just change the URL):
-
-```toml
-# kvx_es_to_es.toml
+[runtime]
+pumper_to_refiner_capacity = 4
+sink_parallelism = 4
 
 [source_config.Elasticsearch]
 url = "http://localhost:9200"
@@ -82,235 +136,36 @@ index = "employees"
 [sink_config.Elasticsearch]
 url = "http://localhost:9201"
 index = "employees"
+max_drum_size_bytes = 4194304
 ```
 
-### 4. Build and run
-
-```bash
-cargo build --workspace
-cargo run -p kvx-cli -- kvx.toml
-```
-
-### 5. Verify the migration
-
-```bash
-curl -s "http://localhost:9200/employees/_count" | jq .count
-```
-
-## Architecture
-
-Kravex uses a plumbing metaphor throughout. The entire pipeline is modeled as water flowing through pipes — sources are faucets, sinks are drains, and everything in between controls the flow.
-
-```
-Pumper (async) → ch1 → Refiner pool (std::thread) → ch2 → Drainer pool (async) → Sink
-                            ↑                                    |
-                        FlowKnob ← Governor ← Regulator ← ch3
-```
-
-### Terminology
-
-| Component | Plumbing analogy | What it does |
-|-----------|-----------------|--------------|
-| **Source** | Faucet | Produces raw data one barrel at a time. Maximally ignorant of format — just emits bytes. |
-| **Pumper** | The handle you turn | Async tokio worker. Calls `source.pump()` in a loop, feeds raw barrels into ch1 until EOF. |
-| **Tapper** | Pipe fitting | Stateless transformer. Takes a raw barrel and casts it into the format the sink expects (e.g., PIT response → bulk NDJSON). |
-| **Manifold** | Collector pipe | Orchestrates cast-and-join. Buffers individual drafts from the Tapper and assembles them into wire-format drums sized to the current flow rate. |
-| **Refiner** | The junction | CPU-bound std::thread worker. Sits between Pumper and Drainer. Receives raw barrels from ch1, casts via Tapper, buffers via Manifold, flushes assembled drums to ch2. |
-| **Drainer** | The drain | Async tokio worker. Receives assembled drums from ch2 and writes them to the Sink with retry logic and exponential backoff. |
-| **Sink** | Drain pipe | Pure I/O, zero logic. Accepts a fully rendered drum and sends it. Does not buffer, does not transform. |
-| **Foreman** | The plumber | Pipeline orchestrator. Wires up all channels, spawns all workers, and waits for completion. |
-| **Governor** | The foreman's clipboard | Receives gauge readings on ch3, feeds them to the active Regulator, writes the result to the FlowKnob. Orchestrates the feedback loop. |
-| **Regulator** | Pressure valve | Dynamically adjusts drum sizing based on feedback. Variants: `ThroughputSeeker` (hill-climbing optimizer), `CpuPressure` (PID controller), `Static` (fixed value). |
-| **PressureGauge** | Pressure meter | Background tokio task. Polls the sink cluster's `_nodes/stats` endpoint, feeds readings to the active Regulator. |
-| **FlowKnob** | The valve handle | `Arc<AtomicUsize>` shared between Governor (writes) and Refiners (reads). Controls how large each drum gets before flushing. |
-
-### Channels
-
-| Channel | Carries | From → To |
-|---------|---------|-----------|
-| **ch1** | Raw barrels (`Barrel`) | Pumper → Refiner pool |
-| **ch2** | Assembled drums (`Drum`) | Refiner pool → Drainer pool |
-| **ch3** | Latency/error readings (`GaugeReading`) | Drainers → Governor |
-
-### Why the thread split?
-
-Refiners run on `std::thread` (not tokio) because casting and drum assembly are CPU-bound. Pumpers and Drainers are async because they do network I/O. This keeps the tokio runtime free for I/O and prevents CPU work from starving network operations.
-
-## A note on the code
-
-The codebase follows a set of comedy conventions. This is intentional.
-
-- **Comments** prefixed with `// --` are humor comments. They're there for humans reading the source.
-- **Variable names** are deliberately expressive — `let my_therapist_says_move_on` instead of `retry_count`, `fn send_it_and_pray()` instead of `fn submit()`.
-- **Error messages** are written as micro-fiction, designed to be informative and entertaining at 3am during an incident.
-- **Module doc comments** open like TV show cold opens — set the scene, create tension, then explain what the module does.
-- **Test names** read like episode titles — `the_one_where_the_config_file_doesnt_exist`, `sink_worker_survives_the_apocalypse`.
-- **Emojis** are used functionally in log output and comments (🚀 info, ⚠️ warn, 💀 error, 🦆 no reason whatsoever).
-
-The comedy is part of the project's identity. If you're reading the source and something makes you laugh, that's working as intended.
-
-## Supported backends
-
-| Backend | Source | Sink | Notes |
-|---------|--------|------|-------|
-| Elasticsearch 5–8 | Yes | Yes | |
-| OpenSearch 1–3 | Yes | Yes | Uses the Elasticsearch backend — same bulk API wire protocol |
-| File (JSON/NDJSON) | Yes | Yes | |
-| InMemory | Yes | Yes | Test-only, not for production use |
-
-## Project structure
-
-```
-kravex/
-├── crates/
-│   ├── kvx-lib/       # Core library
-│   │   └── src/
-│   │       ├── backends/       # Source + Sink implementations (ES, File, InMemory)
-│   │       ├── taps/           # Barrel-to-Draft transformers
-│   │       ├── manifolds/      # Draft-to-Drum assemblers
-│   │       ├── regulators/     # Adaptive throttle controllers (hill-climbing, PID, static)
-│   │       ├── workers/        # Pumper, Refiner, Drainer, Governor
-│   │       └── foreman.rs      # Pipeline orchestrator
-│   └── kvx-cli/       # CLI binary wrapping kvx-lib
-├── ee/                 # Enterprise features (separate license)
-├── configs/            # Example TOML configurations
-├── datasets/           # Benchmark & demo data (gitignored — downloaded at runtime)
-├── benchmark/          # Benchmark scripts and attribution
-├── demo/               # End-to-end demo harness (File → ES → OpenSearch)
-└── docker-compose.yml  # Local ES + OpenSearch (profile: demo | bench)
-```
-
-## Configuration reference
-
-All configuration lives in a single TOML file.
-
-### `[runtime]`
-
-| Key | Description | Default |
-|-----|-------------|---------|
-| `pumper_to_refiner_capacity` | Channel capacity (ch1) between Pumper and Refiner pool | `refiner_count × 4` |
-| `refiner_to_drainer_capacity` | Channel capacity (ch2) between Refiner pool and Drainer pool | `refiner_count × 4` |
-| `refiner_count` | Number of CPU-bound Refiner threads | `num_cpus - 1` |
-| `sink_parallelism` | Number of concurrent Drainer workers | `refiner_count × 12` |
-
-### `[source_config]`
-
-Source backend is specified as a sub-table: `[source_config.Elasticsearch]`, `[source_config.File]`.
-
-Common source config fields (nested under the backend sub-table):
-
-| Key | Description |
-|-----|-------------|
-| `max_batch_size_bytes` | Maximum batch size in bytes per barrel (optional) |
-| `max_batch_size_docs` | Maximum batch size in documents per barrel (optional) |
-
-#### `[source_config.Elasticsearch]`
-
-| Key | Description |
-|-----|-------------|
-| `url` | Cluster URL (e.g., `http://localhost:9200`) |
-| `index` | Index name to read from |
-| `username` | Basic auth username (optional) |
-| `password` | Basic auth password (optional) |
-| `api_key` | API key authentication (optional) |
-
-#### `[source_config.File]`
-
-| Key | Description |
-|-----|-------------|
-| `file_name` | Path to input file (JSON or NDJSON) |
-
-### `[sink_config]`
-
-Sink backend is specified as a sub-table: `[sink_config.Elasticsearch]`, `[sink_config.File]`.
-
-| Key | Description |
-|-----|-------------|
-| `max_drum_size_bytes` | Maximum request drum size in bytes (optional, flattened at backend level) |
-
-#### `[sink_config.Elasticsearch]`
-
-| Key | Description |
-|-----|-------------|
-| `url` | Cluster URL — works for both Elasticsearch and OpenSearch |
-| `index` | Index name to write to |
-| `username` | Basic auth username (optional) |
-| `password` | Basic auth password (optional) |
-| `api_key` | API key authentication (optional) |
-
-#### `[sink_config.File]`
-
-| Key | Description |
-|-----|-------------|
-| `file_name` | Path to output file |
-
-### `[drainer]`
-
-| Key | Description |
-|-----|-------------|
-| `max_retries` | Maximum retry attempts per failed drain |
-| `initial_backoff_ms` | Initial backoff duration in milliseconds |
-| `backoff_multiplier` | Multiplier applied to backoff on each retry |
-| `max_backoff_ms` | Maximum backoff cap in milliseconds |
-
-### `[governor]`
-
-Controls how Kravex adapts drum sizing during a migration. Specified as an enum-style sub-table — pick one:
-
-#### `[governor.Static]`
-
-Fixed drum size. No adaptation.
-
-| Key | Description |
-|-----|-------------|
-| `output_bytes` | Fixed drum size in bytes |
-
-#### `[governor.Throughput]`
-
-Hill-climbing optimizer. Automatically finds the optimal drum size by measuring throughput and adjusting.
-
-| Key | Description |
-|-----|-------------|
-| `min_request_size_bytes` | Floor for drum size |
-| `initial_output_bytes` | Starting drum size |
-| `window_duration_secs` | Measurement window duration |
-| `improvement_threshold_pct` | Minimum improvement to keep climbing |
-| `degradation_threshold_pct` | Degradation threshold to reverse direction |
-| `re_explore_after_windows` | Windows of stability before re-exploring |
-
-#### `[governor.Latency]`
-
-PID controller targeting latency.
-
-#### `[governor.CPU]`
-
-PID controller targeting CPU pressure on the sink cluster.
+The CLI and library also support config structs for the sink/source backends, drainer retry behavior, and governor tuning.
 
 ## Development
 
-### VS Code
+### Workspace
 
-`.vscode/tasks.json` provides:
-- `cargo build --workspace` (default build — `Ctrl+Shift+B`)
-- `cargo check --workspace`, `cargo test --workspace`, `cargo clippy --workspace`
-- `cargo build -p kvx-cli` (targeted build for launch configs)
+```bash
+cargo build --workspace
+cargo test --workspace
+```
 
-`.vscode/launch.json` provides:
-- **Debug kvx-cli** (`F5`) — LLDB debugger attached via [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
-- **Run kvx-cli (no debug)** (`Ctrl+F5`)
+### Demo workflow
 
-### Benchmarks
+```bash
+uv run --project demo demo/demo.py --smoke
+```
 
-Sample JSON corpora (NOAA weather, Geonames, PubMed Central) are used for benchmarking. See [benchmark/DATA_ATTRIBUTION.md](benchmark/DATA_ATTRIBUTION.md) for licensing and attribution.
+The smoke test is intended for CI and uses the demo harness without requiring interactive prompts.
 
 ## License
 
-[Business Source License 1.1](LICENSE) (BSL 1.1).
+Kravex is distributed under the Business Source License 1.1 (`LICENSE`).
 
-**Free to use** — run Kravex for your own migrations, internal tooling, CI pipelines, side projects, whatever. No limits.
+Enterprise-only features under `/ee/` require a separate commercial arrangement and are not included in the standard open-source license terms.
 
-**Not free to resell** — you can't use Kravex as part of a product or service you sell to others. That means no hosting it as a competing migration platform, and no using it as the engine behind paid consulting or managed migration services. If that's your use case, [reach out](mailto:daniel@kravex.net) for a commercial license.
+## Notes
 
-**Goes fully open source** — on **2029-03-15**, this version automatically converts to [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
-
-Enterprise features under `/ee/` require a separate license. Contact [daniel@kravex.net](mailto:daniel@kravex.net).
+- The project intentionally includes humorous comments and variable names in the codebase.
+- The repo is a working Rust migration engine, not a static documentation-only project.
+- The most important operational docs are in the project code, config examples, and the `demo/` harness.
